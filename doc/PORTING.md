@@ -63,7 +63,20 @@ different things.
 
 > ⚠️ **The triage tables in §1 and §3 describe the tree as measured on 2026-07-26, before
 > this deletion.** They still sum to 137 files and 4,138 `CString`. The current tree is
-> **125 `.cpp` / 3,165 `CString`**.
+> **125 `.cpp` / 3,165 `CString`**. The rows for the thirteen files below are left in place so
+> the reasoning stays auditable — but the bucket totals move, and **§1's counts are the ones
+> to correct when planning work**:
+>
+> | Bucket | §1 says | Now | Deleted from it |
+> |---|---:|---:|---|
+> | `core/` | 29 | **26** | `Observer`, `Subject`, `FixedBlockMemory` |
+> | `platform/` | 13 | **11** | `DirectoryNotifier`, `DirectoryNotifyManager` |
+> | `ui-rewrite` | 60 | **55** | `FindResult`, `LearnPrograming`, `ProjectManager`, `TerminalWindow`, `TextReferenceWindow` |
+> | `delete` | 35 | **32** | `AppLookDlg`, `MDIClientWnd`, `SearchEditToolBar` |
+> | **Total** | **137** | **125** | |
+>
+> Note `ui-rewrite` absorbs five of the thirteen — the dead code was concentrated in the
+> most expensive bucket, so the saving lands where it helps most.
 
 `src/VinaText.vcxproj` lists every `.cpp` it compiles — MSBuild does not glob. Thirteen files
 are absent from it, so they have never been compiled into the shipping product, and no built
