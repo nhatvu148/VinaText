@@ -1,45 +1,140 @@
 name: Main pipeline
 
+# Triggers
+# --------
+# The previous config used `branches-ignore: ['*']`, intended to disable push
+# builds. It did not work as intended: `*` does not match `/`, so branches like
+# `port/cross-platform` still triggered a run while `master` did not. And
+# `pull_request` only fired for PRs into `master`, so PRs into the port branch
+# got no checks at all. Both are spelled out explicitly below.
 on:
   push:
-    branches-ignore:
-      - '*'
+    branches:
+      - master
+      - port/cross-platform
+      - 'phase*/**'
+      - 'ci/**'
+      - 'docs/**'
   pull_request:
     branches:
       - master
+      - port/cross-platform
+  workflow_dispatch:
 
 jobs:
-  test:
-    runs-on: windows-latest
-
+  # ---------------------------------------------------------------------------
+  # Portable checks. These run everywhere and are the only signal available to
+  # developers on macOS/Linux, who cannot build the MFC application at all.
+  # Both jobs no-op cleanly on branches where the relevant paths do not exist.
+  # ---------------------------------------------------------------------------
+  data-verify:
+    name: Verify extracted language data
+    runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
-      - name: Setup MSBuild
-        uses: microsoft/setup-msbuild@v1
-
-      - name: Setup VSTest Path
-        uses: darenm/Setup-VSTest@v1.2
-      
-      # msbuild VinaText.sln /t:Rebuild
-      # vstest.console.exe VinaText.exe
-      - name: Run unit tests
-        shell: cmd
+      - name: Probe for the extractor
+        id: probe
         run: |
-          echo Tests succeeded
+          if [ -f tools/extract_language_data.py ]; then
+            echo "present=yes" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=no" >> "$GITHUB_OUTPUT"
+            echo "tools/extract_language_data.py not on this branch - skipping"
+          fi
 
-  build:
-    runs-on: windows-latest
-    needs: test
+      # Asserts the JSON in Packages/data-packages still reproduces the C++
+      # tables in src/EditorColor{Light,Dark}.h exactly. Guards against the two
+      # drifting apart while both are present in the tree.
+      - name: Round-trip JSON against the C++ tables
+        if: steps.probe.outputs.present == 'yes'
+        run: python3 tools/extract_language_data.py --verify
 
+  core-tests:
+    name: core/ tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
+      - uses: actions/checkout@v4
+
+      - name: Probe for core/
+        id: probe
+        run: |
+          if [ -f core/LanguageData.cpp ]; then
+            echo "present=yes" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=no" >> "$GITHUB_OUTPUT"
+            echo "core/ not on this branch - skipping"
+          fi
+
+      - name: Build and run
+        if: steps.probe.outputs.present == 'yes'
+        run: |
+          set -euo pipefail
+          c++ -std=c++11 -Wall -Wextra -Werror \
+              -I include -I core \
+              core/LanguageData.cpp core/tests/TestLanguageData.cpp \
+              -o testlangdata
+          ./testlangdata
+
+  # ---------------------------------------------------------------------------
+  # The Windows MFC build. This is the regression test that matters: per D5 the
+  # MFC frontend must keep building throughout the port, and on a long-lived
+  # branch (D4) this job is the only thing checking that.
+  # ---------------------------------------------------------------------------
+  windows-build:
+    name: MFC build (Release|x64)
+    # Pinned deliberately, NOT windows-latest. windows-latest has rolled to
+    # VS 18, whose image does not ship MFC/ATL - that is what was failing with
+    # "error MSB8041: MFC libraries are required for this project". The project
+    # is <UseOfMfc>Dynamic</UseOfMfc> on PlatformToolset v143, which is VS 2022.
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
 
       - name: Setup MSBuild
-        uses: microsoft/setup-msbuild@v1
+        uses: microsoft/setup-msbuild@v2
 
-      - name: Build
+      # The pinned image is expected to already carry ATL/MFC. Verify rather
+      # than assume, and install on demand if a future image drops it, so this
+      # fails with a clear message instead of MSB8041 deep inside the build.
+      - name: Ensure MFC/ATL components are present
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $withMfc = & $vswhere -latest -products * `
+            -requires Microsoft.VisualStudio.Component.VC.ATLMFC -property installationPath
+          if ($withMfc) {
+            Write-Host "MFC present: $withMfc"
+            exit 0
+          }
+          Write-Host "MFC not found - installing Microsoft.VisualStudio.Component.VC.ATLMFC"
+          $installPath = & $vswhere -latest -products * -property installationPath
+          if (-not $installPath) { throw "no Visual Studio installation found" }
+          $installer = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vs_installer.exe"
+          $p = Start-Process -FilePath $installer -Wait -PassThru -ArgumentList @(
+            "modify", "--installPath", "`"$installPath`"",
+            "--add", "Microsoft.VisualStudio.Component.VC.ATLMFC",
+            "--quiet", "--norestart", "--nocache"
+          )
+          if ($p.ExitCode -ne 0) { throw "vs_installer failed with exit code $($p.ExitCode)" }
+          Write-Host "MFC installed"
+
+      # Release|x64 only. The solution also declares Win32 configurations, but
+      # no 32-bit binaries are shipped and lib/ only carries x64 prebuilts.
+      - name: Build VinaText.sln
         shell: cmd
-        run: msbuild VinaText.sln /p:Configuration=Release /p:Platform=x64
+        run: msbuild VinaText.sln /p:Configuration=Release /p:Platform=x64 /m /v:minimal /nologo
+
+      - name: Upload build output
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: VinaText-Release-x64
+          path: |
+            bin/x64/Release/VinaText.exe
+          if-no-files-found: warn
+          retention-days: 7
