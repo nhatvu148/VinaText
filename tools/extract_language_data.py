@@ -21,6 +21,7 @@ Usage:
     python3 tools/extract_language_data.py --verify   # verify only
 """
 
+import ast
 import json
 import os
 import re
@@ -249,6 +250,116 @@ def verify(languages_doc, themes, light, dark):
     return failures
 
 
+def independent_checks(languages_doc, themes):
+    """Checks that deliberately do NOT reuse parse_header() or unescape().
+
+    verify() re-parses the C++ with the very functions used to generate the JSON, so
+    a systematic bug shared by both sides - an unhandled escape sequence, say - would
+    cancel out and pass. These checks look only at the emitted JSON, plus a handful of
+    counts taken from the raw source with independent expressions and a few values
+    decoded by hand.
+    """
+    problems = []
+
+    # 1. Re-decode every _T("...") literal with a DIFFERENT implementation than
+    #    unescape() - Python's own string-literal parser - and compare. This is the
+    #    check that can actually catch a systematic escape-handling bug, which
+    #    re-running our own unescape() on both sides never could.
+    #
+    #    Note some values legitimately contain a double quote: the C++ really does
+    #    say g_str_r_commentStart = _T("\""). Banning quotes outright would be wrong;
+    #    decoding independently and comparing is the honest check.
+    raw_light = read(LIGHT_H)
+    by_id_local = {e["id"]: e for e in languages_doc["languages"]}
+    field_of = {"language": "name", "extention": "extension", "commentline": "commentLine",
+                "commentStart": "commentStart", "commentEnd": "commentEnd"}
+    n_crosschecked = 0
+    for m in re.finditer(
+        r'g_str_(\w+?)_(language|extention|commentline|commentStart|commentEnd)'
+        r'\s*=\s*_T\(\s*("(?:[^"\\]|\\.)*")\s*\)', raw_light
+    ):
+        lang, field, literal = m.group(1), field_of[m.group(2)], m.group(3)
+        try:
+            independently_decoded = ast.literal_eval(literal)
+        except (ValueError, SyntaxError) as exc:
+            problems.append("could not independently decode %s.%s literal %s: %s"
+                            % (lang, field, literal, exc))
+            continue
+        emitted = by_id_local.get(lang, {}).get(field)
+        if emitted != independently_decoded:
+            problems.append("escape mismatch %s.%s: emitted %r, independently decoded %r"
+                            % (lang, field, emitted, independently_decoded))
+        n_crosschecked += 1
+    if n_crosschecked < 200:
+        problems.append("only %d literals cross-checked - the independent decode is not "
+                        "covering the file" % n_crosschecked)
+
+    # Structural residue that should never survive regardless of escaping.
+    for entry in languages_doc["languages"]:
+        for field in ("name", "extension", "commentLine", "commentStart", "commentEnd", "keywords"):
+            value = entry.get(field, "")
+            for needle, label in (("_T(", "_T( macro"), ("\n", "newline"), ("\r", "carriage return")):
+                if needle in value:
+                    problems.append("languages.json %s.%s contains a stray %s: %r"
+                                    % (entry["id"], field, label, value[:80]))
+
+    # 2. Counts re-derived from the raw source with different expressions than the
+    #    ones parse_header() uses.
+    raw = read(LIGHT_H)
+    n_language_decls = len(re.findall(r"g_str_\w+?_language\s*=", raw))
+    if n_language_decls != len(languages_doc["languages"]):
+        problems.append("counted %d '_language' declarations but emitted %d languages"
+                        % (n_language_decls, len(languages_doc["languages"])))
+
+    n_keyword_decls = len(re.findall(r"g_\w+?_KeyWords\s*=", raw))
+    n_keyword_blobs = sum(1 for e in languages_doc["languages"] if e["keywords"])
+    # markdown and xml declare a blob but it is empty, so declarations >= non-empty.
+    if n_keyword_decls < n_keyword_blobs:
+        problems.append("counted %d keyword declarations but emitted %d non-empty blobs"
+                        % (n_keyword_decls, n_keyword_blobs))
+
+    for name, path in (("light", LIGHT_H), ("dark", DARK_H)):
+        src = read(path)
+        n_palette_decls = len(re.findall(r"const\s+COLORREF\s+\w+\s*=", src))
+        if n_palette_decls != len(themes[name]["palette"]):
+            problems.append("%s: counted %d COLORREF declarations but emitted %d palette entries"
+                            % (name, n_palette_decls, len(themes[name]["palette"])))
+        # Every '{ SCE_..., colour }' pair in the source, minus the '{ -1, 0 }' terminators.
+        n_pairs = len(re.findall(r"\{\s*SCE_[A-Z0-9_]+\s*,", src))
+        n_emitted = sum(len(v) for v in themes[name]["languages"].values())
+        if n_pairs != n_emitted:
+            problems.append("%s: counted %d SCE_ style pairs but emitted %d"
+                            % (name, n_pairs, n_emitted))
+
+    # 3. Values decoded by hand, independent of the parser entirely.
+    expected = {
+        "cpp":    ("cpp", "//", "/*", "*/"),
+        "python": ("py", "#", "", ""),
+        "ada":    ("ada", "--", "", ""),
+        "bash":   ("bash", "#", "", ""),
+    }
+    by_id = {e["id"]: e for e in languages_doc["languages"]}
+    for lang, (ext, line, start, end) in expected.items():
+        got = by_id.get(lang)
+        if got is None:
+            problems.append("hand-checked language %r missing" % lang)
+            continue
+        actual = (got["extension"], got["commentLine"], got["commentStart"], got["commentEnd"])
+        if actual != (ext, line, start, end):
+            problems.append("hand-checked %r: %r != %r" % (lang, actual, (ext, line, start, end)))
+
+    # 4. Palette values decoded by hand from the RGB() literals.
+    for name, key, want in (("light", "black", "#000000"),
+                            ("light", "editorTextColor", "#000000"),
+                            ("dark", "editorTextColor", "#FFFFFF"),
+                            ("light", "editorIndicatorColor", "#1487E2")):
+        got = themes[name]["palette"].get(key)
+        if got != want:
+            problems.append("hand-checked %s palette %r: %s != %s" % (name, key, got, want))
+
+    return problems
+
+
 def main():
     verify_only = "--verify" in sys.argv
     languages_doc, themes, light, dark = build()
@@ -271,6 +382,7 @@ def main():
     on_disk_themes = {n: json.load(open(os.path.join(DATA_DIR, "theme-%s.json" % n), encoding="utf-8"))
                       for n in ("light", "dark")}
     failures = verify(on_disk, on_disk_themes, light, dark)
+    failures += independent_checks(on_disk, on_disk_themes)
 
     n_styles = sum(len(v) for t in on_disk_themes.values() for v in t["languages"].values())
     print("\nlanguages: %d   keyword blobs: %d   style mappings: %d   palette entries: %d/%d"

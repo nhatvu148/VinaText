@@ -9,10 +9,19 @@
 // Loads the editor language and theme tables from Packages/data-packages/*.json.
 //
 // This is core/ code (see doc/QT-PORT-BRIEF.md D5): UI-free and portable, with no
-// MFC, no Win32 and no Qt dependency. It links into the MFC frontend today and the
-// Qt frontend later. Deliberately std::string rather than CString or QString - the
-// payload is ASCII lexer configuration, so there is nothing to gain from UTF-16
-// here, and staying on std::string keeps the header free of both toolkits.
+// MFC, no Win32 and no Qt dependency. The intent is that it links into both
+// frontends.
+//
+// NOT YET WIRED UP. Nothing consumes this class today: it is absent from
+// src/VinaText.vcxproj and src/EditorColor{Light,Dark}.h remain the live source
+// of truth for the MFC build. Switching the frontend over changes what Windows
+// compiles, so it is a separate change - see core/tests/TestLanguageData.cpp,
+// which is what currently exercises this code (built and run by CI on Linux and
+// macOS).
+//
+// Deliberately std::string rather than CString or QString - the payload is ASCII
+// lexer configuration, so there is nothing to gain from UTF-16 here, and staying
+// on std::string keeps the header free of both toolkits.
 
 #pragma once
 
