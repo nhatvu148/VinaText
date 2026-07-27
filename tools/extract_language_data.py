@@ -256,36 +256,58 @@ def json_only_checks(languages_doc, themes):
     These no longer compare against anything - there is nothing left to compare
     against - so they assert shape and known-good values instead.
     """
+    # Nothing below may subscript unvalidated input. This function is the validator
+    # that runs once the JSON is authoritative and there is no C++ left to compare
+    # against, so it has to name the bad entry - dying with KeyError: 'id' hides the
+    # very thing it exists to find.
     problems = []
-    for entry in languages_doc["languages"]:
+    entries = languages_doc.get("languages")
+    if not isinstance(entries, list):
+        return problems + ["languages.json has no \"languages\" array"]
+
+    for index, entry in enumerate(entries):
+        if not isinstance(entry, dict):
+            problems.append("language entry #%d is %s, not an object"
+                            % (index, type(entry).__name__))
+            continue
+        lang_id = entry.get("id") or "<entry #%d, no id>" % index
         if not entry.get("id"):
-            problems.append("language entry with empty id")
+            problems.append("%s: language entry with empty or missing id" % lang_id)
         for field in ("name", "extension", "commentLine", "commentStart", "commentEnd", "keywords"):
             if field not in entry:
-                problems.append("%s: missing field %r" % (entry.get("id"), field))
-            value = entry.get(field, "")
+                problems.append("%s: missing field %r" % (lang_id, field))
+                continue
+            value = entry.get(field)
+            if not isinstance(value, str):
+                problems.append("%s.%s is %s, expected a string"
+                                % (lang_id, field, type(value).__name__))
+                continue
             for needle, label in (("_T(", "_T( macro"), ("\n", "newline")):
                 if needle in value:
-                    problems.append("%s.%s contains a stray %s" % (entry["id"], field, label))
+                    problems.append("%s.%s contains a stray %s" % (lang_id, field, label))
 
     expected = {"cpp": ("cpp", "//", "/*", "*/"), "python": ("py", "#", "", ""),
                 "ada": ("ada", "--", "", ""), "bash": ("bash", "#", "", ""),
                 "r": ("r", "#", '"', '"')}
-    by_id = {e["id"]: e for e in languages_doc["languages"]}
+    by_id = {e["id"]: e for e in entries if isinstance(e, dict) and e.get("id")}
     for lang, want in expected.items():
         got = by_id.get(lang)
         if got is None:
             problems.append("expected language %r missing" % lang)
             continue
-        actual = (got["extension"], got["commentLine"], got["commentStart"], got["commentEnd"])
+        actual = tuple(got.get(f) for f in
+                       ("extension", "commentLine", "commentStart", "commentEnd"))
         if actual != want:
             problems.append("%r: %r != %r" % (lang, actual, want))
 
     for name, key, want in (("light", "black", "#000000"), ("light", "comment", "#0A6704"),
                             ("dark", "editorTextColor", "#FFFFFF")):
-        if themes[name]["palette"].get(key) != want:
-            problems.append("%s palette %r: %s != %s"
-                            % (name, key, themes[name]["palette"].get(key), want))
+        palette = (themes.get(name) or {}).get("palette")
+        if not isinstance(palette, dict):
+            problems.append("theme-%s.json has no \"palette\" object" % name)
+            continue
+        if palette.get(key) != want:
+            problems.append("%s palette %r: %s != %s" % (name, key, palette.get(key), want))
     return problems
 
 
