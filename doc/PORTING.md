@@ -59,7 +59,52 @@ different things.
 
 ---
 
-## 2. One correction to the brief
+## 2. Thirteen files were never in the build — deleted
+
+> ⚠️ **The triage tables in §1 and §3 describe the tree as measured on 2026-07-26, before
+> this deletion.** They still sum to 137 files and 4,138 `CString`. The current tree is
+> **125 `.cpp` / 3,165 `CString`**.
+
+`src/VinaText.vcxproj` lists every `.cpp` it compiles — MSBuild does not glob. Thirteen files
+are absent from it, so they have never been compiled into the shipping product, and no built
+code references any of their classes:
+
+| File | LOC | The brief described it as |
+|---|---:|---|
+| `AppLookDlg` | 243 | the Office2007/VS2008 skin picker — §3c, **Risk 5** |
+| `TerminalWindow` | 62 | one of the 11 dock panes; a Windows-only subsystem |
+| `TextReferenceWindow` | 61 | one of the 11 dock panes |
+| `DirectoryNotifier` | 343 | Windows-only subsystem → `QFileSystemWatcher` (Phase 5) |
+| `DirectoryNotifyManager` | 35 | same |
+| `ProjectManager` | 262 | — |
+| `LearnPrograming` | 212 | — |
+| `FindResult` | 548 | — |
+| `MDIClientWnd` | 46 | — |
+| `SearchEditToolBar` | 71 | — |
+| `Observer` / `Subject` | 84 | Wave 1 "cheapest start" (§4) |
+| `FixedBlockMemory` | 58 | Wave 1 "cheapest start" (§4) |
+
+Their headers went with them. One built file, `EditorView.cpp`, carried a leftover
+`#include "DirectoryNotifier.h"` without using the class; that include was removed.
+
+**Consequences for the plan — all of these are now less work, not more:**
+
+- **The "11 dock panes" are 9.** Built: `BookmarkWindow`, `BreakpointWindow`, `BuildWindow`,
+  `MessageWindow`, `OpenTabWindows`, `PathResultWindow`, `SearchResultWindow`,
+  `SearchAndReplaceWindow`, `FileExplorerWindow`.
+- **`DirectoryNotifier` → `QFileSystemWatcher` is work that does not need doing.**
+- **Risk 5 is moot.** Users cannot notice the skin picker disappearing; it is not in the
+  product they run.
+
+**How this was missed.** The triage scored files by `CString` count and MFC/Win32 token
+density. Neither measures *build membership*. Three of these files were sitting in §4's
+"Wave 1 — the true cheapest start" until an attempt to move them found that nothing uses
+them. §7 of this document already warned that bucket assignment "is not mechanically
+derivable from the counts alone" — that caveat applied here and was not applied.
+
+---
+
+## 2b. One correction to the brief
 
 > §8 states *"133 of 137 `.cpp` include `stdafx.h`. The 4 that don't are the cheapest
 > possible starting point for Phase 1."*
@@ -114,13 +159,13 @@ class tokens · **std** = `std::` occurrences.
 | `TemporarySettings.cpp` | 10 | 0 +2 | 0 | 0 | 0 | 9 lines, trivial. |
 | `Textfile.cpp` | 1,551 | 1 +1 | 130 | 0 | 0 | Encoding detection (uchardet) + file I/O. Split: swap Win32 CreateFile/ReadFile for QFile, keep the codec logic. |
 | `WebHandler.cpp` | 191 | 2 | 0 | 0 | 19 | curl-based HTTP. 19 std:: lines, zero Win32. |
-| `ComboboxRegexHelper.cpp` | 156 | 0 | 0 | 3 | 0 | Regex preset table; the combobox binding lives elsewhere. |
+| `ComboboxRegexHelper.cpp` | 156 | 0 | 0 | 3 | 0 | **MISCLASSIFIED — belongs in `ui-rewrite`.** Its API is `PopulateRegexFields(CComboBox&)`; it is the combobox binding, not a data table. Zero `CString` hid pure MFC UI. |
 | `FixedBlockMemory.cpp` | 58 | 0 | 0 | 0 | 0 | Custom allocator. No Win32, no PCH. |
 | `Observer.cpp` | 26 | 0 | 2 | 0 | 0 | Observer pattern base. |
 | `StringHelper.cpp` | 477 | 0 | 13 | 0 | 28 | Zero CString, 28 std:: lines. Pure string ops. |
 | `Subject.cpp` | 58 | 0 | 2 | 0 | 1 | Observer pattern base. |
 | `TextFormatConverter.cpp` | 563 | 0 | 0 | 0 | 86 | Zero CString, 86 std:: lines. Uses boost::algorithm. |
-| `UnicodeUtils.cpp` | 353 | 0 | 5 | 0 | 46 | Zero CString, 46 std:: lines. UTF conversion. |
+| `UnicodeUtils.cpp` | 353 | 0 | 5 | 0 | 46 | **MISCLASSIFIED — belongs in `platform/`.** 8 Win32 codepage calls (`MultiByteToWideChar`, `WideCharToMultiByte`, `CP_ACP`/`CP_UTF8`). Needs a portable codec, not a straight move. |
 
 ### 3.2 `platform/` — 13 files
 
@@ -254,21 +299,37 @@ Ascending `CString` load. Each row is an independently assignable PR **targeting
 branch it is `port/cross-platform`'s MFC build, not the one users are running, so CI on `port/cross-platform` has to
 be green on every one of these PRs or the signal is worthless.
 
-### Wave 1 — zero `CString`, move as-is
+### Wave 1 — ~~zero `CString`, move as-is~~ — did not survive contact
 
-These need only their PCH dependency broken (Phase 1). They are the true cheapest start.
+> ⚠️ **This wave was wrong.** It was built from `CString` counts, and **zero `CString` does
+> not mean zero MFC coupling.** An attempt to actually move these seven files found that
+> three are dead, two are misclassified, and the remaining two are blocked. Corrected below;
+> the original list is kept so the mistake is visible rather than quietly rewritten.
 
-| File | LOC | std | Note |
-|---|---:|---:|---|
-| `ComboboxRegexHelper.cpp` | 156 | 0 | Regex preset table; the combobox binding lives elsewhere. |
-| `FixedBlockMemory.cpp` | 58 | 0 | Custom allocator. No Win32, no PCH. |
-| `Observer.cpp` | 26 | 0 | Observer pattern base. |
-| `StringHelper.cpp` | 477 | 28 | Zero CString, 28 std:: lines. Pure string ops. |
-| `Subject.cpp` | 58 | 1 | Observer pattern base. |
-| `TextFormatConverter.cpp` | 563 | 86 | Zero CString, 86 std:: lines. Uses boost::algorithm. |
-| `UnicodeUtils.cpp` | 353 | 46 | Zero CString, 46 std:: lines. UTF conversion. |
+| File | Was | Reality |
+|---|---|---|
+| `Observer.cpp` | Wave 1 | **Dead — never compiled.** Deleted, see §2 |
+| `Subject.cpp` | Wave 1 | **Dead — never compiled.** Deleted, see §2 |
+| `FixedBlockMemory.cpp` | Wave 1 | **Dead — never compiled.** Deleted, see §2 |
+| `ComboboxRegexHelper.cpp` | Wave 1 | **`ui-rewrite`.** `PopulateRegexFields(CComboBox&)` — pure MFC UI |
+| `UnicodeUtils.cpp` | Wave 1 | **`platform/`.** 8 Win32 codepage calls; needs a portable codec |
+| `StringHelper.cpp` | Wave 1 | Genuine `core/` candidate, **blocked**: uses `AppSettingMgr.m_nPageAlignmentWidth`, plus `TCHAR`/`_T()` |
+| `TextFormatConverter.cpp` | Wave 1 | Genuine `core/` candidate, **blocked**: needs `StringHelper::trim` and `AppUtils::SplitterStdString` |
 
-**7 files, 1,691 LOC, zero string migration.**
+**So Wave 1 is not a wave.** The real cheapest start, in order:
+
+1. **`StringHelper.cpp`** (477 LOC) — parameterise the single `AppSettingMgr` lookup so the
+   caller passes the page width, then move. This unblocks the next item.
+2. **`TextFormatConverter.cpp`** (563 LOC) — follows `StringHelper`; also needs
+   `AppUtils::SplitterStdString`, a generic helper that belongs in `core/` anyway and is part
+   of the `AppUtil` split already listed in §5.
+
+Everything else nominally in `core/` carries `CString` and belongs in Wave 2 or 3.
+
+**Lesson for the remaining buckets.** Before moving any file, check three things the counts do
+not capture: is it in `src/VinaText.vcxproj` at all; what does its `#include` list actually
+drag in; and do its public signatures mention MFC types. All three failures above would have
+been caught by that check, and it costs about a minute per file.
 
 ### Wave 2 — light migration (1–30 sites)
 

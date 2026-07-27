@@ -153,19 +153,26 @@ From `MainFrm.cpp` and `AppLookDlg.cpp`:
 ```
 
 `AppLookDlg` is an "Application Look" theme picker (Office 2007 / VS2005 / VS2008).
+> ⚠️ **`AppLookDlg.cpp` is not in `src/VinaText.vcxproj` and has never been compiled into
+> the shipping product.** It has been deleted — see [`PORTING.md`](PORTING.md) §2. Some of
+> the `CMFCVisualManager` counts above came from it, so the live Feature Pack surface is
+> smaller than this table suggests.
 **So the current UI already overrides the native Windows look with a ~2007-era skin.**
 Qt will not reproduce that, and shouldn't try.
 
 ### 3d. Inventory to port
 
-- **11 dock panes:** `BookmarkWindow`, `BreakpointWindow`, `BuildWindow`, `MessageWindow`,
-  `OpenTabWindows`, `PathResultWindow`, `SearchResultWindow`, `SearchAndReplaceWindow`,
-  `TerminalWindow`, `TextReferenceWindow`, `FileExplorerWindow`
+- **9 dock panes** (not 11): `BookmarkWindow`, `BreakpointWindow`, `BuildWindow`,
+  `MessageWindow`, `OpenTabWindows`, `PathResultWindow`, `SearchResultWindow`,
+  `SearchAndReplaceWindow`, `FileExplorerWindow`.
+  ~~`TerminalWindow`, `TextReferenceWindow`~~ were never compiled — deleted, see
+  [`PORTING.md`](PORTING.md) §2.
 - **~40 `*Dlg.cpp`** dialogs (`.rc`, fixed-pixel → must become `.ui` with layouts)
 - **Windows-only subsystems:** `ShellContextMenu` (COM `IContextMenu`), `CWMPHost` +
   `CWMPEventDispatch` (Windows Media Player ActiveX), `WebView`/`WebDoc`/`WebHandler`,
-  `WindowsPrinter`, `DirectoryNotifier` + `DirectoryNotifyManager` (`ReadDirectoryChangesW`),
-  `SingleInstanceApp`, `Compiler`, `Debugger`, `TerminalWindow`, `SystemInfo`, `OSUtil`
+  `WindowsPrinter`, `SingleInstanceApp`, `Compiler`, `Debugger`, `SystemInfo`, `OSUtil`.
+  ~~`DirectoryNotifier` + `DirectoryNotifyManager` (`ReadDirectoryChangesW`)~~ and
+  ~~`TerminalWindow`~~ were never compiled — deleted, see [`PORTING.md`](PORTING.md) §2.
 
 ---
 
@@ -335,7 +342,7 @@ forward (`git rm --cached` + `.gitignore`) once vcpkg lands. Tell contributors t
 | `PdfView` / PDFium | PDFium is already cross-platform — needs a Qt paint surface |
 | `WebView` / `WebDoc` | QtWebEngine *(verify licence; heavy — consider dropping)* |
 | `WindowsPrinter` | `QPrinter` |
-| `DirectoryNotifier` | `QFileSystemWatcher` |
+| ~~`DirectoryNotifier`~~ | **Not needed** — never compiled into the product, deleted |
 | `SingleInstanceApp` | `QLocalServer` |
 | `Compiler` / `Debugger` | gdb / lldb per platform |
 | Inno Setup | Keep for Windows; `.dmg` macOS; AppImage Linux |
@@ -355,8 +362,10 @@ forward (`git rm --cached` + `.gitignore`) once vcpkg lands. Tell contributors t
 4. **The ribbon request (open issue #7) gets harder, not easier.** MFC gives `CMFCRibbonBar`
    free; Qt has no built-in ribbon. Third-party options (SARibbon, Qtitan) exist — **verify
    their licences against the MIT goal**, same trap as QScintilla.
-5. **`AppLookDlg`'s Office2007/VS2008 skin picker goes away** under D7. Replace with a
-   light/dark/custom QSS theme picker. Existing users will notice this behaviour change.
+5. ~~**`AppLookDlg`'s Office2007/VS2008 skin picker goes away** under D7.~~ **Retired — this
+   risk was based on dead code.** `AppLookDlg.cpp` was never in the build, so no user can
+   notice it disappearing. A light/dark/custom QSS theme picker under D7 is now a pure
+   addition rather than a replacement.
 
 ---
 
