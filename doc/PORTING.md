@@ -19,6 +19,34 @@
 | **delete** | 35 | 110 | 59 | 11,329 | No Qt counterpart needed — framework scaffolding, custom controls Qt ships natively, or Windows-only ActiveX/COM. |
 | **Total** | **137** | **2,292** | **882** | **77,092** | |
 
+### Reconciling with the brief's 4,138
+
+The table above accounts for 2,292 + 882 = **3,174** `CString` occurrences, not 4,138. The
+missing 964 are in **18 headers that have no paired `.cpp`**, so they never appear in a
+per-file triage row:
+
+| `CString` | Header | |
+|---:|---|---|
+| 504 | `modellanguages.h` | static data table → JSON, see §4 |
+| 211 | `EditorColorLight.h` | static data table → JSON, see §4 |
+| 210 | `EditorColorDark.h` | static data table → JSON, see §4 |
+| 15 | `SearchEngine.h` | |
+| 8 | `STLHelper.h` | |
+| 8 | `EditorDataStructure.h` | |
+| 7 | `Templates.h` | |
+| 1 | `EditorCommonDef.h` | |
+| **964** | (10 further headers contain none) | |
+
+`2,292 + 882 + 964 = 4,138.` ✅
+
+The three data tables are 925 of that 964 — the 22% the brief flags as a mechanical win. The
+remaining **39** are spread across five ordinary headers and will be carried along with
+whichever `.cpp` files include them; they need no separate plan.
+
+**LOC, likewise:** the brief's "~101,000 LOC" is `.cpp` **+** `.h` combined (101,110
+measured). The 77,092 above is the **137 `.cpp` only**. Both figures are correct; they measure
+different things.
+
 **What this changes about the plan:**
 
 - **Phase 2 (`core/` extraction) is 684 `CString` sites across 29 files, not 4,138.**

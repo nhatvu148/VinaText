@@ -112,6 +112,11 @@ Three files are already portable. Real Win32 API usage in the core layer is near
 - **85 of 291 files contain zero `CString`** — a much larger ready-to-move core pool than the
   9-file sample above suggested
 
+That 4,138 splits as **2,292** in the `.cpp`, **882** in headers paired with a `.cpp`, and
+**964** in headers that have no `.cpp` at all. See [`PORTING.md`](PORTING.md) §1 for the full
+reconciliation — it matters because only the first two categories appear in the per-file
+triage, so the totals there will not add up to 4,138 without it.
+
 Heaviest files:
 
 | Count | File | Character |

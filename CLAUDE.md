@@ -30,7 +30,9 @@ counts, and sets the Phase 2 work order.
 
 ## Orientation
 
-- `src/*.cpp` = **137 files**, VinaText's own code, ~101k LOC. This is what gets ported.
+- `src/*.cpp` = **137 files / 77,092 LOC**, VinaText's own code. This is what gets ported.
+  With the 154 paired-and-unpaired `src/*.h` it is ~101k LOC combined — that is where the
+  "~101k" figure in the brief comes from; do not attribute it to the `.cpp` alone.
 - `find src -name '*.cpp'` = 193 — includes vendored `uchardet`, `tinyXml`, `pdf/UXReader`.
   **Do not rewrite vendored code.** Use the `src/*.cpp` glob.
 - `src/stdafx.h` is a god-header pulling all of MFC/ATL/Win32/GDI+/Boost into **all 137**
