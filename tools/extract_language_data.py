@@ -250,6 +250,77 @@ def verify(languages_doc, themes, light, dark):
     return failures
 
 
+def json_only_checks(languages_doc, themes):
+    """Checks that still hold once the C++ tables are gone and JSON is authoritative.
+
+    These no longer compare against anything - there is nothing left to compare
+    against - so they assert shape and known-good values instead.
+    """
+    # Nothing below may subscript unvalidated input. This function is the validator
+    # that runs once the JSON is authoritative and there is no C++ left to compare
+    # against, so it has to name the bad entry - dying with KeyError: 'id' hides the
+    # very thing it exists to find.
+    problems = []
+    entries = languages_doc.get("languages")
+    if not isinstance(entries, list):
+        return problems + ["languages.json has no \"languages\" array"]
+
+    for index, entry in enumerate(entries):
+        if not isinstance(entry, dict):
+            problems.append("language entry #%d is %s, not an object"
+                            % (index, type(entry).__name__))
+            continue
+        lang_id = entry.get("id") or "<entry #%d, no id>" % index
+        if not entry.get("id"):
+            problems.append("%s: language entry with empty or missing id" % lang_id)
+        for field in ("name", "extension", "commentLine", "commentStart", "commentEnd", "keywords"):
+            if field not in entry:
+                problems.append("%s: missing field %r" % (lang_id, field))
+                continue
+            value = entry.get(field)
+            if not isinstance(value, str):
+                problems.append("%s.%s is %s, expected a string"
+                                % (lang_id, field, type(value).__name__))
+                continue
+            for needle, label in (("_T(", "_T( macro"), ("\n", "newline")):
+                if needle in value:
+                    problems.append("%s.%s contains a stray %s" % (lang_id, field, label))
+
+    expected = {"cpp": ("cpp", "//", "/*", "*/"), "python": ("py", "#", "", ""),
+                "ada": ("ada", "--", "", ""), "bash": ("bash", "#", "", ""),
+                "r": ("r", "#", '"', '"')}
+    by_id = {e["id"]: e for e in entries if isinstance(e, dict) and e.get("id")}
+    for lang, want in expected.items():
+        got = by_id.get(lang)
+        if got is None:
+            problems.append("expected language %r missing" % lang)
+            continue
+        actual = tuple(got.get(f) for f in
+                       ("extension", "commentLine", "commentStart", "commentEnd"))
+        if actual != want:
+            problems.append("%r: %r != %r" % (lang, actual, want))
+
+    for name, key, want in (("light", "black", "#000000"), ("light", "comment", "#0A6704"),
+                            ("dark", "editorTextColor", "#FFFFFF")):
+        palette = (themes.get(name) or {}).get("palette")
+        if not isinstance(palette, dict):
+            problems.append("theme-%s.json has no \"palette\" object" % name)
+            continue
+        if palette.get(key) != want:
+            problems.append("%s palette %r: %s != %s" % (name, key, palette.get(key), want))
+    return problems
+
+
+def source_tables_present():
+    """True while src/EditorColor{Light,Dark}.h still declare the metadata tables.
+
+    Once the MFC lexers load their metadata from JSON those declarations are
+    deleted, the JSON becomes the source of truth, and every check below that
+    compares against the C++ becomes meaningless rather than merely redundant.
+    """
+    return bool(re.search(r"static\s+CString\s+g_str_\w+", read(LIGHT_H)))
+
+
 def independent_checks(languages_doc, themes):
     """Checks that deliberately do NOT reuse parse_header() or unescape().
 
@@ -269,6 +340,9 @@ def independent_checks(languages_doc, themes):
     #    Note some values legitimately contain a double quote: the C++ really does
     #    say g_str_r_commentStart = _T("\""). Banning quotes outright would be wrong;
     #    decoding independently and comparing is the honest check.
+    if not source_tables_present():
+        return problems + json_only_checks(languages_doc, themes)
+
     raw_light = read(LIGHT_H)
     by_id_local = {e["id"]: e for e in languages_doc["languages"]}
     field_of = {"language": "name", "extention": "extension", "commentline": "commentLine",
@@ -360,8 +434,87 @@ def independent_checks(languages_doc, themes):
     return problems
 
 
+LEXER_SOURCES = [os.path.join(ROOT, "src", "EditorLexerLight.cpp"),
+                 os.path.join(ROOT, "src", "EditorLexerDark.cpp")]
+
+
+def check_lexer_call_sites(languages_doc):
+    """Every language id the MFC lexer initialisers ask for must exist in the JSON.
+
+    EditorLexerLight.cpp / EditorLexerDark.cpp look languages up by string literal:
+
+        pEditorCtrl->SetKeywords(EditorLanguageData::GetKeywords("python"));
+        EditorLanguageData::ApplyLanguageMetadata(pDatabase, "python");
+
+    A typo in one of those - or a language dropped from languages.json - would
+    compile cleanly and only show up as a silently unhighlighted file at runtime.
+    Nothing else in CI can catch that, because CI never runs the application.
+    """
+    problems = []
+    ids = {e["id"] for e in languages_doc["languages"]}
+    per_file = {}
+
+    for path in LEXER_SOURCES:
+        if not os.path.exists(path):
+            continue                        # not on this branch yet
+        src = read(path)
+        used = set(re.findall(r'EditorLanguageData::GetKeywords\(\s*"([^"]*)"\s*\)', src))
+        used |= set(re.findall(
+            r'EditorLanguageData::ApplyLanguageMetadata\(\s*\w+\s*,\s*"([^"]*)"\s*\)', src))
+        if not used:
+            continue
+        per_file[os.path.basename(path)] = used
+        unknown = sorted(used - ids)
+        if unknown:
+            problems.append("%s references language ids absent from languages.json: %s"
+                            % (os.path.basename(path), unknown))
+
+    # The two theme files are mirrors of each other; a language handled in one but
+    # not the other means a lost initialiser.
+    if len(per_file) == 2:
+        (na, a), (nb, b) = sorted(per_file.items())
+        if a != b:
+            problems.append("%s and %s disagree: only-%s=%s only-%s=%s"
+                            % (na, nb, na, sorted(a - b), nb, sorted(b - a)))
+        else:
+            print("lexer call sites: %d language ids, identical in both theme files, "
+                  "all present in languages.json" % len(a))
+
+    return problems
+
+
 def main():
     verify_only = "--verify" in sys.argv
+
+    # Once the MFC lexers read their metadata from JSON, the C++ declarations are
+    # deleted and the JSON becomes the source of truth. There is then nothing to
+    # extract from and nothing to round-trip against, so the tool drops to
+    # verifying the data files and their call sites.
+    if not source_tables_present():
+        print("src/EditorColor{Light,Dark}.h no longer declare the metadata tables -\n"
+              "JSON in %s is now the source of truth.\n"
+              "Extraction and C++ round-trip are skipped; verifying the data files "
+              "and their call sites instead.\n" % os.path.relpath(DATA_DIR, ROOT))
+        if not verify_only:
+            print("Nothing to regenerate. Edit the JSON directly.\n")
+        on_disk = json.load(open(os.path.join(DATA_DIR, "languages.json"), encoding="utf-8"))
+        on_disk_themes = {n: json.load(open(os.path.join(DATA_DIR, "theme-%s.json" % n),
+                                            encoding="utf-8")) for n in ("light", "dark")}
+        failures = json_only_checks(on_disk, on_disk_themes)
+        failures += check_lexer_call_sites(on_disk)
+        n_styles = sum(len(v) for t in on_disk_themes.values() for v in t["languages"].values())
+        print("languages: %d   keyword blobs: %d   style mappings: %d   palette entries: %d/%d"
+              % (len(on_disk["languages"]),
+                 sum(1 for e in on_disk["languages"] if e["keywords"]), n_styles,
+                 len(on_disk_themes["light"]["palette"]), len(on_disk_themes["dark"]["palette"])))
+        if failures:
+            print("\nFAILED (%d):" % len(failures))
+            for f in failures[:25]:
+                print("  " + f)
+            return 1
+        print("data files and lexer call sites verified")
+        return 0
+
     languages_doc, themes, light, dark = build()
 
     if not verify_only:
@@ -383,6 +536,7 @@ def main():
                       for n in ("light", "dark")}
     failures = verify(on_disk, on_disk_themes, light, dark)
     failures += independent_checks(on_disk, on_disk_themes)
+    failures += check_lexer_call_sites(on_disk)
 
     n_styles = sum(len(v) for t in on_disk_themes.values() for v in t["languages"].values())
     print("\nlanguages: %d   keyword blobs: %d   style mappings: %d   palette entries: %d/%d"
