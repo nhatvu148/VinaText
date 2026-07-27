@@ -27,7 +27,7 @@ per-file triage row:
 
 | `CString` | Header | |
 |---:|---|---|
-| 504 | `modellanguages.h` | static data table → JSON, see §4 |
+| 504 | `modellanguages.h` | **dead code — deleted**, see §4 |
 | 211 | `EditorColorLight.h` | static data table → JSON, see §4 |
 | 210 | `EditorColorDark.h` | static data table → JSON, see §4 |
 | 15 | `SearchEngine.h` | |
@@ -306,12 +306,30 @@ These need only their PCH dependency broken (Phase 1). They are the true cheapes
 `core/` and carries 101 Win32 path-API tokens. Do it last, when the `QString` idioms are
 already settled across the other 28 files.
 
-### Not in this table: the three static data tables
+### Not in this table: the three static data tables — ✅ done
 
 `modellanguages.h` (504), `EditorColorLight.h` (211), `EditorColorDark.h` (210) are
 **headers with no `.cpp`**, so they don't appear above — but per §3b of the brief they are
-925 `CString` declarations (22% of the corpus figure) and should be converted to external
-JSON/INI **before** Wave 1, for the cheapest possible reduction.
+925 `CString` declarations, 22% of the corpus figure, and the brief recommends converting
+them to external data **before** Wave 1 for the cheapest possible reduction.
+
+That work is done, and one of the three turned out not to need converting at all:
+
+- **`modellanguages.h` was dead code — deleted, not converted.** No translation unit included
+  it, it was absent from `src/VinaText.vcxproj`, its `ScinRules` namespace was referenced
+  nowhere, and the two classes it defined 84 method bodies for (`CScintillaEditor`,
+  `CIDEDatabase`) exist nowhere in the codebase. 3,510 lines and **504 `CString` — the single
+  heaviest entry in the brief's table — were a phantom.**
+- **`EditorColorLight.h` / `EditorColorDark.h`** duplicated an identical half: 42 languages of
+  metadata and 41 keyword blobs, byte-for-byte the same in both, differing only in colour.
+  Extracted to `Packages/data-packages/{languages,theme-light,theme-dark}.json`, with
+  `tools/extract_language_data.py` as both the extractor and the round-trip verifier.
+
+**Corpus after this work: 4,138 → 3,634.** The two theme headers are unchanged and still the
+live source of truth, so their 421 `CString` remain; removing them means switching the MFC
+frontend onto `core/LanguageData`, which changes what Windows compiles and is a separate
+change. The §1 reconciliation above describes the tree **before** these changes, so it still
+sums to 4,138.
 
 ---
 
