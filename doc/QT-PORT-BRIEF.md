@@ -388,14 +388,19 @@ done
 # Win32/MFC API surface per file — separates 'core' from 'platform'
 grep -lE '\b(afx|CWnd|CDialog|CDocument|CView|HWND|CoCreateInstance|IShell)' src/*.cpp
 
-# Everything that transitively depends on the PCH (expect 133 of 137)
-grep -l 'stdafx.h' src/*.cpp | wc -l
+# Everything that transitively depends on the PCH — note the -i, ALL 137 match
+grep -il 'include.*stdafx\.h' src/*.cpp | wc -l
 ```
 
-Note: 133 of 137 `.cpp` include `stdafx.h`. The 4 that don't are the cheapest possible
-starting point for Phase 1.
+> ⚠️ **Corrected.** This section originally read *"133 of 137 `.cpp` include `stdafx.h`. The 4
+> that don't are the cheapest possible starting point for Phase 1."* **That is wrong — all 137
+> include it.** The four apparent outliers spell it `StdAfx.h`, which a case-sensitive `grep`
+> misses; on Windows' case-insensitive filesystem they resolve to the same header. There is no
+> free head start, and three of those four are `delete` anyway.
+> See [`PORTING.md`](PORTING.md) §2 for the evidence and §4 for the real cheapest starting
+> point (7 zero-`CString` core files).
 
-Write the result to `docs/PORTING.md` in the repo.
+Write the result to `doc/PORTING.md` in the repo (singular `doc/` — see §9).
 
 ---
 

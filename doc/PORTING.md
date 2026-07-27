@@ -319,8 +319,20 @@ of `TCHAR`/`GetLastError` string and block-memory helpers that `QString` replace
 
 It is already classified `delete`. **Deleting it in Phase 2 also closes the licence gap** —
 worth doing early and worth flagging to the owner regardless of the port, since it applies
-to the shipping MFC build today. Note that `Textfile.cpp` includes `Hpslib.hr` and
-`Hpsutils.h`, so the deletion has one real caller to untangle.
+to the shipping MFC build today.
+
+**Three files depend on it, not one** — and one of them is `PathUtil.cpp`, the Phase 2 boss
+file, so the deletion is coupled to the heaviest item in the `core/` work order:
+
+| Caller | Includes | Symbols actually used |
+|---|---|---|
+| `Textfile.cpp` | `Hpsutils.h`, `Hpslib.hr` | `AtoA`, `LogError`, `LookupSystemError`, `alloc_block`, `copy_string`, `free_block`, `vFormatPString` |
+| `PathUtil.cpp` | `Hpsutils.h` | `GetLastErrorString`, `free_block` |
+| `Editor.cpp` | `Hpsutils.h` | `GetLastErrorString`, `free_block` |
+
+`PathUtil.cpp` and `Editor.cpp` need only two symbols each and are the cheap ones to cut
+first. `Textfile.cpp` is the real work: it uses seven, including the block-memory allocator,
+so it needs `QFile`/`QString` equivalents before `Hpslib` can go.
 
 ---
 
