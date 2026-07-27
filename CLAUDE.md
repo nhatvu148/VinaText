@@ -21,9 +21,11 @@ counts, and sets the Phase 2 work order.
 - **The MFC build must keep building and shipping to Windows users.** Do not break it.
 - **New Qt code goes in `ui-qt/`**, gated behind the `VINATEXT_BUILD_QT` CMake option
   (default OFF).
-- Work happens **directly in this repo — no fork.** All port work targets the long-lived
-  **`port/cross-platform`** branch; PRs point at it, never at `master`. `master` is for
-  shipping MFC releases (`release_1.x`) until Phase 6 cutover. (Brief §4 D4.)
+- Port development happens in the **`nhatvu148/VinaText` fork**, not in `vinadevs`.
+  `origin` = the fork, `upstream` = `vinadevs/VinaText` — deliberately this way round so a
+  stray push cannot reach the organisation repo. **Never push to `upstream`.**
+  All port work targets the long-lived **`port/cross-platform`** branch; PRs point at it,
+  never at `master`. One consolidated PR goes upstream at Phase 6 cutover. (Brief §4 D4.)
 - **Do not rewrite git history** to shrink the repo — forks exist and it breaks clones.
 
 ## Orientation

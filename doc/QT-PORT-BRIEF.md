@@ -204,18 +204,27 @@ which explicitly permits running them on non-GPL code.
 **No Mac App Store / Google Play** — their terms conflict with LGPL's "freedoms cannot be
 restricted from recipients". Ship `.dmg` / AppImage direct from GitHub, as today.
 
-**D4. Work directly in `vinadevs/VinaText`. No fork. One long-lived `port/cross-platform` branch.**
+**D4. Develop in the `nhatvu148/VinaText` fork, on one long-lived `port/cross-platform`
+branch. Single consolidated PR to `vinadevs/VinaText` when ready.**
 
-> **Revised 2026-07-26 by the project owner.** This decision originally read *"no long-lived
-> port branch — everything lands on `master` behind a CMake flag."* The owner chose the
-> integration-branch model instead. The reasoning for and against is preserved below, because
-> the tradeoff is real and the mitigations are not optional.
+> **Revised twice.** Originally: *"no long-lived port branch — everything lands on `master`
+> behind a CMake flag."* Revised 2026-07-26 by the project owner to the integration-branch
+> model. Revised again 2026-07-27: development moved to a fork, because the automated review
+> tooling the owner relies on cannot run against the `vinadevs` organisation. Both sets of
+> reasoning are preserved below — the tradeoffs are real and the mitigations are not optional.
 
-- **No fork.** A fork of a 163 MB repo means permanent sync pain, split releases, split issue
-  tracker, and zero benefit — the team owns the repo. This part is unchanged.
-- **All port work targets `port/cross-platform`.** PRs point at `port/cross-platform`, not `master`. `port/cross-platform` merges
-  to `master` once at cutover (Phase 6). Keep the existing `release_1.x` convention for
-  shipping MFC releases off `master`.
+- **Fork as staging, not as a permanent home.** The original objection to forking stands in
+  general — sync pain, split releases, split issue tracker. It is accepted here because the
+  fork is a *review* environment with a defined exit: one consolidated PR upstream. The issue
+  tracker stays on `vinadevs`; the fork carries code and PRs only.
+- **Remotes.** `origin` = `nhatvu148/VinaText` (the fork), `upstream` = `vinadevs/VinaText`.
+  Deliberately this way round, so a stray `git push` cannot reach the organisation repo.
+- **All port work targets `port/cross-platform`.** PRs point at `port/cross-platform`, not
+  `master`, and are opened *within the fork*. `port/cross-platform` goes upstream as one
+  consolidated PR at cutover (Phase 6). Keep the existing `release_1.x` convention for
+  shipping MFC releases off `upstream/master`.
+- **Rebase `port/cross-platform` on `upstream/master` weekly** — see the mitigations below.
+  The fork adds a second sync hop, which makes the cadence more important, not less.
 - Still add `ui-qt/` as a sibling directory gated by a CMake option defaulting OFF:
   ```cmake
   option(VINATEXT_BUILD_QT "Build the Qt frontend" OFF)
