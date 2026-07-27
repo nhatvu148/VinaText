@@ -13,9 +13,9 @@
 // Windows, so this is the only executable check available on a developer machine
 // until the CI matrix lands in Phase 0.
 //
-// Build and run:
-//   c++ -std=c++11 -I include -I core core/LanguageData.cpp \
-//       core/tests/TestLanguageData.cpp -o /tmp/testlangdata && /tmp/testlangdata
+// Build and run (one line - no trailing backslash, which would splice this
+// comment into the next and trip -Wcomment under GCC):
+//   c++ -std=c++11 -I include -I core core/LanguageData.cpp core/tests/TestLanguageData.cpp -o testlangdata && ./testlangdata
 
 #include "LanguageData.h"
 
