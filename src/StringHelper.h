@@ -8,6 +8,8 @@
 
 #pragma once
 
+#include "StringUtil.h"		// core/
+
 //////////////////////////////////
 // c++ 11 string buffer format
 
@@ -88,131 +90,17 @@ namespace StringHelper
 //////////////////////////////////
 // C++ STD String Helper
 
-class STDStringHelper
+// The portable majority of this class now lives in core/StringUtil.h. Deriving from
+// it keeps every existing call site working unchanged - STDStringHelper::trim and
+// STDStringHelper::Format both still resolve. Only the two members that cannot move
+// remain here.
+class STDStringHelper : public Core::CStringUtil
 {
 public:
-	// trim from both ends
-	static inline std::string& trim(std::string& s)
-	{
-		return ltrim(rtrim(s));
-	}
-	static inline std::string& trim(std::string& s, const std::string& trimchars)
-	{
-		return ltrim(rtrim(s, trimchars), trimchars);
-	}
-	static inline std::string& trim(std::string& s, wint_t trimchar)
-	{
-		return ltrim(rtrim(s, trimchar), trimchar);
-	}
-
-	// trim from start
-	static inline std::string& ltrim(std::string& s)
-	{
-		s.erase(s.begin(), std::find_if(s.begin(), s.end(), [](wint_t c) { return !iswspace(c); }));
-		return s;
-	}
-	static inline std::string& ltrim(std::string& s, const std::string& trimchars)
-	{
-		s.erase(s.begin(), std::find_if(s.begin(), s.end(), [&trimchars](wint_t c) { return trimchars.find(static_cast<char>(c)) == std::string::npos; }));
-		return s;
-	}
-	static inline std::string& ltrim(std::string& s, wint_t trimchar)
-	{
-		s.erase(s.begin(), std::find_if(s.begin(), s.end(), [&trimchar](wint_t c) { return c != trimchar; }));
-		return s;
-	}
-
-	// trim from end
-	static inline std::string& rtrim(std::string& s)
-	{
-		s.erase(std::find_if(s.rbegin(), s.rend(), [](wint_t c) { return !iswspace(c); }).base(), s.end());
-		return s;
-	}
-	static inline std::string& rtrim(std::string& s, const std::string& trimchars)
-	{
-		s.erase(std::find_if(s.rbegin(), s.rend(), [&trimchars](wint_t c) { return trimchars.find(static_cast<char>(c)) == std::string::npos; }).base(), s.end());
-		return s;
-	}
-	static inline std::string& rtrim(std::string& s, wint_t trimchar)
-	{
-		s.erase(std::find_if(s.rbegin(), s.rend(), [&trimchar](wint_t c) { return c != trimchar; }).base(), s.end());
-		return s;
-	}
-
-	// trim from both ends
-	static inline std::wstring& trim(std::wstring& s)
-	{
-		return ltrim(rtrim(s));
-	}
-	static inline std::wstring& trim(std::wstring& s, const std::wstring& trimchars)
-	{
-		return ltrim(rtrim(s, trimchars), trimchars);
-	}
-	static inline std::wstring& trim(std::wstring& s, wint_t trimchar)
-	{
-		return ltrim(rtrim(s, trimchar), trimchar);
-	}
-
-	// trim from start
-	static inline std::wstring& ltrim(std::wstring& s)
-	{
-		s.erase(s.begin(), std::find_if(s.begin(), s.end(), [](wint_t c) { return !iswspace(c); }));
-		return s;
-	}
-	static inline std::wstring& ltrim(std::wstring& s, const std::wstring& trimchars)
-	{
-		s.erase(s.begin(), std::find_if(s.begin(), s.end(), [&trimchars](wint_t c) { return trimchars.find(c) == std::wstring::npos; }));
-		return s;
-	}
-	static inline std::wstring& ltrim(std::wstring& s, wint_t trimchar)
-	{
-		s.erase(s.begin(), std::find_if(s.begin(), s.end(), [&trimchar](wint_t c) { return c != trimchar; }));
-		return s;
-	}
-
-	// trim from end
-	static inline std::wstring& rtrim(std::wstring& s)
-	{
-		s.erase(std::find_if(s.rbegin(), s.rend(), [](wint_t c) { return !iswspace(c); }).base(), s.end());
-		return s;
-	}
-	static inline std::wstring& rtrim(std::wstring& s, const std::wstring& trimchars)
-	{
-		s.erase(std::find_if(s.rbegin(), s.rend(), [&trimchars](wint_t c) { return trimchars.find(c) == std::wstring::npos; }).base(), s.end());
-		return s;
-	}
-	static inline std::wstring& rtrim(std::wstring& s, wint_t trimchar)
-	{
-		s.erase(std::find_if(s.rbegin(), s.rend(), [&trimchar](wint_t c) { return c != trimchar; }).base(), s.end());
-		return s;
-	}
-
-	static std::wstring ExpandEnvironmentStrings(const std::wstring& s)
-	{
-		DWORD len = ::ExpandEnvironmentStrings(s.c_str(), nullptr, 0);
-		if (len == 0)
-			return s;
-
-		auto buf = std::make_unique<wchar_t[]>(len + 1ULL);
-		if (::ExpandEnvironmentStrings(s.c_str(), buf.get(), len) == 0)
-			return s;
-
-		return buf.get();
-	}
-
-	static std::wstring Format(const wchar_t* frmt, ...);
-	static std::string  Format(const char* frmt, ...);
-
-	[[deprecated("use case insensitive string comparison instead, or the ci_less container helper")]] static inline void emplace_to_lower(std::wstring& s)
-	{
-		std::transform(s.begin(), s.end(), s.begin(), ::towlower);
-	}
-
-	[[deprecated("use case insensitive string comparison instead, or the ci_less container helper")]] static inline void emplace_to_lower(std::string& s)
-	{
-		std::transform(s.begin(), s.end(), s.begin(), [](char c) { return static_cast<char>(::tolower(c)); });
-	}
-
+	// MSVC-only CRT extensions (_vscwprintf / _vsnwprintf_s / _vscprintf /
+	// _vsnprintf_s). Porting this means rewriting it on vsnprintf/vswprintf, which
+	// shifts printf edge-case behaviour - a separate change.
+	// Win32 NLS (LCMapStringEx / LOCALE_NAME_INVARIANT) - stays here.
 	/// converts a string to lowercase
 	/// note: please use only where absolutely necessary!
 	/// better use stricmp functions if possible since for non ANSI strings there just are too many exceptions
@@ -225,13 +113,7 @@ public:
 		return outBuf.get();
 	}
 
-	[[deprecated("use case insensitive string comparison instead, or the ci_less container helper")]] static inline std::string to_lower(const std::string& s)
-	{
-		std::string ls(s);
-		std::transform(ls.begin(), ls.end(), ls.begin(), [](char c) { return static_cast<char>(::tolower(c)); });
-		return ls;
-	}
-
+	// MSVC CRT extension (_wcsnicmp) - stays here.
 	static size_t find_caseinsensitive(const std::wstring& haystack, const std::wstring& needle)
 	{
 		auto ret = std::wstring::npos;
@@ -246,42 +128,20 @@ public:
 		return ret;
 	}
 
-	template <typename T, typename T2>
-	static void TrimLeading(T& s, const T2& vals)
-	{
-		auto it = s.begin();
-		while (it != s.end())
-		{
-			auto whereAt = std::find(vals.begin(), vals.end(), *it);
-			if (whereAt == vals.end())
-				break;
-			++it;
-			if (it == s.end())
-				break;
-		}
-		s.erase(s.begin(), it);
-	}
+	static std::wstring Format(const wchar_t* frmt, ...);
+	static std::string  Format(const char* frmt, ...);
 
-	template <typename T, typename T2>
-	static void TrimTrailing(T& s, const T2& vals)
+	static std::wstring ExpandEnvironmentStrings(const std::wstring& s)
 	{
-		while (!s.empty())
-		{
-			auto whereAt = std::find(vals.begin(), vals.end(), s.back());
-			if (whereAt == vals.end())
-				break;
-			s.pop_back();
-		}
-	}
+		DWORD len = ::ExpandEnvironmentStrings(s.c_str(), nullptr, 0);
+		if (len == 0)
+			return s;
 
-	// Trim container T of values in T2.
-	// T1 can at least be a string, wstring, vector,
-	// T2 can be simiar but initializer_list is the typical type used.
-	template <typename T, typename T2>
-	static void TrimLeadingAndTrailing(T& s, const T2& vals)
-	{
-		TrimLeading(s, vals);
-		TrimTrailing(s, vals);
+		auto buf = std::make_unique<wchar_t[]>(len + 1ULL);
+		if (::ExpandEnvironmentStrings(s.c_str(), buf.get(), len) == 0)
+			return s;
+
+		return buf.get();
 	}
 };
 
