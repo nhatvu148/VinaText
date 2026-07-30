@@ -63,6 +63,12 @@ namespace
 		return static_cast<long>(pEditor->send(iMessage, wParam, lParam));
 	}
 
+	// EDITOR_THEME_BACKGROUND_COLOR::THEME_BACKGROUND_COLOR_MONOKAI from
+	// src/EnumDef.h - RGB(39, 40, 34). Hard-coded here because the theme JSON has
+	// no editor-background entry; the dark palette's "comment_monokai" is what
+	// identifies monokai as the dark default. See the note in ApplyLanguageFor.
+	const sptr_t kEditorBackground = (34 << 16) | (40 << 8) | 39;
+
 	// COLORREF ordering is 0x00BBGGRR, which is what Scintilla expects - the same
 	// convention ui-mfc/ already relies on.
 	sptr_t ToScintillaColour(const Core::SColor& c)
@@ -214,6 +220,34 @@ private:
 		SendScintilla(m_pEditor, SCI_SETILEXER, 0, reinterpret_cast<sptr_t>(pLexer));
 		SendScintilla(m_pEditor, SCI_SETKEYWORDS, 0,
 			reinterpret_cast<sptr_t>(pLang->_Keywords.c_str()));
+
+		// The editor background is NOT in the extracted theme JSON - it lives in
+		// EDITOR_THEME_BACKGROUND_COLOR in src/EnumDef.h as an app setting, so #3
+		// never captured it. Without it the widget keeps Qt's white default and a
+		// dark theme paints white-on-white: editorTextColor is #FFFFFF here.
+		//
+		// This mirrors CEditorCtrl::LoadEditorSettings (src/Editor.cpp:135-148):
+		// set STYLE_DEFAULT, broadcast it with SCI_STYLECLEARALL, then apply the
+		// per-style foregrounds on top.
+		Core::SColor defaultFore;
+		m_Theme.ResolveColor("editorTextColor", defaultFore);
+		SendScintilla(m_pEditor, SCI_STYLESETFORE, STYLE_DEFAULT, ToScintillaColour(defaultFore));
+		SendScintilla(m_pEditor, SCI_STYLESETBACK, STYLE_DEFAULT, kEditorBackground);
+		SendScintilla(m_pEditor, SCI_STYLECLEARALL);
+
+		Core::SColor caret;
+		if (m_Theme.ResolveColor("editorCaretColor", caret))
+		{
+			SendScintilla(m_pEditor, SCI_SETCARETFORE, ToScintillaColour(caret));
+		}
+		Core::SColor margin, lineNo;
+		if (m_Theme.ResolveColor("editorMarginBarColor", margin)
+			&& m_Theme.ResolveColor("linenumber", lineNo))
+		{
+			SendScintilla(m_pEditor, SCI_SETMARGINWIDTHN, 0, 48);
+			SendScintilla(m_pEditor, SCI_STYLESETFORE, STYLE_LINENUMBER, ToScintillaColour(lineNo));
+			SendScintilla(m_pEditor, SCI_STYLESETBACK, STYLE_LINENUMBER, ToScintillaColour(margin));
+		}
 
 		const std::vector<Core::SStyleMapping>* pStyles = m_Theme.FindStyles(pLang->_Id);
 		if (pStyles != nullptr)

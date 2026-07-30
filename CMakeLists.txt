@@ -21,7 +21,9 @@
 #   cmake --build build
 #   ctest --test-dir build --output-on-failure
 
-cmake_minimum_required(VERSION 3.21)
+# 3.24, not 3.21: thirdparty/CMakeLists.txt uses FetchContent's
+# DOWNLOAD_EXTRACT_TIMESTAMP, which was added in 3.24 (policy CMP0135).
+cmake_minimum_required(VERSION 3.24)
 
 project(VinaText
     VERSION 1.17.0

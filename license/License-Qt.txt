@@ -1,0 +1,51 @@
+License for Qt
+==============
+
+VinaText uses the Qt framework (https://www.qt.io) under the
+
+    GNU Lesser General Public License, version 3 (LGPLv3)
+
+Qt is also available under commercial terms from The Qt Company and, for some
+modules, under GPLv2/GPLv3. VinaText uses it under LGPLv3 only. VinaText's own
+source remains MIT licensed; see License-VinaText.txt.
+
+Modules used
+------------
+
+    Qt6::Core, Qt6::Gui, Qt6::Widgets      the application and its widgets
+    Qt6::Core5Compat                       required by Scintilla's Qt platform
+                                           layer, which uses QTextCodec
+
+Qt5Compat is LGPLv3; the text codecs it bundles are BSD 2-clause.
+
+LGPLv3 compliance
+-----------------
+
+These obligations are binding on every binary VinaText ships. See
+doc/QT-PORT-BRIEF.md section 4, D3.
+
+  1. Qt MUST be linked DYNAMICALLY. Never link Qt statically - doing so can
+     place the whole application under the LGPL unless relinkable object files
+     are also published.
+  2. Do not defeat relinking. No signing or packaging that prevents a recipient
+     replacing the Qt libraries with their own build.
+  3. State the exact Qt version in the About dialog, together with the words
+     "Uses Qt under LGPLv3".
+  4. Offer recipients the corresponding source for that exact Qt version.
+  5. Publish any patches made to Qt itself. VinaText makes none.
+
+The full LGPLv3 text is at https://www.gnu.org/licenses/lgpl-3.0.txt and MUST be
+included in shipped packages. It is referenced rather than inlined here because
+no VinaText binary links Qt yet - ui-qt/ is behind the VINATEXT_BUILD_QT CMake
+option, which defaults OFF. Bundling the full text is a packaging task, tracked
+for Phase 5/6.
+
+Corresponding source for the Qt version in use: https://download.qt.io/archive/qt/
+
+Note on Lexilla
+---------------
+
+Lexilla is NOT listed separately in this directory because it needs no separate
+file: Lexilla's own License.txt is byte-for-byte identical to
+License-Scintilla.txt, which is titled "License for Lexilla, Scintilla, and
+SciTE" and already covers all three. Verified by SHA-256 against Lexilla 5.5.1.
