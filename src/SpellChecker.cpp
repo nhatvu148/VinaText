@@ -7,6 +7,7 @@
 #*******************************************************************************/
 
 #include "stdafx.h"
+#include <objbase.h>		// CoInitialize / CoCreateInstance
 #include "SpellChecker.h"
 #include "Editor.h"
 #include "AppUtil.h"

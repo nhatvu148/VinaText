@@ -7,6 +7,7 @@
 #*******************************************************************************/
 
 #include "stdafx.h"
+#include <gdiplus.h>		// Gdiplus (gdiplus.lib)
 #include <afxole.h>		// AfxOleInit
 #include "afxwinappex.h"
 #include "afxdialogex.h"

@@ -7,6 +7,8 @@
 
 #if _MSC_VER > 1000
 #pragma once
+
+#include <gdiplus.h>		// Gdiplus (gdiplus.lib)
 #endif // _MSC_VER > 1000
 
 using namespace Gdiplus;

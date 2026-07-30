@@ -8,6 +8,8 @@
 
 #pragma once
 
+
+#include <afxmt.h>		// CCriticalSection / CSingleLock
 #include "stdafx.h"
 
 // memory free

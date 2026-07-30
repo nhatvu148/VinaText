@@ -7,6 +7,7 @@
 #*******************************************************************************/
 
 #include "stdafx.h"
+#include <afxmt.h>		// CCriticalSection / CSingleLock
 #include "MultiThreadWorker.h"
 #include "AppSettings.h"
 #include "MainFrm.h"

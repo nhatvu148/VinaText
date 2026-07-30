@@ -7,6 +7,7 @@
 #*******************************************************************************/
 
 #include "stdafx.h"
+#include <afxmt.h>		// CCriticalSection / CSingleLock
 #include "CodePageMFC.h"
 
 // Initialize static variables
