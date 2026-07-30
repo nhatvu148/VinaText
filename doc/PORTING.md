@@ -29,16 +29,23 @@ and listed here:
 | moved | to | PR | rows annotated |
 |---|---|---|---|
 | `LexerParser.{h,cpp}` | `core/Tokenizer.{h,cpp}` | #25 | §3, §5, §6c |
+| `DiffEngine.cpp` (algorithm only) | `core/LineDiff.{h,cpp}` | #26 | §3, §5, §6c |
 
 **`src/*.cpp` is 124 today, not 137** — §2's thirteen dead files account for the rest. Re-run
 §7's commands for a current count; do not read one off these tables. The first draft of this
 very paragraph said "136", by subtracting 1 from the frozen 137 instead of counting, which is
 the mistake the paragraph exists to warn against.
 
-`CString` is **3,145** by §7's `\bCString\b` convention, and reconciles against §2's 3,165
+`CString` is **3,146** by §7's `\bCString\b` convention, and reconciles against §2's 3,165
 exactly: −22 for `LexerParser`, +2 for the two `CString(...)` boundary conversions #25 adds at
-the call sites. (Note the word boundary: an unanchored `grep CString` returns 3,946, because it
-also counts `CStringArray`, `CStringList` and `CStringT`.)
+the call sites, +1 for #26's (`DiffEngine.cpp` loses one declaration in the moved algorithm and
+gains two in the adapter). (Note the word boundary: an unanchored `grep CString` returns 3,947,
+because it also counts `CStringArray`, `CStringList` and `CStringT`.)
+
+**Boundary conversions mean `CString` will not fall monotonically.** Each extraction removes
+uses from the moved code and adds a few back at the frontend edge; the count only drops for
+real once a call site stops speaking `CString` at all, which is Phase 3+. Judge Phase 2 by what
+has moved, not by this number.
 
 ### Reconciling with the brief's 4,138
 
@@ -176,7 +183,7 @@ class tokens · **std** = `std::` occurrences.
 | `FindReplaceTextWorker.cpp` | 362 | 30 +32 | 18 | 4 | 8 | Find/replace over Scintilla buffers. Threading -> platform/. |
 | `EditorDatabase.cpp` | 92 | 16 +24 | 0 | 0 | 0 | Open-document registry. No Win32; most sites are in the header. |
 | `FileUtil.cpp` | 406 | 19 +14 | 7 | 0 | 41 | Already heavily std::-based (41 std:: lines). |
-| `DiffEngine.cpp` | 324 | 20 +12 | 6 | 0 | 0 | Diff algorithm. No Win32. |
+| `DiffEngine.cpp` | 324 | 20 +12 | 6 | 0 | 0 | **Algorithm → `core/LineDiff` (#26); HTML renderer stays.** Row understates it: the file is ~half report generator. See §6c correction 4. |
 | `FindPathWorker.cpp` | 241 | 16 +10 | 8 | 0 | 6 | Path search worker. Threading moves to platform/. |
 | `AppSettings.cpp` | 414 | 8 +17 | 6 | 0 | 0 | Config already file-based (issue #44). Maps onto QSettings. |
 | `LexerParser.cpp` | 297 | 13 +9 | 14 | 0 | 0 | **→ `core/Tokenizer` (#25).** Not language parsing — a delimiter tokenizer; 7 of 10 methods had no caller. See §6c correction 3. |
@@ -418,7 +425,7 @@ because nothing calls it. Each split needs a `using Base::name;` for every share
 
 | File | CS | LOC | Note |
 |---|---:|---:|---|
-| `DiffEngine.cpp` | 32 | 324 | Diff algorithm. No Win32. |
+| `DiffEngine.cpp` | 32 | 324 | **Algorithm → `core/LineDiff` (#26); HTML renderer stays.** See §6c correction 4. |
 | `FileUtil.cpp` | 33 | 406 | Already heavily std::-based (41 std:: lines). |
 | `EditorDatabase.cpp` | 40 | 92 | Open-document registry. No Win32; most sites are in the header. |
 | `FindReplaceTextWorker.cpp` | 62 | 362 | Find/replace over Scintilla buffers. Threading -> platform/. |
@@ -581,7 +588,7 @@ first published version of this table said so wrongly. Both corrections are belo
 | `EditorDatabase` | 7 | 0 | 40 | 92 |
 | `StringHelper` | 6 | 30 | 0 | 478 |
 | `FindReplaceTextWorker` | 3 | 15 | 62 | 362 |
-| `DiffEngine` | **1** | 0 | 32 | 323 |
+| ~~`DiffEngine`~~ → `core/` (algorithm) | **1** | 0 | 32 | 323 |
 | ~~`LexerParser`~~ → `core/` | **1** | 0 | 22 | 297 |
 | `UserExtension` | **1** | 0 | 18 | 171 |
 | `SpellChecker` | **1** | 0 | 2 | 280 |
@@ -658,8 +665,54 @@ sets — **117,186 pairs, zero mismatches**. `core/tests/TestTokenizer.cpp` then
 edge cases that look like oversights and are deliberately preserved, notably that a leading
 delimiter yields a leading empty token but a trailing one yields no trailing empty token.
 
-`DiffEngine` is now the pick for the next move — but on the strength of its 323 LOC and 32
-`CString`, which is to say: not yet read.
+**Correction 4 — "`DiffEngine.cpp` — Diff algorithm. No Win32." was true and badly
+incomplete, and reading it found a live hang.** Three things the row did not say:
+
+1. **It is two programs in one class.** Roughly half of `CDiffEngine` is an HTML report
+   generator — `Serialize`, `SetTitles`, `SetColorStyles`, `Escape` and seven `CString`
+   colour members. Only the alignment algorithm is portable; the renderer is presentation
+   and stays in `ui-mfc/`. So "move `DiffEngine`" was never a single action.
+2. **The algorithm is written against a 529-LOC MFC type.** `CFilePartition` is `CArray`
+   from `<afxtempl.h>`, file IO and option handling. But `Diff` only ever calls six of its
+   methods, and just two of those read anything — `GetRawLine` and `GetLine`. That is the
+   whole interface, so `core/` takes two `vector<wstring>` per side and `CFilePartition`
+   never has to move at all.
+3. **Some of it must not move.** The ignore-case option is applied with `CString::MakeLower`.
+   Every plausible implementation of that (Win32 `CharLowerBuff`, or `_wcslwr_s` under the
+   locale `CommandLine.cpp` installs via `_tsetlocale(LC_ALL, "")`) is Unicode- or
+   locale-aware, while `Core::ToLower` is the classic locale and therefore ASCII-only by
+   construction — see the note in `core/TextTransform.h`. Moving those 20 lines would
+   silently change which lines compare equal in any file with non-ASCII text. So the
+   frontend filters and hands the filtered lines in, which is what `SDiffSide::_Compare` is.
+
+**And the hang.** Differential-testing the port against a verbatim transcription of the
+original found that **`CDiffEngine::Diff` does not terminate on 8,484 of 132,496 small file
+pairs — 6.4%**. Two three-line files are enough: `ABA` against `BBA` spins forever at
+`(i=2, nf2CurrentLine=1)`.
+
+The cause is a missing guard. The `bDeleted` block means "f1 lines `i`..`itmp-1` were
+deleted", which presupposes `itmp > i`; the original never checks it. When `itmp <= i`,
+`j = itmp - i` is `<= 0`, the loop body never runs, nothing is emitted, neither index moves,
+and `continue` re-enters with identical state. It allocates nothing, so `Path Comparator`
+pins a core at 100% rather than crashing — which is why it has presumably been reported as
+"hangs sometimes", if at all.
+
+**Unlike the two defects in #25, this one is live.** `CPathComparatorDlg::DoDiff` reaches it
+on ordinary input. `core/LineDiff.cpp` adds the `(itmp > i)` guard, and because `ui-mfc/` now
+calls `core/`, the shipping app is fixed by the extraction rather than by a separate patch.
+
+The guard **cannot change any output that previously existed**: every state it excludes is a
+state that did not terminate, so there was nothing to preserve. Verified, not argued —
+124,012 pairs where the original terminates produce **0 mismatches**, and the port returns on
+all 8,484 where it does not.
+
+**So the pattern from #25 repeats with the opposite sign.** There the triage row's summary was
+wrong and the defects were latent; here the summary was right as far as it went, and the
+defect was live. What both have in common is that **no amount of counting `CString` would have
+surfaced either.** Reading the file did.
+
+`FileUtil` and `EditorDatabase` are next by the §4 order — and this time the estimate carries
+an explicit caveat: **11 and 7 including files respectively, contents unread.**
 
 Reproduce, per candidate:
 
