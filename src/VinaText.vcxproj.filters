@@ -290,9 +290,6 @@
     <ClInclude Include="FileUtil.h">
       <Filter>Utils</Filter>
     </ClInclude>
-    <ClInclude Include="LexerParser.h">
-      <Filter>Component GUI\Text Editor\Lexer</Filter>
-    </ClInclude>
     <ClInclude Include="InsertBetweenLines.h">
       <Filter>Dialog GUI</Filter>
     </ClInclude>
@@ -840,9 +837,6 @@
     </ClCompile>
     <ClCompile Include="FileUtil.cpp">
       <Filter>Utils</Filter>
-    </ClCompile>
-    <ClCompile Include="LexerParser.cpp">
-      <Filter>Component GUI\Text Editor\Lexer</Filter>
     </ClCompile>
     <ClCompile Include="InsertBetweenLines.cpp">
       <Filter>Dialog GUI</Filter>

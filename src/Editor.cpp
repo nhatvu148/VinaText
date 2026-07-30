@@ -10,7 +10,7 @@
 #include <shlwapi.h>		// PathFileExists
 #include <assert.h>		// assert()
 #include "Editor.h"
-#include "LexerParser.h"
+#include "Tokenizer.h"		// core/ - replaces CLexingParser
 #include "EditorDatabase.h"
 #include "AppSettings.h"
 #include "TemporarySettings.h"
@@ -3060,10 +3060,13 @@ CString CEditorCtrl::GetLexerNameFromExtension(const CString& szExtension)
 		CString extension = EditorLanguageDef::arrLangExtensions[lexerIndex];
 		while (!extension.IsEmpty())
 		{
-			CLexingParser parser(EditorLanguageDef::arrLangExtensions[lexerIndex], _T("|"));
+			// core/ is dependency-free and speaks std::wstring, so the conversion
+			// happens here at the frontend boundary (brief D6). CompareNoCase stays
+			// on this side: it is _tcsicmp, and moving it would change matching.
+			Core::CTokenizer parser(EditorLanguageDef::arrLangExtensions[lexerIndex].GetString(), L"|");
 			while (parser.HasMoreTokens())
 			{
-				if (parser.Next().CompareNoCase(szExtension) == 0)
+				if (CString(parser.Next().c_str()).CompareNoCase(szExtension) == 0)
 				{
 					return AppUtils::StdToCString(EditorLanguageDef::arrLexerNames[lexerIndex]);
 				}
@@ -3077,10 +3080,10 @@ CString CEditorCtrl::GetLexerNameFromExtension(const CString& szExtension)
 		CString extension = userArrLangExtensions[lexerIndex];
 		while (!extension.IsEmpty())
 		{
-			CLexingParser parser(userArrLangExtensions[lexerIndex], _T("|"));
+			Core::CTokenizer parser(userArrLangExtensions[lexerIndex].GetString(), L"|");
 			while (parser.HasMoreTokens())
 			{
-				if (parser.Next().CompareNoCase(szExtension) == 0)
+				if (CString(parser.Next().c_str()).CompareNoCase(szExtension) == 0)
 				{
 					return AppUtils::StdToCString(EditorLanguageDef::arrLexerNames[lexerIndex]);
 				}
