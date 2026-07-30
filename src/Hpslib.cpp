@@ -3,6 +3,7 @@
 // LGPL applies - i.e. if you use it, please give us a credit
 
 #include "stdafx.h"
+#include <assert.h>		// assert()
 #include "Hpsutils.h"
 
 __declspec (thread) TCHAR *last_error_string;

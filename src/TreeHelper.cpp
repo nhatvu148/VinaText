@@ -7,6 +7,7 @@
 #*******************************************************************************/
 
 #include "stdafx.h"
+#include <afxtempl.h>		// CList
 #include "TreeHelper.h"
 #include <functional>
 #include "AppUtil.h"

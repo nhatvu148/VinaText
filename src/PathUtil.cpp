@@ -7,6 +7,7 @@
 #*******************************************************************************/
 
 #include "stdafx.h"
+#include <codecvt>		// std::wstring_convert / codecvt_utf8
 #include "afxtaskdialog.h"
 #include "PathUtil.h"
 #include "AppUtil.h"

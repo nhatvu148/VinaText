@@ -7,6 +7,7 @@
 #*******************************************************************************/
 
 #include "stdafx.h"
+#include <assert.h>		// assert()
 #include <objbase.h>		// CoInitialize / CoCreateInstance
 #include "SpellChecker.h"
 #include "Editor.h"

@@ -7,6 +7,7 @@
 #*******************************************************************************/
 
 #include "stdafx.h"
+#include <assert.h>		// assert()
 #define BUILD_HPSLIB
 #include "Hpsutils.h"
 #include "TextFile.h"
