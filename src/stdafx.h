@@ -49,7 +49,6 @@
 #include <locale>
 #include <string>
 #include <array>
-#include <io.h>		// _open_osfhandle - see ProcessRedirect
 #include <iostream>
 #include <cctype>
 #include <memory>
@@ -63,8 +62,6 @@
 #include <queue>
 #include <stack>
 #include <stdexcept>
-#include <boost/algorithm/string.hpp>
-#include <boost/algorithm/string/join.hpp>
 #include <inttypes.h>
 #include <stdlib.h>
 #include <mutex>
