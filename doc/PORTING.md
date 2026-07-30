@@ -177,7 +177,7 @@ class tokens · **std** = `std::` occurrences.
 | `Observer.cpp` | 26 | 0 | 2 | 0 | 0 | Observer pattern base. |
 | `StringHelper.cpp` | 477 | 0 | 13 | 0 | 28 | Zero CString, 28 std:: lines. Pure string ops. |
 | `Subject.cpp` | 58 | 0 | 2 | 0 | 1 | Observer pattern base. |
-| `TextFormatConverter.cpp` | 563 | 0 | 0 | 0 | 86 | Zero CString, 86 std:: lines. Uses boost::algorithm. |
+| `TextFormatConverter.cpp` | 563 | 0 | 0 | 0 | 86 | Zero CString, 86 std:: lines. Formerly used boost::algorithm; now `core/Checksum.h`. |
 | `UnicodeUtils.cpp` | 353 | 0 | 5 | 0 | 46 | **MISCLASSIFIED — belongs in `platform/`.** 8 Win32 codepage calls (`MultiByteToWideChar`, `WideCharToMultiByte`, `CP_ACP`/`CP_UTF8`). Needs a portable codec, not a straight move. |
 
 ### 3.2 `platform/` — 13 files
@@ -462,7 +462,7 @@ Phase 2 work because it directly shrinks the dual-maintenance surface (Risk 2).
 ```
 
 This is third-party **LGPL** code inside an MIT repo, and it is not represented in
-`license/` (which tracks Boost, Curl, Mozilla, PDFium, Scintilla, VinaText). It is 215 lines
+`license/` (which tracks Curl, Mozilla, PDFium, Qt, Scintilla, VinaText). It is 215 lines
 of `TCHAR`/`GetLastError` string and block-memory helpers that `QString` replaces outright.
 
 It is already classified `delete`. **Deleting it in Phase 2 also closes the licence gap** —

@@ -8,7 +8,7 @@
 
 #pragma once
 
-#include <boost/algorithm/string/join.hpp>		// boost::algorithm::join
+#include "TextTransform.h"		// core/ - replaces boost/algorithm/string/join
 #include <wininet.h>		// INTERNET_SCHEME / HINTERNET
 #include "StringUtil.h"		// core/
 
@@ -85,7 +85,7 @@ namespace StringHelper
 	template <class T>
 	T JoinStdString(const T & strDelimiters, const std::vector<T>& arFields)
 	{
-		return boost::algorithm::join(arFields, strDelimiters);
+		return Core::Join(arFields, strDelimiters);
 	}
 }
 
