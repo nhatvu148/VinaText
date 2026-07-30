@@ -7,6 +7,7 @@
 #*******************************************************************************/
 
 #include "stdafx.h"
+#include <codecvt>		// std::wstring_convert / codecvt_utf8
 #include <gdiplus.h>		// Gdiplus (gdiplus.lib)
 #include <afxole.h>		// AfxOleInit
 #include "afxwinappex.h"

@@ -13,6 +13,7 @@ This disclaimer should not be removed and should exist in any reproduction of th
 #pragma comment (lib, "uxtheme")
 
 #include "stdafx.h"
+#include <afxtempl.h>		// CArray / CMap
 #include <WindowsX.h>		// GET_X_LPARAM / control macros
 #include "WndResizer.h"
 

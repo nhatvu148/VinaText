@@ -24,14 +24,12 @@
 
 #include <afxwin.h>         // MFC core and standard components
 #include <afxext.h>         // MFC extensions
-#include <afxdisp.h>        // MFC Automation classes
 
 #ifndef _AFX_NO_AFXCMN_SUPPORT
 #include <afxcmn.h>             // MFC support for Windows Common Controls
 #endif // _AFX_NO_AFXCMN_SUPPORT
 
 #include <afxcontrolbars.h>     // MFC support for ribbons and control bars
-#include <afxtempl.h> //MFC Template support
 #include <shlobj.h> //IShellFolder support
 #include <uxtheme.h> //XP themes support
 #include <atlcom.h>
@@ -47,12 +45,10 @@
 #include <list>
 #include <math.h>
 #include <fstream>
-#include <comdef.h>
 #include <sstream>
 #include <iomanip>
 #include <regex>
 #include <locale>
-#include <codecvt>
 #include <string>
 #include <array>
 #include <io.h>		// _open_osfhandle - see ProcessRedirect
@@ -68,7 +64,6 @@
 #include <ctime>
 #include <queue>
 #include <stack>
-#include <Assert.h>
 #include <stdexcept>
 #include <boost/algorithm/string.hpp>
 #include <boost/algorithm/string/join.hpp>

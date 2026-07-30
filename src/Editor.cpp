@@ -7,6 +7,7 @@
 #*******************************************************************************/
 
 #include "stdafx.h"
+#include <assert.h>		// assert()
 #include "Editor.h"
 #include "LexerParser.h"
 #include "EditorDatabase.h"

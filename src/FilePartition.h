@@ -17,6 +17,8 @@
 
 #pragma once
 
+#include <afxtempl.h>		// CArray / CMap
+
 typedef enum {Normal=0, Changed, Added, Deleted} LineStatus;
 
 class CFileLine; // forward declaration
