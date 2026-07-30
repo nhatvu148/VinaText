@@ -98,6 +98,16 @@ but because the PCH is. **Breaking this header gates everything else.**
 > afxole.h    1  comdef.h   1  afxdisp.h 1
 > ```
 >
+> **Vendored code is excluded and relies on transitive includes.** `src/pdf/UXReader/*.cpp`
+> is compiled into the product but is vendored, so it is out of scope for Phase 1 per the
+> no-rewriting-vendored-code rule. Several of those files use symbols they never include a
+> header for — `UXReaderLibrary.cpp` calls `Gdiplus::GdiplusStartup`, `UXReaderDocumentPane.cpp`
+> uses `GET_X_LPARAM` — and get them from somewhere in the MFC header chain rather than from
+> `stdafx.h`. Removing `gdiplus.h` and `WindowsX.h` from the PCH left the build green, so the
+> chain still supplies them today. **It is a latent dependency on MFC's own internal includes,
+> and a future toolset could break it.** If that ever happens the fix is a small vendored-code
+> patch, tracked as such.
+
 > **So `stdafx.h` cannot be slimmed further until individual files carry their own includes,
 > and Phase 1 is irreducibly per-file.** There is no header diet that shortcuts it — worth
 > knowing before starting rather than at file 60.
