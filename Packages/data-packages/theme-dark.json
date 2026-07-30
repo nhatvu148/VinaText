@@ -1,6 +1,6 @@
 {
-  "_generatedBy": "tools/extract_language_data.py",
-  "_source": "src/EditorColorDark.h",
+  "_generatedBy": "tools/extract_language_data.py (extraction complete; the tool now verifies rather than generates)",
+  "_source": "originally extracted from src/EditorColorDark.h; that header no longer declares this data, so this file is now the source of truth and is edited directly",
   "name": "dark",
   "palette": {
     "Orange": "#FD971F",
@@ -13,6 +13,7 @@
     "cyan": "#00FFFF",
     "darkorange": "#FF8C00",
     "definition": "#00FF00",
+    "editorBackground": "#272822",
     "editorCaretColor": "#FFFFFF",
     "editorFolderBackColor": "#808080",
     "editorFolderForeColor": "#505050",

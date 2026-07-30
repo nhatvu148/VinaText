@@ -301,7 +301,9 @@ def json_only_checks(languages_doc, themes):
             problems.append("%r: %r != %r" % (lang, actual, want))
 
     for name, key, want in (("light", "black", "#000000"), ("light", "comment", "#0A6704"),
-                            ("dark", "editorTextColor", "#FFFFFF")):
+                            ("dark", "editorTextColor", "#FFFFFF"),
+                            ("light", "editorBackground", "#FFFFFF"),
+                            ("dark", "editorBackground", "#272822")):
         palette = (themes.get(name) or {}).get("palette")
         if not isinstance(palette, dict):
             problems.append("theme-%s.json has no \"palette\" object" % name)

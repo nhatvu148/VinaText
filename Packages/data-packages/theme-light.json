@@ -1,6 +1,6 @@
 {
-  "_generatedBy": "tools/extract_language_data.py",
-  "_source": "src/EditorColorLight.h",
+  "_generatedBy": "tools/extract_language_data.py (extraction complete; the tool now verifies rather than generates)",
+  "_source": "originally extracted from src/EditorColorLight.h; that header no longer declares this data, so this file is now the source of truth and is edited directly",
   "name": "light",
   "palette": {
     "Orange": "#FD971F",
@@ -12,6 +12,7 @@
     "cyan": "#00FFFF",
     "darkorange": "#FF8C00",
     "definition": "#00FF00",
+    "editorBackground": "#FFFFFF",
     "editorCaretColor": "#000000",
     "editorFolderBackColor": "#808080",
     "editorFolderForeColor": "#DCDCDC",
