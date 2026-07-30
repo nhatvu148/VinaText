@@ -545,49 +545,74 @@ grep -rhoE '(Set|Get)(Language[A-Za-z]*|CompilerPath|DebuggerPath)\s*\(' src/*.c
 
 Neither is wrong. What would be wrong is estimating either from the `CString` column.
 
-**Consequence for the work order in §4 — measured, and it corrects this section's own guess.**
+**Consequence for the work order in §4 — measured, and it corrects two of this section's
+own claims.**
 
-This section originally speculated that `PathUtil`, flagged as the boss file on 308 `CString`,
-*"may not be the worst by call-site churn"*. Measured, **it is the worst by every measure**:
+This section originally speculated that `PathUtil` *"may not be the worst by call-site churn"*.
+It is the worst by the two columns that measure churn — but **not** by every measure, and the
+first published version of this table said so wrongly. Both corrections are below the table.
 
-| file | qualified sites | including files | `CString` | LOC |
+| file | `#include`s of its header | `Owner::` references | `CString` | LOC |
 |---|---:|---:|---:|---:|
-| **`PathUtil`** | **353** | **46** | **308** | 1,588 |
-| `StringHelper` | 30 | 7 | 0 | 478 |
-| `FindReplaceTextWorker` | 15 | 6 | 62 | 363 |
-| `FileUtil` | 2 | 11 | 33 | 406 |
-| `AppSettings` | 0 | 46 | 25 | 415 |
-| `EditorDatabase` | 0 | 7 | 40 | 92 |
-| `DiffEngine` | 0 | **1** | 32 | 324 |
-| `LexerParser` | 0 | **1** | 22 | 297 |
-| `UserExtension` | 0 | **1** | 18 | 171 |
-| `SpellChecker` | 0 | **1** | 2 | 281 |
+| **`PathUtil`** | 21 | **353** | **308** | 1,587 |
+| **`AppSettings`** | **46** | 0 | 25 | 414 |
+| `FileUtil` | 11 | 2 | 33 | 406 |
+| `EditorDatabase` | 7 | 0 | 40 | 92 |
+| `StringHelper` | 6 | 30 | 0 | 478 |
+| `FindReplaceTextWorker` | 3 | 15 | 62 | 362 |
+| `DiffEngine` | **1** | 0 | 32 | 323 |
+| `LexerParser` | **1** | 0 | 22 | 297 |
+| `UserExtension` | **1** | 0 | 18 | 171 |
+| `SpellChecker` | **1** | 0 | 2 | 280 |
 
-*Qualified sites* counts `Owner::` references from other files — the cost of moving a namespace
-or a static API. *Including files* counts `#include "X.h"`, which is the meaningful number for
-a class used through instances, because `obj.Method()` carries no qualifier to count.
+The two columns measure different costs and **neither alone is sufficient**:
 
-**Read both columns.** `AppSettings` has zero qualified sites but 46 including files: it is a
-settings singleton reached through a macro, so it is far more entangled than its `CString`
-count suggests. `EditorDatabase` likewise — 7 including files, and §6c's 190 accessor call
-sites.
+- **`#include`s** is the number for a class used through instances — `obj.Method()` carries no
+  qualifier to count. `AppSettings` leads it at 46: a settings singleton reached through a
+  macro, far more entangled than its 25 `CString` suggests.
+- **`Owner::` references** is the number for a namespace or a static API. `PathUtil` leads it
+  at 353, an order of magnitude clear of anything else.
 
-**The cheap end is real, though.** Four files have exactly one including file: `DiffEngine`,
-`LexerParser`, `UserExtension`, `SpellChecker`. Those are genuine single-caller moves, and
-`LexerParser` is the most valuable of them — language and keyword parsing that `ui-qt/` needs
-as much as `ui-mfc/` does.
+**So `PathUtil` is not "worst by every measure".** It is worst by qualified references, by
+`CString`, and by size; `AppSettings` is worst by header inclusion. They are entangled in
+different ways and the §4 order should reflect that — `PathUtil` last because moving
+`PathUtils::` touches 353 sites, `AppSettings` late because its macro reaches 46 files.
 
-**Revised §4 order:** the single-caller four first, then `FileUtil` and `EditorDatabase`, then
-`AppSettings` once the settings macro is dealt with, and `PathUtil` last — where the original
-order already had it, for a reason that now has numbers behind it.
+**Correction 1 — the first version of this table was not reproducible.** It published a single
+"including files" column showing 46 for `PathUtil`, which the reproduction command below does
+not produce. That figure was `#include`s **union** files containing `PathUtils::` — 21 ∪ 43 —
+under a label that said only the first. It coincided exactly with `AppSettings`' 46, which
+looks like a copy-paste and was not. A number a reader cannot reproduce from the stated command
+is worse than no number, and that is precisely what §6c exists to warn about.
 
-Reproduce with:
+**Correction 2 — the LOC column disagreed with §3.1, for two reasons.** §3.1 was measured on
+2026-07-26 with `wc -l`; the first version of this table used Python's `splitlines()`, which
+differs by one on a file with no trailing newline. On top of that the files genuinely grew:
+Phase 1 (#9–#14) added per-file includes, so `PathUtil.cpp` is 1,584 → 1,587, `SpellChecker.cpp`
+278 → 280, and others +1 each. This table now uses `wc -l`, so it and §3.1 differ only by that
+real growth.
+
+**Revised §4 order:** the four single-includer files first — `DiffEngine`, `LexerParser`,
+`UserExtension`, `SpellChecker` — then `FileUtil` and `EditorDatabase`, then `AppSettings` once
+the settings macro is dealt with, then `PathUtil` last.
+
+`LexerParser` is the most valuable of the four: language and keyword parsing that `ui-qt/`
+needs as much as `ui-mfc/`.
+
+Reproduce, per candidate:
 
 ```bash
-# types DEFINED by a header (not forward-declared), then their qualified uses elsewhere
-grep -E '^\s*(class|struct)\s+\w+[^;{]*\{|^\s*namespace\s+\w+' src/<name>.h
-grep -rc '\bOwner::' src/*.cpp src/*.h
-grep -rl '#include "<name>.h"' src/
+# 1. headers that include it (the cost for an instance-based class)
+grep -rl '#include "PathUtil.h"' src/ | grep -v '^src/PathUtil\.'   | wc -l
+
+# 2. qualified references FROM OTHER FILES (the cost for a namespace or static
+#    API). Excluding the file's own self-references matters: PathUtil.cpp and .h
+#    account for 166 of the 519 total, so counting them inflates the number by a
+#    third. Use the types the header DEFINES - `class X ... {`, not `class X;`
+grep -rhoE '\bPathUtils\s*::' $(ls src/*.cpp src/*.h | grep -v '^src/PathUtil\.') | wc -l
+
+# 3. LOC, matching §3.1's convention
+wc -l src/PathUtil.cpp
 ```
 
 ---
