@@ -21,6 +21,8 @@ counts, and sets the Phase 2 work order.
 - **The MFC build must keep building and shipping to Windows users.** Do not break it.
 - **New Qt code goes in `ui-qt/`**, gated behind the `VINATEXT_BUILD_QT` CMake option
   (default OFF).
+- **`core/` takes no third-party dependency — not even Qt.** It uses `std::wstring` where
+  MFC used `CString`; each frontend converts at its own boundary. (Brief §4 D6, revised.)
 - Port development happens in the **`nhatvu148/VinaText` fork**, not in `vinadevs`.
   `origin` = the fork, `upstream` = `vinadevs/VinaText` — deliberately this way round so a
   stray push cannot reach the organisation repo. **Never push to `upstream`.**

@@ -328,7 +328,38 @@ thirdparty/  vcpkg/Conan manifest — replaces include/ and lib/ blobs
 Critical property: the MFC app builds and ships the whole time, making it a **continuous
 regression test** on every line moved into `core/`.
 
-**D6. `core/` uses `QString`, not `std::u16string`.**
+**D6. `core/` stays dependency-free and uses `std::wstring`. Each frontend converts at its
+own boundary.**
+
+> **Revised 2026-07-31 by the project owner.** This originally read *"`core/` uses `QString`,
+> not `std::u16string`"*, with the MFC app linking QtCore to make the strangler work. The
+> original reasoning is preserved below, because the tradeoff was real — but three things
+> measured since made the premise weaker than it looked:
+>
+> 1. **`core/` already works in both frontends without Qt.** `ui-qt/` links it today and
+>    converts at its own boundary; the Qt spike (#16) needed no change to `core/` at all.
+> 2. **The convenience gap is smaller than assumed.** D6 argued `std::` has no split, trim,
+>    case-insensitive compare or format. `core/StringUtil.h` and `core/TextTransform.h` now
+>    supply exactly those in ~250 lines, with tests.
+> 3. **The corpus is 684 `CString` in `core/`, not 4,138** ([`PORTING.md`](PORTING.md) §1).
+>    The 4,138 spans code that is deleted or rewritten rather than translated, so the figure
+>    this decision leaned on overstated the work by 6×.
+>
+> **What tipped it: the cost D6 did not price.** Linking QtCore into `core/` means the
+> *shipping MFC application* gains a Qt dependency — `Qt6Core.dll` shipped to every Windows
+> user, and D3's LGPLv3 obligations (dynamic linking, About-dialog attribution, corresponding
+> source offer, installer changes) applying to the MFC build immediately. Phases 0–2 are
+> supposed to be invisible to users; that is not invisible.
+>
+> **The rule now:** `core/` takes no third-party dependency, Qt included. It uses
+> `std::wstring` where the MFC code used `CString`, and `std::string` for ASCII payloads.
+> `ui-mfc/` converts with the existing `AppUtils::CStringToWStd` / `WStdToCString`; `ui-qt/`
+> converts with `QString::fromStdWString` / `toStdWString`. Both are one call at the edge.
+>
+> D6's original mapping table below is still the right guide for `ui-qt/`, where `QString` is
+> the natural type — it just applies at the frontend rather than in `core/`.
+
+**Superseded — the original D6 reasoning:**
 This is the decision that determines total cost, and the measured corpus makes it decisive:
 **there are 4,138 `CString` occurrences** (§3b). `std::u16string` has no split, trim, format,
 case-insensitive compare, or number conversion — under Option A every one of those becomes

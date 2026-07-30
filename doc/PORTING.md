@@ -511,6 +511,47 @@ If the `Debug` wording was the intentional later edit, restoring it is a one-lin
 
 ---
 
+## 6c. Phase 2 cost is call-site churn, not `CString` count
+
+The §3 tables rank `core/` candidates by `CString` occurrences. That is the wrong cost model,
+and `EditorDatabase` is the clearest example.
+
+| | |
+|---|---|
+| the file | 92 LOC, 40 `CString`, **includes only `stdafx.h`** — no other dependency at all |
+| looks like | the easiest move in the bucket |
+| actually | its API is 16 `CString` accessors — 8 setters, 8 getters — used at **~190 call sites across 15 files** |
+
+The class is trivially *portable* and expensively *movable*. Nothing in the per-file triage
+sees that, because the cost lives in the callers.
+
+**The measure that matters is: how many call sites change if this type's signature changes.**
+
+```bash
+# for a candidate's public methods, count the sites that would have to move with it
+grep -rhoE '(Set|Get)(Language[A-Za-z]*|CompilerPath|DebuggerPath)\s*\(' src/*.cpp src/*.h \
+  | sort | uniq -c | sort -rn
+```
+
+**Two ways to pay it, and they are not equivalent:**
+
+1. **Convert every call site.** Honest, and leaves no adapter behind — but it is a large
+   mechanical diff through `EditorView.cpp` and both lexer files, verifiable only by the
+   Windows build.
+2. **Move the type to `core/` with a `std::wstring` API and leave a thin `CString` adapter in
+   `src/`.** Call sites do not change. This is the shape used for `STDStringHelper` in PR #6 —
+   and it carries that PR's hazard: any method name present on both sides hides the base
+   overload set, silently, so each one needs a `using` declaration.
+
+Neither is wrong. What would be wrong is estimating either from the `CString` column.
+
+**Consequence for the work order in §4.** `PathUtil` is flagged there as the boss file on 308
+`CString`. By call-site churn it may not be the worst — a type whose accessors are threaded
+through `EditorView.cpp` can cost more than a file with more occurrences and fewer callers.
+Re-rank by call sites before committing to an order.
+
+---
+
 ## 7. How to reproduce these numbers
 
 ```bash
