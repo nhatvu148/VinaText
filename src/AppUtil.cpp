@@ -7,7 +7,7 @@
 #*******************************************************************************/
 
 #include "stdafx.h"
-#include <boost/algorithm/string.hpp>		// boost::to_lower / to_upper
+#include "TextTransform.h"		// core/ - replaces boost/algorithm/string
 #include <shlwapi.h>		// PathFileExists
 #include <codecvt>		// std::wstring_convert / codecvt_utf8
 #include <wininet.h>		// INTERNET_SCHEME / HINTERNET
@@ -871,9 +871,9 @@ CString AppUtils::GetFileTypeByExtension(const CString & strFileExt)
 	{
 		int nPos = AppUtils::FindFirstCharacterNotOf(strFileExt, _T(" \t"));
 		std::wstring strSTD = CStringToWStd(strFileExt);
-		boost::to_lower(strSTD);
+		Core::ToLower(strSTD);
 		std::wstring strFirstChar(1, strSTD[nPos]);
-		boost::to_upper(strFirstChar);
+		Core::ToUpper(strFirstChar);
 		std::wstring strSentenceCase = strSTD.replace(nPos, 1, strFirstChar);
 		return WStdToCString(strSTD);
 	}
@@ -2058,7 +2058,7 @@ std::wstring AppUtils::RemoveDuplicateMatchCaseWordInString(const std::wstring &
 		ss >> word;
 		// check if current word already exist,if not then insert
 		std::wstring wordCase = word;
-		boost::to_lower(wordCase);
+		Core::ToLower(wordCase);
 		while (hash_tab.find(word) == hash_tab.end() && hash_tab.find(wordCase) == hash_tab.end())
 		{
 			line += word + L" ";

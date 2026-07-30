@@ -7,7 +7,7 @@
 #*******************************************************************************/
 
 #include "stdafx.h"
-#include <boost/algorithm/string.hpp>		// boost::to_lower / to_upper / algorithm::trim
+#include "TextTransform.h"		// core/ - replaces boost/algorithm/string
 #include <shlwapi.h>		// PathFileExists
 // SHARED_HANDLERS can be defined in an ATL project implementing preview, thumbnail
 // and search filter handlers and allows sharing of document code with that project.
@@ -4067,7 +4067,7 @@ void CEditorView::OnOptionsRemoveDuplicateWord()
 				for (auto const& str : vecCString)
 				{
 					std::wstring wordCase = str;
-					boost::to_lower(wordCase);
+					Core::ToLower(wordCase);
 					while (hash_tab.find(str) == hash_tab.end()
 						&& hash_tab.find(wordCase) == hash_tab.end())
 					{
@@ -4076,7 +4076,7 @@ void CEditorView::OnOptionsRemoveDuplicateWord()
 					}
 				}
 
-				boost::trim(line);
+				Core::Trim(line);
 				if (!line.empty())
 				{
 					vecOutString.push_back(line);
@@ -4106,7 +4106,7 @@ void CEditorView::OnOptionsRemoveDuplicateWord()
 				for (auto const& str : vecCString)
 				{
 					std::wstring wordCase = str;
-					boost::to_lower(wordCase);
+					Core::ToLower(wordCase);
 					while (hash_tab.find(str) == hash_tab.end()
 						&& hash_tab.find(wordCase) == hash_tab.end())
 					{
@@ -4115,7 +4115,7 @@ void CEditorView::OnOptionsRemoveDuplicateWord()
 					}
 				}
 
-				boost::trim(line);
+				Core::Trim(line);
 				if (!line.empty())
 				{
 					vecOutString.push_back(line);
@@ -4158,7 +4158,7 @@ void CEditorView::OnOptionsRemoveDuplicateMatchCaseWord()
 					}
 				}
 
-				boost::trim(line);
+				Core::Trim(line);
 				if (!line.empty())
 				{
 					vecOutString.push_back(line);
@@ -4194,7 +4194,7 @@ void CEditorView::OnOptionsRemoveDuplicateMatchCaseWord()
 					}
 				}
 
-				boost::trim(line);
+				Core::Trim(line);
 				if (!line.empty())
 				{
 					vecOutString.push_back(line);
@@ -5301,7 +5301,7 @@ void CEditorView::OnOptionsToLowerSnakeCase()
 	if (!stSelectedScript.IsEmpty())
 	{
 		std::wstring strSTD = AppUtils::CStringToWStd(stSelectedScript);
-		boost::to_lower(strSTD);
+		Core::ToLower(strSTD);
 		AppUtils::ReplaceAllInWStdString(strSTD, L" ", L"_");
 		m_EditorCtrl.ReplaceSelectionWithText(AppUtils::WStdToCString(strSTD));
 	}
@@ -5315,7 +5315,7 @@ void CEditorView::OnOptionsToUpperSnakeCase()
 	if (!stSelectedScript.IsEmpty())
 	{
 		std::wstring strSTD = AppUtils::CStringToWStd(stSelectedScript);
-		boost::to_upper(strSTD);
+		Core::ToUpper(strSTD);
 		AppUtils::ReplaceAllInWStdString(strSTD, L" ", L"_");
 		m_EditorCtrl.ReplaceSelectionWithText(AppUtils::WStdToCString(strSTD));
 	}
@@ -5357,7 +5357,7 @@ void CEditorView::OnOptionsToLowerKebabCase()
 	if (!stSelectedScript.IsEmpty())
 	{
 		std::wstring strSTD = AppUtils::CStringToWStd(stSelectedScript);
-		boost::to_lower(strSTD);
+		Core::ToLower(strSTD);
 		AppUtils::ReplaceAllInWStdString(strSTD, L" ", L"-");
 		m_EditorCtrl.ReplaceSelectionWithText(AppUtils::WStdToCString(strSTD));
 	}
@@ -5371,7 +5371,7 @@ void CEditorView::OnOptionsToUpperKebabCase()
 	if (!stSelectedScript.IsEmpty())
 	{
 		std::wstring strSTD = AppUtils::CStringToWStd(stSelectedScript);
-		boost::to_upper(strSTD);
+		Core::ToUpper(strSTD);
 		AppUtils::ReplaceAllInWStdString(strSTD, L" ", L"_");
 		m_EditorCtrl.ReplaceSelectionWithText(AppUtils::WStdToCString(strSTD));
 	}
@@ -5414,9 +5414,9 @@ void CEditorView::OnOptionsToSentenceCase()
 		int nPos = AppUtils::FindFirstCharacterNotOf(stSelectedScript, _T(" \t"));
 		if (nPos >= 0)
 		{
-			boost::to_lower(strSTD);
+			Core::ToLower(strSTD);
 			std::wstring strFirstChar(1, strSTD[nPos]);
-			boost::to_upper(strFirstChar);
+			Core::ToUpper(strFirstChar);
 			std::wstring strSentenceCase = strSTD.replace(nPos, 1, strFirstChar);
 			m_EditorCtrl.ReplaceSelectionWithText(AppUtils::WStdToCString(strSentenceCase));
 		}
@@ -5702,7 +5702,7 @@ void CEditorView::OnEditCountDuplicateLines()
 				}
 				else
 				{
-					boost::algorithm::trim(line);
+					Core::Trim(line);
 					if (!line.empty())
 					{
 						duplicatelines.insert(std::make_pair(line, line_number));
@@ -5741,7 +5741,7 @@ void CEditorView::OnEditCountDuplicateLines()
 				}
 				else
 				{
-					boost::algorithm::trim(line);
+					Core::Trim(line);
 					if (!line.empty())
 					{
 						duplicatelines.insert(std::make_pair(line, line_number));

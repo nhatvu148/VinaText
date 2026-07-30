@@ -414,6 +414,7 @@
     <ClInclude Include="SelectedPathDlg.h" />
     <ClInclude Include="stdafx.h" />
     <ClInclude Include="..\core\Checksum.h" />
+    <ClInclude Include="..\core\TextTransform.h" />
     <ClInclude Include="..\core\LanguageData.h" />
     <ClInclude Include="..\core\StringUtil.h" />
     <ClInclude Include="EditorLanguageData.h" />

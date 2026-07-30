@@ -64,7 +64,8 @@ add_library(vinatext_core STATIC
     core/LanguageData.h
     core/StringUtil.h
     core/Checksum.cpp
-    core/Checksum.h)
+    core/Checksum.h
+    core/TextTransform.h)
 
 add_library(VinaText::core ALIAS vinatext_core)
 
@@ -92,7 +93,7 @@ if(VINATEXT_BUILD_TESTS)
     # No test framework on purpose: these must build anywhere a C++11 compiler
     # exists, with no package manager and no network. Each returns non-zero on
     # failure, which is all ctest needs.
-    foreach(test_name TestLanguageData TestStringUtil TestChecksum)
+    foreach(test_name TestLanguageData TestStringUtil TestChecksum TestTextTransform)
         add_executable(${test_name} core/tests/${test_name}.cpp)
         target_link_libraries(${test_name} PRIVATE vinatext_core)
         if(MSVC)
@@ -107,6 +108,7 @@ if(VINATEXT_BUILD_TESTS)
              COMMAND TestLanguageData "${CMAKE_CURRENT_SOURCE_DIR}/Packages/data-packages")
     add_test(NAME core.StringUtil COMMAND TestStringUtil)
     add_test(NAME core.Checksum COMMAND TestChecksum)
+    add_test(NAME core.TextTransform COMMAND TestTextTransform)
 endif()
 
 #-------------------------------------------------------------------------------
