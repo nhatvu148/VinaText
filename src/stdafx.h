@@ -1,4 +1,4 @@
-/*#*******************************************************************************
+﻿/*#*******************************************************************************
 # COPYRIGHT NOTES
 # ---------------
 # This is a part of VinaText Project
@@ -44,7 +44,6 @@
 #include <atlcoll.h>
 #include <atlbase.h>
 #include <atlhost.h>
-#include <atlctl.h>
 #include <afxres.h>
 #include <map>
 #include <vector>
@@ -65,7 +64,6 @@
 #include <codecvt>
 #include <string>
 #include <array>
-#include <io.h>
 #include <iostream>
 #include <cctype>
 #include <memory>
@@ -73,7 +71,6 @@
 #include <windows.h> 
 #include <tchar.h>
 #include <stdio.h> 
-#include <strsafe.h>
 #include <functional>
 #include <chrono>
 #include <ctime>
