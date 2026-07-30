@@ -100,10 +100,16 @@ but because the PCH is. **Breaking this header gates everything else.**
 >
 > **Vendored code is excluded and relies on transitive includes.** `src/pdf/UXReader/*.cpp`
 > is compiled into the product but is vendored, so it is out of scope for Phase 1 per the
-> no-rewriting-vendored-code rule. Several of those files use symbols they never include a
-> header for — `UXReaderLibrary.cpp` calls `Gdiplus::GdiplusStartup`, `UXReaderDocumentPane.cpp`
-> uses `GET_X_LPARAM` — and get them from somewhere in the MFC header chain rather than from
-> `stdafx.h`. Removing `gdiplus.h` and `WindowsX.h` from the PCH left the build green, so the
+> no-rewriting-vendored-code rule. Four of those files use symbols they never include a header
+> for, and get them from somewhere in the MFC header chain rather than from `stdafx.h`:
+>
+> | File | Symbol | Compiled? |
+> |---|---|---|
+> | `UXReaderLibrary.cpp` | `Gdiplus::GdiplusStartup` | yes |
+> | `UXReaderDocumentPage.cpp` | `Gdiplus::` | yes |
+> | `UXReaderDocumentPane.cpp` | `GET_X_LPARAM` | yes |
+> | `UXReaderMainWindow.cpp` | `GET_X_LPARAM` / `GET_Y_LPARAM` | **no — absent from the vcxproj** |
+> Removing `gdiplus.h` and `WindowsX.h` from the PCH left the build green, so the
 > chain still supplies them today. **It is a latent dependency on MFC's own internal includes,
 > and a future toolset could break it.** If that ever happens the fix is a small vendored-code
 > patch, tracked as such.
