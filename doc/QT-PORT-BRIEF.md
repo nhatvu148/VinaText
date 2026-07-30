@@ -76,7 +76,7 @@ Every `.cpp` includes it. It pulls in:
 ```
 afxwin.h  afxext.h  afxdisp.h  afxdtctl.h  afxcmn.h  afxcontrolbars.h
 afxtempl.h  afxmt.h  afxole.h  afxres.h          <- all of MFC incl. Feature Pack
-atlcom.h  atlcoll.h  atlbase.h  atlhost.h  atlctl.h   <- ATL
+atlcom.h  atlcoll.h  atlbase.h  atlhost.h            <- ATL
 windows.h  shlobj.h  lm.h  uxtheme.h  WindowsX.h  TlHelp32.h
 comdef.h  winperf.h  Iphlpapi.h  shlwapi.h  wininet.h
 gdiplus.h  (+ #pragma comment(lib, "gdiplus.lib"), "iphlpapi.lib")
@@ -86,6 +86,21 @@ EnumDef.h  MacroDef.h
 
 **Consequence:** no file in `src/` is portable today — not because the code is Windows-coupled,
 but because the PCH is. **Breaking this header gates everything else.**
+
+> **Measured 2026-07-30.** `atlctl.h` and `strsafe.h` were in this list and are now removed —
+> nothing in `src/` referenced either. That is the *only* slack in the header. Every remaining
+> Win32/MFC include above is used by at least one of the 125 `.cpp`:
+>
+> ```
+> shlwapi.h 277  uxtheme.h 34  shlobj.h 34  Assert.h 27  winperf.h 15  afxtempl.h 10
+> afxmt.h    10  gdiplus.h  9  objbase.h 8  codecvt   8  TlHelp32.h 8  Iphlpapi.h  7
+> WindowsX.h  6  lm.h       5  wininet.h 4  afxdtctl.h 4  atlhost.h  2  io.h        1
+> afxole.h    1  comdef.h   1  afxdisp.h 1
+> ```
+>
+> **So `stdafx.h` cannot be slimmed further until individual files carry their own includes,
+> and Phase 1 is irreducibly per-file.** There is no header diet that shortcuts it — worth
+> knowing before starting rather than at file 60.
 
 ### 3b. Underneath the PCH, coupling is shallow — it's mostly just `CString`
 
