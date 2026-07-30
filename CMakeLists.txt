@@ -109,11 +109,6 @@ endif()
 #-------------------------------------------------------------------------------
 
 if(VINATEXT_BUILD_QT)
-    if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/ui-qt/CMakeLists.txt")
-        message(FATAL_ERROR
-            "VINATEXT_BUILD_QT=ON but ui-qt/ does not exist yet. "
-            "The Qt frontend lands in Phase 3 — see doc/QT-PORT-BRIEF.md §5.")
-    endif()
     add_subdirectory(ui-qt)
 endif()
 
