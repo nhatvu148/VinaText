@@ -8,7 +8,7 @@
 
 #pragma once
 
-
+#include <boost/algorithm/string/join.hpp>		// boost::algorithm::join
 #include <wininet.h>		// INTERNET_SCHEME / HINTERNET
 #include "StringUtil.h"		// core/
 
@@ -111,9 +111,6 @@ public:
 	// the split.
 	using Core::CStringUtil::to_lower;
 
-	// MSVC-only CRT extensions (_vscwprintf / _vsnwprintf_s / _vscprintf /
-	// _vsnprintf_s). Porting this means rewriting it on vsnprintf/vswprintf, which
-	// shifts printf edge-case behaviour - a separate change.
 	// Win32 NLS (LCMapStringEx / LOCALE_NAME_INVARIANT) - stays here.
 	/// converts a string to lowercase
 	/// note: please use only where absolutely necessary!
@@ -142,6 +139,9 @@ public:
 		return ret;
 	}
 
+	// MSVC-only CRT extensions (_vscwprintf / _vsnwprintf_s / _vscprintf /
+	// _vsnprintf_s). Porting this means rewriting it on vsnprintf/vswprintf, which
+	// shifts printf edge-case behaviour - a separate change.
 	static std::wstring Format(const wchar_t* frmt, ...);
 	static std::string  Format(const char* frmt, ...);
 

@@ -7,6 +7,7 @@
 #*******************************************************************************/
 
 #include "stdafx.h"
+#include <boost/algorithm/string.hpp>		// boost::to_lower / to_upper
 #include <shlwapi.h>		// PathFileExists
 #include <codecvt>		// std::wstring_convert / codecvt_utf8
 #include <wininet.h>		// INTERNET_SCHEME / HINTERNET

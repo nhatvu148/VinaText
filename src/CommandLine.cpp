@@ -7,6 +7,7 @@
 #*******************************************************************************/
 
 #include "stdafx.h"
+#include <io.h>		// _open_osfhandle
 #include "CommandLine.h"
 #include "CommandLine.h"
 

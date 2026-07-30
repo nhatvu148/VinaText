@@ -7,6 +7,7 @@
 #*******************************************************************************/
 
 #include "stdafx.h"
+#include <boost/algorithm/string.hpp>		// boost::to_lower / to_upper / algorithm::trim
 #include <shlwapi.h>		// PathFileExists
 // SHARED_HANDLERS can be defined in an ATL project implementing preview, thumbnail
 // and search filter handlers and allows sharing of document code with that project.
