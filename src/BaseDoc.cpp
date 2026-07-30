@@ -7,6 +7,7 @@
 #*******************************************************************************/
 
 #include "stdafx.h"
+#include <shlwapi.h>		// PathFileExists
 #include "BaseDoc.h"
 #include "FileExplorerDoc.h"
 #include "AppUtil.h"

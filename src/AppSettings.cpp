@@ -1,4 +1,5 @@
 #include "stdafx.h"
+#include <shlwapi.h>		// PathFileExists
 #include "AppSettings.h"
 #include "AppUtil.h"
 #include "PathUtil.h"

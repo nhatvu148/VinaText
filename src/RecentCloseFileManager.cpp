@@ -7,6 +7,7 @@
 #*******************************************************************************/
 
 #include "stdafx.h"
+#include <shlwapi.h>		// PathFileExists
 #include "RecentCloseFileManager.h"
 #include "AppUtil.h"
 #include "MainFrm.h"

@@ -7,6 +7,7 @@
 #*******************************************************************************/
 
 #include "stdafx.h"
+#include <shlwapi.h>		// PathFileExists
 #include <shlobj.h>		// SHGetFolderPath CSIDL_* / SHFILEOPSTRUCT
 #include <codecvt>		// std::wstring_convert / codecvt_utf8
 #include "afxtaskdialog.h"

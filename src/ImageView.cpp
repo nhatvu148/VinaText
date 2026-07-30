@@ -7,6 +7,7 @@
 #*******************************************************************************/
 
 #include "stdafx.h"
+#include <shlwapi.h>		// PathFileExists
 #include <gdiplus.h>		// Gdiplus (gdiplus.lib)
 #include "MainFrm.h"
 #include "ImageDoc.h"

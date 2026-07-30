@@ -7,6 +7,7 @@
 #*******************************************************************************/
 
 #include "stdafx.h"
+#include <shlwapi.h>		// PathFileExists
 #include "FindReplaceTextWorker.h"
 #include "AppUtil.h"
 #include "PathUtil.h"
