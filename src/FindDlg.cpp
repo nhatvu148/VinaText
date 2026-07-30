@@ -7,6 +7,7 @@
 #*******************************************************************************/
 
 #include "stdafx.h"
+#include <uxtheme.h>		// SetWindowTheme
 #include "FindDlg.h"
 #include "afxdialogex.h"
 #include "AppUtil.h"

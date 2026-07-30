@@ -7,6 +7,7 @@
 #*******************************************************************************/
 
 #include "stdafx.h"
+#include <shlobj.h>		// IShellFolder
 #include "stdafx.h"
 #include "ShellContextMenu.h"
 

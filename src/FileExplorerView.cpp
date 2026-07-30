@@ -7,6 +7,7 @@
 #*******************************************************************************/
 
 #include "stdafx.h"
+#include <shlobj.h>		// IShellFolder / CSIDL_PROFILE / ILFree
 #include <objbase.h>		// CoInitialize / CoCreateInstance
 #include "VinaTextApp.h"
 #include "MainFrm.h"

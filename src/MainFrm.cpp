@@ -7,6 +7,7 @@
 #*******************************************************************************/
 
 #include "stdafx.h"
+#include <shlobj.h>		// ILFree
 #include "VinaTextApp.h"
 #include "MainFrm.h"
 #include "ChildFrm.h"

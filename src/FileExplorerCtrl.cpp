@@ -9,6 +9,7 @@
 /////////////////////////////////  Includes  //////////////////////////////////
 
 #include "stdafx.h"
+#include <shlobj.h>		// CSIDL_DESKTOP / CSIDL_DRIVES / CSIDL_NETWORK
 
 #include <lm.h>		// NetShareEnum / NET_API_STATUS
 #ifndef FILETREECTRL_NO_RESOURCES
