@@ -51,6 +51,8 @@ Free Lossless Audio Codec(.flac)
 
 #pragma once
 
+
+#include <atlhost.h>		// CAxWindow
 #include "Resource.h"
 #include <oledlg.h>
 #include "wmp.h"

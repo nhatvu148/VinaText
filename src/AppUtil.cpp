@@ -7,6 +7,7 @@
 #*******************************************************************************/
 
 #include "stdafx.h"
+#include <wininet.h>		// INTERNET_SCHEME / HINTERNET
 #include "AppUtil.h"
 #include "PathUtil.h"
 #include "OSUtil.h"

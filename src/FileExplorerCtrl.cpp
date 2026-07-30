@@ -10,6 +10,7 @@
 
 #include "stdafx.h"
 
+#include <lm.h>		// NetShareEnum / NET_API_STATUS
 #ifndef FILETREECTRL_NO_RESOURCES
 #include "VinaTextApp.h"
 #include "MainFrm.h"

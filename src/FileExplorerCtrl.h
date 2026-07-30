@@ -10,6 +10,8 @@
 
 #pragma once
 
+
+#include <lm.h>		// NetShareEnum / NET_API_STATUS
 #ifndef __FILETREECTRL_H__
 #define __FILETREECTRL_H__
 
