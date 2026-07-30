@@ -86,6 +86,66 @@ jobs:
         run: ctest --test-dir build --output-on-failure
 
   # ---------------------------------------------------------------------------
+  # The Qt spike. Builds Scintilla + Lexilla from source and asserts, headlessly,
+  # that the lexer actually styles a document - see doc/QT-PORT-BRIEF.md D2.
+  # ---------------------------------------------------------------------------
+  qt-spike:
+    name: Qt spike (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Probe for ui-qt/
+        id: probe
+        run: |
+          if [ -f ui-qt/CMakeLists.txt ]; then
+            echo "present=yes" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=no" >> "$GITHUB_OUTPUT"
+            echo "ui-qt/ not on this branch - skipping"
+          fi
+
+      - name: Install Qt (Linux)
+        if: steps.probe.outputs.present == 'yes' && runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          # Core5Compat is required: ScintillaEditBase uses QTextCodec.
+          sudo apt-get install -y --no-install-recommends \
+            qt6-base-dev qt6-5compat-dev libgl1-mesa-dev ninja-build
+
+      - name: Install Qt (macOS)
+        if: steps.probe.outputs.present == 'yes' && runner.os == 'macOS'
+        run: brew install qt ninja
+
+      - name: Configure
+        if: steps.probe.outputs.present == 'yes'
+        run: |
+          PREFIX=""
+          [ "$RUNNER_OS" = "macOS" ] && PREFIX="-DCMAKE_PREFIX_PATH=$(brew --prefix qt)"
+          cmake -S . -B qtbuild -G Ninja -DVINATEXT_BUILD_QT=ON \
+                -DCMAKE_BUILD_TYPE=Release $PREFIX
+
+      - name: Build
+        if: steps.probe.outputs.present == 'yes'
+        run: cmake --build qtbuild --parallel
+
+      # "It compiled" is not evidence the editor works. --selftest loads a file,
+      # runs Lexilla, and reads the style bytes back: more than one distinct
+      # style means the lexer genuinely classified the text.
+      - name: Self-test (headless)
+        if: steps.probe.outputs.present == 'yes'
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          set -euo pipefail
+          ./qtbuild/ui-qt/vinatext-qt --selftest tools/extract_language_data.py
+          ./qtbuild/ui-qt/vinatext-qt --selftest core/LanguageData.cpp
+
+  # ---------------------------------------------------------------------------
   # The Windows MFC build. This is the regression test that matters: per D5 the
   # MFC frontend must keep building throughout the port, and on a long-lived
   # branch (D4) this job is the only thing checking that.
