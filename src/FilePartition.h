@@ -17,7 +17,7 @@
 
 #pragma once
 
-#include <afxtempl.h>		// CArray / CMap
+#include <afxtempl.h>		// CArray
 
 typedef enum {Normal=0, Changed, Added, Deleted} LineStatus;
 

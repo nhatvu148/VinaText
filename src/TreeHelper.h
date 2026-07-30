@@ -8,7 +8,7 @@
 
 #pragma once
 
-#include <afxtempl.h>		// CArray / CMap
+#include <afxtempl.h>		// CList
 
 /////////////////////////////////////////////////////////////////////////////
 // CItemTracker 

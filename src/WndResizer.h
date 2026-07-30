@@ -12,7 +12,7 @@ This disclaimer should not be removed and should exist in any reproduction of th
 
 #pragma once
 
-#include <afxtempl.h>		// CArray / CMap
+#include <afxtempl.h>		// CList
 #include "uxtheme.h"
 
 
