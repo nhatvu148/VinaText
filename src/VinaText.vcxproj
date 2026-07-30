@@ -413,6 +413,7 @@
     <ClInclude Include="SetBookmarkPathDlg.h" />
     <ClInclude Include="SelectedPathDlg.h" />
     <ClInclude Include="stdafx.h" />
+    <ClInclude Include="..\core\Checksum.h" />
     <ClInclude Include="..\core\LanguageData.h" />
     <ClInclude Include="..\core\StringUtil.h" />
     <ClInclude Include="EditorLanguageData.h" />
@@ -426,6 +427,9 @@
     <ClInclude Include="WndResizer.h" />
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="..\core\Checksum.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
     <ClCompile Include="..\core\LanguageData.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
