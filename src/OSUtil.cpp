@@ -7,6 +7,7 @@
 #*******************************************************************************/
 
 #include "stdafx.h"
+#include <imm.h>		// ImmGetContext / ImmSetOpenStatus (Imm32.lib)
 #include "AppUtil.h"
 #include "OSUtil.h"
 #include "MainFrm.h"
