@@ -545,10 +545,50 @@ grep -rhoE '(Set|Get)(Language[A-Za-z]*|CompilerPath|DebuggerPath)\s*\(' src/*.c
 
 Neither is wrong. What would be wrong is estimating either from the `CString` column.
 
-**Consequence for the work order in §4.** `PathUtil` is flagged there as the boss file on 308
-`CString`. By call-site churn it may not be the worst — a type whose accessors are threaded
-through `EditorView.cpp` can cost more than a file with more occurrences and fewer callers.
-Re-rank by call sites before committing to an order.
+**Consequence for the work order in §4 — measured, and it corrects this section's own guess.**
+
+This section originally speculated that `PathUtil`, flagged as the boss file on 308 `CString`,
+*"may not be the worst by call-site churn"*. Measured, **it is the worst by every measure**:
+
+| file | qualified sites | including files | `CString` | LOC |
+|---|---:|---:|---:|---:|
+| **`PathUtil`** | **353** | **46** | **308** | 1,588 |
+| `StringHelper` | 30 | 7 | 0 | 478 |
+| `FindReplaceTextWorker` | 15 | 6 | 62 | 363 |
+| `FileUtil` | 2 | 11 | 33 | 406 |
+| `AppSettings` | 0 | 46 | 25 | 415 |
+| `EditorDatabase` | 0 | 7 | 40 | 92 |
+| `DiffEngine` | 0 | **1** | 32 | 324 |
+| `LexerParser` | 0 | **1** | 22 | 297 |
+| `UserExtension` | 0 | **1** | 18 | 171 |
+| `SpellChecker` | 0 | **1** | 2 | 281 |
+
+*Qualified sites* counts `Owner::` references from other files — the cost of moving a namespace
+or a static API. *Including files* counts `#include "X.h"`, which is the meaningful number for
+a class used through instances, because `obj.Method()` carries no qualifier to count.
+
+**Read both columns.** `AppSettings` has zero qualified sites but 46 including files: it is a
+settings singleton reached through a macro, so it is far more entangled than its `CString`
+count suggests. `EditorDatabase` likewise — 7 including files, and §6c's 190 accessor call
+sites.
+
+**The cheap end is real, though.** Four files have exactly one including file: `DiffEngine`,
+`LexerParser`, `UserExtension`, `SpellChecker`. Those are genuine single-caller moves, and
+`LexerParser` is the most valuable of them — language and keyword parsing that `ui-qt/` needs
+as much as `ui-mfc/` does.
+
+**Revised §4 order:** the single-caller four first, then `FileUtil` and `EditorDatabase`, then
+`AppSettings` once the settings macro is dealt with, and `PathUtil` last — where the original
+order already had it, for a reason that now has numbers behind it.
+
+Reproduce with:
+
+```bash
+# types DEFINED by a header (not forward-declared), then their qualified uses elsewhere
+grep -E '^\s*(class|struct)\s+\w+[^;{]*\{|^\s*namespace\s+\w+' src/<name>.h
+grep -rc '\bOwner::' src/*.cpp src/*.h
+grep -rl '#include "<name>.h"' src/
+```
 
 ---
 
