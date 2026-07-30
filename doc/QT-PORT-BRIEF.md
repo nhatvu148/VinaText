@@ -100,20 +100,25 @@ but because the PCH is. **Breaking this header gates everything else.**
 >
 > **Vendored code is excluded and relies on transitive includes.** `src/pdf/UXReader/*.cpp`
 > is compiled into the product but is vendored, so it is out of scope for Phase 1 per the
-> no-rewriting-vendored-code rule. Four of those files use symbols they never include a header
-> for, and get them from somewhere in the MFC header chain rather than from `stdafx.h`:
+> no-rewriting-vendored-code rule. **Five** of those files use symbols they never include a
+> header for, and get them from somewhere in the MFC header chain rather than from `stdafx.h`:
 >
-> | File | Symbol | Compiled? |
-> |---|---|---|
-> | `UXReaderLibrary.cpp` | `Gdiplus::GdiplusStartup` | yes |
-> | `UXReaderDocumentPage.cpp` | `Gdiplus::` | yes |
-> | `UXReaderDocumentPane.cpp` | `GET_X_LPARAM` | yes |
-> | `UXReaderMainWindow.cpp` | `GET_X_LPARAM` / `GET_Y_LPARAM` | **no — absent from the vcxproj** |
-> | `UXReaderDocument.cpp` | `PathRemoveExtensionW` / `PathStripPathW` (`shlwapi.h`) | yes |
-> Removing `gdiplus.h` and `WindowsX.h` from the PCH left the build green, so the
-> chain still supplies them today. **It is a latent dependency on MFC's own internal includes,
-> and a future toolset could break it.** If that ever happens the fix is a small vendored-code
-> patch, tracked as such.
+> | File | Symbol | Header removed from PCH | Compiled? | Build verified after removal |
+> |---|---|---|---|---|
+> | `UXReaderLibrary.cpp` | `Gdiplus::GdiplusStartup` | `gdiplus.h` | yes | ✅ PR #10 |
+> | `UXReaderDocumentPage.cpp` | `Gdiplus::` | `gdiplus.h` | yes | ✅ PR #10 |
+> | `UXReaderDocumentPane.cpp` | `GET_X_LPARAM` | `WindowsX.h` | yes | ✅ PR #10 |
+> | `UXReaderMainWindow.cpp` | `GET_X_LPARAM` / `GET_Y_LPARAM` | `WindowsX.h` | **no — absent from the vcxproj** | n/a — never compiled |
+> | `UXReaderDocument.cpp` | `PathRemoveExtensionW` / `PathStripPathW` | `shlwapi.h` | yes | ✅ PR #13 |
+>
+> Every removal above was confirmed by a green Windows build **on the exact commit that
+> removed it**, so the MFC header chain does supply these symbols today.
+>
+> ⚠️ **Read that verification narrowly.** It covers one configuration only: `Release|x64`,
+> MSVC v143, `windows-2022`, as built by `.github/workflows/main.yml`. It is **not** evidence
+> for `Debug`, for `Win32`, or for any other toolset — those are not built in CI. **It is a
+> latent dependency on MFC's own internal includes, and a future toolset could break it.** If
+> that happens the fix is a small vendored-code patch, tracked as such.
 
 > **So `stdafx.h` cannot be slimmed further until individual files carry their own includes,
 > and Phase 1 is irreducibly per-file.** There is no header diet that shortcuts it — worth
