@@ -1,35 +1,34 @@
 #*******************************************************************************
-# Scintilla + Lexilla, fetched at configure time.
+# Scintilla + Lexilla, vendored.
 #
 # Neither project ships CMake - the Qt bindings are qmake .pro files only - so
 # these targets are translated from qt/ScintillaEditBase/ScintillaEditBase.pro
-# and Lexilla's own source layout. See doc/QT-PORT-BRIEF.md D2.
+# and Lexilla's source layout. See doc/QT-PORT-BRIEF.md D2.
 #
-# Fetched rather than vendored: committing both trees would add ~4 MB of
-# third-party source to a repo D8 already calls too big, and a pinned URL+hash
-# is reproducible without the repo growth. Swapping to vendored copies later
-# means changing only this file.
+#   scintilla/   5.6.4   HPND        License.txt, version.txt included
+#   lexilla/     5.5.1   permissive  same
 #
-# Licences (both permissive, both compatible with VinaText's MIT):
-#   Scintilla  HPND   https://www.scintilla.org/License.txt
-#   Lexilla    permissive, same family
+# Vendored, not fetched. PR #16 fetched these with FetchContent and a pinned
+# hash, on the argument that ~4 MB of third-party source was not worth adding to
+# a repo D8 already calls too big. Two things changed that:
+#
+#   - scintilla.org timed out from the GitHub ubuntu runners during CI on #19
+#     (curl status 28, five retries, fifteen minutes) while succeeding from
+#     macOS. It is one small origin server, not a CDN, and a build that cannot
+#     run without it is a build that stops working for reasons nobody controls.
+#   - #19 removed 97 MB of unused Boost binaries, so 4.5 MB is now noise.
+#
+# Only what the build compiles is vendored: Scintilla's include/, src/ and
+# qt/ScintillaEditBase; Lexilla's include/, lexlib/, lexers/ and src/. The
+# cocoa, gtk, win32, doc, test and scripts trees are not here. Upgrading means
+# replacing these directories from a release tarball and re-running the build.
 #*******************************************************************************
-
-include(FetchContent)
 
 set(SCINTILLA_VERSION 5.6.4)
 set(LEXILLA_VERSION   5.5.1)
 
-FetchContent_Declare(scintilla
-    URL      https://www.scintilla.org/scintilla564.tgz
-    URL_HASH SHA256=c62e19449ed066867fde4edc6e3864f56d16f893c9f7582792fcf27dd733a48e
-    DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
-FetchContent_Declare(lexilla
-    URL      https://www.scintilla.org/lexilla551.tgz
-    URL_HASH SHA256=0d04ee551915ad1bb79148287951cfc5c791d6565d5e32badd14dfb8293f4231
-    DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
-
-FetchContent_MakeAvailable(scintilla lexilla)
+set(scintilla_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/scintilla)
+set(lexilla_SOURCE_DIR   ${CMAKE_CURRENT_SOURCE_DIR}/lexilla)
 
 #-------------------------------------------------------------------------------
 # Scintilla core + Qt platform layer  (from ScintillaEditBase.pro)
@@ -73,8 +72,8 @@ target_compile_definitions(scintilla_editbase PUBLIC SCINTILLA_QT=1 MAKING_LIBRA
 target_link_libraries(scintilla_editbase PUBLIC
     Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Core5Compat)
 
-# The .pro asks for c++1z. This is third-party code held to its own standard,
-# not to core/'s C++11.
+# The .pro asks for c++1z. Third-party code held to its own standard, not to
+# core/'s C++11.
 target_compile_features(scintilla_editbase PUBLIC cxx_std_17)
 
 # Third-party: do not apply our -Werror.
@@ -99,5 +98,5 @@ target_include_directories(lexilla PRIVATE ${lexilla_SOURCE_DIR}/lexlib)
 target_compile_features(lexilla PUBLIC cxx_std_17)
 target_compile_options(lexilla PRIVATE -w)
 
-message(STATUS "  Scintilla   ${SCINTILLA_VERSION} (fetched, HPND)")
-message(STATUS "  Lexilla     ${LEXILLA_VERSION} (fetched, permissive)")
+message(STATUS "  Scintilla   ${SCINTILLA_VERSION} (vendored, HPND)")
+message(STATUS "  Lexilla     ${LEXILLA_VERSION} (vendored, permissive)")
