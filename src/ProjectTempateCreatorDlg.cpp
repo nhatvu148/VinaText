@@ -7,6 +7,7 @@
 #*******************************************************************************/
 
 #include "stdafx.h"
+#include <shlwapi.h>		// PathFileExists
 #include "ProjectTempateCreatorDlg.h"
 #include "afxdialogex.h"
 #include "resource.h"

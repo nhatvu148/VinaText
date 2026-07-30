@@ -7,6 +7,7 @@
 #*******************************************************************************/
 
 #include "stdafx.h"
+#include <shlwapi.h>		// PathFileExists
 #include <uxtheme.h>		// SetWindowTheme
 #include "ReplaceDlg.h"
 #include "afxdialogex.h"

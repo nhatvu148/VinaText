@@ -7,6 +7,7 @@
 #*******************************************************************************/
 
 #include "stdafx.h"
+#include <shlwapi.h>		// PathFileExists
 #include "TemplateCreator.h"
 #include "AppUtil.h"
 #include "PathUtil.h"

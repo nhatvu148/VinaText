@@ -7,6 +7,7 @@
 #*******************************************************************************/
 
 #include "stdafx.h"
+#include <shlwapi.h>		// PathFileExists
 #include <shlobj.h>		// IShellFolder / CSIDL_PROFILE / ILFree
 #include <objbase.h>		// CoInitialize / CoCreateInstance
 #include "VinaTextApp.h"

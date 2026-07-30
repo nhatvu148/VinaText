@@ -7,6 +7,7 @@
 #*******************************************************************************/
 
 #include "stdafx.h"
+#include <shlwapi.h>		// PathFileExists
 #include <assert.h>		// assert()
 #include <objbase.h>		// CoInitialize / CoCreateInstance
 #include <TlHelp32.h>		// CreateToolhelp32Snapshot / PROCESSENTRY32

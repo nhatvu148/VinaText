@@ -7,6 +7,7 @@
 #*******************************************************************************/
 
 #include "stdafx.h"
+#include <shlwapi.h>		// PathFileExists
 #include <codecvt>		// std::wstring_convert / codecvt_utf8
 #include <gdiplus.h>		// Gdiplus (gdiplus.lib)
 #include <afxole.h>		// AfxOleInit

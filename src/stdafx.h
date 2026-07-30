@@ -67,7 +67,6 @@
 #include <boost/algorithm/string/join.hpp>
 #include <inttypes.h>
 #include <stdlib.h>
-#include <shlwapi.h>
 #include <mutex>
 #pragma comment(lib, "gdiplus.lib")
 #pragma comment(lib, "iphlpapi.lib")

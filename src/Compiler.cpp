@@ -7,6 +7,7 @@
 #*******************************************************************************/
 
 #include "stdafx.h"
+#include <shlwapi.h>		// PathFileExists / PathIsRelative
 #include "FileUtil.h"
 #include "Compiler.h"
 #include "Debugger.h"

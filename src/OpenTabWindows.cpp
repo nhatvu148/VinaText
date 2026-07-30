@@ -7,6 +7,7 @@
 #*******************************************************************************/
 
 #include "stdafx.h"
+#include <shlwapi.h>		// PathFileExists
 #include "afxdialogex.h"
 #include "OpenTabWindows.h"
 #include "resource.h"

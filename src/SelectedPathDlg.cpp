@@ -7,6 +7,7 @@
 #*******************************************************************************/
 
 #include "stdafx.h"
+#include <shlwapi.h>		// PathFileExists / PathIsRelative
 #include "Resource.h"
 #include "SelectedPathDlg.h"
 #include "MainFrm.h"

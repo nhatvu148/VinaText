@@ -7,6 +7,7 @@
 #*******************************************************************************/
 
 #include "stdafx.h"
+#include <shlwapi.h>		// PathFileExists
 #include "MessageWindow.h"
 #include "Resource.h"
 #include "VinaTextApp.h"

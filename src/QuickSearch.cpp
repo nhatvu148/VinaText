@@ -7,6 +7,7 @@
 #*******************************************************************************/
 
 #include "stdafx.h"
+#include <shlwapi.h>		// PathFileExists
 #include "Resource.h"
 #include "QuickSearch.h"
 #include "afxdialogex.h"

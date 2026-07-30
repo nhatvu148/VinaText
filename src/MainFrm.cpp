@@ -7,6 +7,7 @@
 #*******************************************************************************/
 
 #include "stdafx.h"
+#include <shlwapi.h>		// PathFileExists / PathIsDirectory
 #include <shlobj.h>		// ILFree
 #include "VinaTextApp.h"
 #include "MainFrm.h"
