@@ -51,7 +51,7 @@ jobs:
         run: python3 tools/extract_language_data.py --verify
 
   core-tests:
-    name: core/ tests (${{ matrix.os }})
+    name: core/ CMake build + tests (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -60,34 +60,30 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Probe for core/
+      - name: Probe for the CMake build
         id: probe
         run: |
-          if [ -f core/LanguageData.cpp ]; then
+          if [ -f CMakeLists.txt ]; then
             echo "present=yes" >> "$GITHUB_OUTPUT"
           else
             echo "present=no" >> "$GITHUB_OUTPUT"
-            echo "core/ not on this branch - skipping"
+            echo "CMakeLists.txt not on this branch - skipping"
           fi
 
-      - name: Build and run
+      # core/ must build with no MFC, no Win32 and no precompiled header, and the
+      # CMake target compiles it with -Wall -Wextra -Werror. A stray platform API
+      # or a missing include fails here rather than at Phase 3.
+      - name: Configure
         if: steps.probe.outputs.present == 'yes'
-        run: |
-          set -euo pipefail
-          # core/ must build with no MFC, no Win32 and no precompiled header. A
-          # missing include or a stray platform API fails here rather than at the
-          # end of Phase 1.
-          c++ -std=c++11 -Wall -Wextra -Werror \
-              -I include -I core \
-              core/LanguageData.cpp core/tests/TestLanguageData.cpp \
-              -o testlangdata
-          ./testlangdata
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 
-          if [ -f core/tests/TestStringUtil.cpp ]; then
-            c++ -std=c++11 -Wall -Wextra -Werror \
-                -I core core/tests/TestStringUtil.cpp -o teststringutil
-            ./teststringutil
-          fi
+      - name: Build
+        if: steps.probe.outputs.present == 'yes'
+        run: cmake --build build --parallel
+
+      - name: Test
+        if: steps.probe.outputs.present == 'yes'
+        run: ctest --test-dir build --output-on-failure
 
   # ---------------------------------------------------------------------------
   # The Windows MFC build. This is the regression test that matters: per D5 the
