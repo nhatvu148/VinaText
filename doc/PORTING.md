@@ -520,7 +520,7 @@ and `EditorDatabase` is the clearest example.
 |---|---|
 | the file | 92 LOC, 40 `CString`, **includes only `stdafx.h`** — no other dependency at all |
 | looks like | the easiest move in the bucket |
-| actually | its API is 15 `CString` accessors used at **~190 call sites across 15 files** |
+| actually | its API is 16 `CString` accessors — 8 setters, 8 getters — used at **~190 call sites across 15 files** |
 
 The class is trivially *portable* and expensively *movable*. Nothing in the per-file triage
 sees that, because the cost lives in the callers.
