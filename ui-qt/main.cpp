@@ -218,9 +218,23 @@ private:
 		// Mirrors CEditorCtrl::LoadEditorSettings (src/Editor.cpp:135-148):
 		// set STYLE_DEFAULT, broadcast it with SCI_STYLECLEARALL, then apply the
 		// per-style foregrounds on top.
+		// Check both. SColor default-constructs to black, so a missing key would
+		// paint black on black - the same class of invisible-text bug this data was
+		// added to fix, and just as hard to attribute. A stale copy of the theme is
+		// the realistic way that happens.
 		Core::SColor defaultFore, background;
-		m_Theme.ResolveColor("editorTextColor", defaultFore);
-		m_Theme.ResolveColor("editorBackground", background);
+		const bool bHaveFore = m_Theme.ResolveColor("editorTextColor", defaultFore);
+		const bool bHaveBack = m_Theme.ResolveColor("editorBackground", background);
+		if (!bHaveFore || !bHaveBack)
+		{
+			statusBar()->showMessage(
+				tr("Theme is missing %1 - the editor colours will be wrong. Is this an "
+				   "out-of-date copy of theme-dark.json?")
+					.arg(!bHaveFore ? QStringLiteral("editorTextColor")
+									: QStringLiteral("editorBackground")));
+			qWarning("theme: missing %s", !bHaveFore ? "editorTextColor" : "editorBackground");
+			return;
+		}
 		SendScintilla(m_pEditor, SCI_STYLESETFORE, STYLE_DEFAULT, ToScintillaColour(defaultFore));
 		SendScintilla(m_pEditor, SCI_STYLESETBACK, STYLE_DEFAULT, ToScintillaColour(background));
 		SendScintilla(m_pEditor, SCI_STYLECLEARALL);

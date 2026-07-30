@@ -250,6 +250,47 @@ def verify(languages_doc, themes, light, dark):
     return failures
 
 
+def check_deployed_copies():
+    """The JSON is deployed by hand-copying, so the copies drift.
+
+    Packages/data-packages is the source of truth; the app loads from
+    bin/x64/<config>/Packages/data-packages, which exists per configuration and
+    is updated by remembering to copy. That failed the first time it was tested:
+    adding editorBackground updated the source and left both deployed copies a
+    palette entry short.
+
+    Nothing else catches this. The C++ tests and the checks above all read the
+    source copy, so a stale deployed copy is invisible to them and shows up only
+    as wrong colours at runtime. Until Phase 0's CMake copies Packages/ to the
+    output directory, this comparison is the guard.
+    """
+    problems = []
+    src_dir = DATA_DIR
+    for config in ("Release", "Debug"):
+        dest_dir = os.path.join(ROOT, "bin", "x64", config, "Packages", "data-packages")
+        if not os.path.isdir(dest_dir):
+            continue
+        for fname in sorted(os.listdir(src_dir)):
+            if not fname.endswith(".json"):
+                continue
+            dest = os.path.join(dest_dir, fname)
+            if not os.path.exists(dest):
+                problems.append("bin/x64/%s is missing %s" % (config, fname))
+                continue
+            with open(os.path.join(src_dir, fname), "rb") as f:
+                a = f.read()
+            with open(dest, "rb") as f:
+                b = f.read()
+            if a != b:
+                problems.append(
+                    "bin/x64/%s/Packages/data-packages/%s has drifted from "
+                    "Packages/data-packages/%s - copy the source file over it"
+                    % (config, fname, fname))
+    if not problems:
+        print("deployed copies: bin/x64/{Release,Debug} match Packages/data-packages")
+    return problems
+
+
 def json_only_checks(languages_doc, themes):
     """Checks that still hold once the C++ tables are gone and JSON is authoritative.
 
@@ -504,6 +545,7 @@ def main():
                                             encoding="utf-8")) for n in ("light", "dark")}
         failures = json_only_checks(on_disk, on_disk_themes)
         failures += check_lexer_call_sites(on_disk)
+        failures += check_deployed_copies()
         n_styles = sum(len(v) for t in on_disk_themes.values() for v in t["languages"].values())
         print("languages: %d   keyword blobs: %d   style mappings: %d   palette entries: %d/%d"
               % (len(on_disk["languages"]),
