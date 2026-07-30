@@ -35,6 +35,7 @@
 #include <cwctype>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace Core
 {
@@ -194,6 +195,56 @@ namespace Core
 		{
 			TrimLeading(s, vals);
 			TrimTrailing(s, vals);
+		}
+
+		// Splits str on delimiter.
+		//
+		// ⚠ DO NOT "FIX" THIS. It advances by ONE character per match rather than by
+		// delimiter.length(), so for a multi-character delimiter every token after the
+		// first keeps the delimiter's trailing characters:
+		//
+		//     Split("x[\"alpha[\"beta", "[\"")  ->  ["x", "\"alpha", "\"beta"]
+		//                                                  ^         ^
+		//
+		// CWebHandler::ResultParser depends on exactly that. It splits a translation
+		// response on the two-character sequence [" and then does
+		// line.find(L"\"") expecting to land on index 0 - the stray quote this leaves
+		// behind. Advancing correctly makes that find() return a different offset, or
+		// npos, and the following substr() throws. Correcting the algorithm is a
+		// behaviour change to the translate feature and needs its own change with its
+		// own testing.
+		//
+		// Every other caller passes a single-character delimiter, for which this is
+		// already correct. Moved verbatim from AppUtils::SplitterStdString so that the
+		// move changes nothing; see core/tests/TestStringUtil.cpp, which pins both
+		// behaviours.
+		static std::vector<std::string> Split(const std::string& str, const std::string& delimiter)
+		{
+			std::vector<std::string> strings;
+			std::string::size_type pos = 0;
+			std::string::size_type prev = 0;
+			while ((pos = str.find(delimiter, prev)) != std::string::npos)
+			{
+				strings.push_back(str.substr(prev, pos - prev));
+				prev = pos + 1;
+			}
+			strings.push_back(str.substr(prev));
+			return strings;
+		}
+
+		// Wide counterpart, same caveat.
+		static std::vector<std::wstring> Split(const std::wstring& str, const std::wstring& delimiter)
+		{
+			std::vector<std::wstring> strings;
+			std::wstring::size_type pos = 0;
+			std::wstring::size_type prev = 0;
+			while ((pos = str.find(delimiter, prev)) != std::wstring::npos)
+			{
+				strings.push_back(str.substr(prev, pos - prev));
+				prev = pos + 1;
+			}
+			strings.push_back(str.substr(prev));
+			return strings;
 		}
 	};
 }
