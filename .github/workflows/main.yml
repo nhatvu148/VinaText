@@ -74,11 +74,20 @@ jobs:
         if: steps.probe.outputs.present == 'yes'
         run: |
           set -euo pipefail
+          # core/ must build with no MFC, no Win32 and no precompiled header. A
+          # missing include or a stray platform API fails here rather than at the
+          # end of Phase 1.
           c++ -std=c++11 -Wall -Wextra -Werror \
               -I include -I core \
               core/LanguageData.cpp core/tests/TestLanguageData.cpp \
               -o testlangdata
           ./testlangdata
+
+          if [ -f core/tests/TestStringUtil.cpp ]; then
+            c++ -std=c++11 -Wall -Wextra -Werror \
+                -I core core/tests/TestStringUtil.cpp -o teststringutil
+            ./teststringutil
+          fi
 
   # ---------------------------------------------------------------------------
   # The Windows MFC build. This is the regression test that matters: per D5 the
