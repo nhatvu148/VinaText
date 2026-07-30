@@ -228,6 +228,42 @@ Use `qt/ScintillaEditBase` / `qt/ScintillaEdit` from upstream Scintilla (permiss
 Riverbank's **QScintilla is GPL-or-commercial** — it is why `notepad--` had to be GPL-3.0.
 Using it would force VinaText off MIT. **This is the single most important licensing trap.**
 
+> ### D2 — verified against the actual source, 2026-07-30
+>
+> D2 was written from reasoning. It has now been checked by downloading the source.
+>
+> | | |
+> |---|---|
+> | **Scintilla** | **5.6.4** · `scintilla.org/scintilla564.tgz` (2.1 MB) · **HPND licence** — permissive, MIT-safe |
+> | **Lexilla** | **5.5.1** · `scintilla.org/lexilla551.tgz` (2.0 MB) · permissive · separate project since Scintilla 5 |
+> | `qt/ScintillaEditBase` | **Exists**, exactly as D2 assumes. 3 sources — `PlatQt.cpp`, `ScintillaQt.cpp`, `ScintillaEditBase.cpp` — plus 33 core `src/*.cxx` |
+> | `qt/ScintillaEdit` | Also ships; needs `python WidgetGen.py` run first. Not needed for D2 |
+>
+> **D2 holds. The licences are clean and the Qt binding is real.**
+>
+> Three things D2 did not account for:
+>
+> 1. **Neither project ships CMake.** The Qt bindings are qmake `.pro` files only, and there
+>    is no `CMakeLists.txt` anywhere in either tree. Integrating them means writing our own —
+>    which is straightforward, because `ScintillaEditBase.pro` is an explicit list of 36
+>    sources, two include paths and two defines (`SCINTILLA_QT=1`, `MAKING_LIBRARY=1`).
+>
+> 2. **On Qt 6, `ScintillaEditBase` requires the `Qt5Compat` module.** `PlatQt.cpp` and
+>    `ScintillaQt.cpp` use `QTextCodec` in more than ten places, and `.pro` carries
+>    `equals(QT_MAJOR_VERSION, 6): QT += core5compat`. **Qt5Compat is LGPLv3** (its bundled
+>    text codecs are BSD-2), so D3's dynamic-linking requirement already covers it — but it is
+>    a Qt module dependency the brief never listed, and it must ship with the app.
+>
+> 3. **Scintilla needs C++17** (`CONFIG += c++1z`), while `core/` is deliberately held to
+>    C++11 to stay linkable from the `stdcpp14` MFC project. These are separate CMake targets
+>    so both standards coexist; worth knowing before someone tries to unify them.
+>
+> **Sourcing decision still open — vendor vs fetch.** Committing both trees adds ~4 MB of
+> third-party source to a repo D8 already calls too big. `FetchContent` with a pinned tag
+> gives a reproducible build with no repo growth, and matches the Phase 0 plan to replace
+> `include/` and `lib/` blobs with a manifest. Recommend fetch; decide before writing the
+> CMake.
+
 **D3. Qt under LGPLv3, dynamically linked. VinaText stays MIT.**
 Compliance checklist:
 - Link Qt **dynamically** (`windeployqt` / `macdeployqt`). Never static — static linking can
