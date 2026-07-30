@@ -97,6 +97,18 @@ namespace StringHelper
 class STDStringHelper : public Core::CStringUtil
 {
 public:
+	// REQUIRED - do not remove.
+	//
+	// to_lower is the one name declared on both sides of this split: the narrow
+	// to_lower(const std::string&) stayed in Core::CStringUtil, the wide
+	// to_lower(const std::wstring&) had to stay here because it uses Win32 NLS.
+	// C++ member-name hiding means the derived declaration hides the ENTIRE base
+	// overload set for that name, so without this using-declaration
+	// STDStringHelper::to_lower(std::string) stops resolving - silently, because
+	// nothing calls it today. This restores the overload set the class had before
+	// the split.
+	using Core::CStringUtil::to_lower;
+
 	// MSVC-only CRT extensions (_vscwprintf / _vsnwprintf_s / _vscprintf /
 	// _vsnprintf_s). Porting this means rewriting it on vsnprintf/vswprintf, which
 	// shifts printf edge-case behaviour - a separate change.
