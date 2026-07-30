@@ -32,7 +32,6 @@
 
 #include <afxcontrolbars.h>     // MFC support for ribbons and control bars
 #include <afxtempl.h> //MFC Template support
-#include <afxmt.h> //MFC Multi-threading support
 #include <shlobj.h> //IShellFolder support
 #include <uxtheme.h> //XP themes support
 #include <atlcom.h>
@@ -49,8 +48,6 @@
 #include <math.h>
 #include <fstream>
 #include <comdef.h>
-#include <winperf.h>
-#include <TlHelp32.h>
 #include <sstream>
 #include <iomanip>
 #include <regex>
@@ -71,8 +68,6 @@
 #include <ctime>
 #include <queue>
 #include <stack>
-#include "objbase.h"
-#include <Iphlpapi.h>
 #include <Assert.h>
 #include <stdexcept>
 #include <boost/algorithm/string.hpp>
@@ -81,12 +76,10 @@
 #include <stdlib.h>
 #include <shlwapi.h>
 #include <mutex>
-#include <gdiplus.h>
 #pragma comment(lib, "gdiplus.lib")
 #pragma comment(lib, "iphlpapi.lib")
 
 // Windows headers
-#include <WindowsX.h>
 
 // VinaText definitions...
 #include "EnumDef.h"

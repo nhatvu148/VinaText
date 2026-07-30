@@ -9,6 +9,8 @@
 #pragma once
 #endif // _MSC_VER > 1000
 
+#include <gdiplus.h>		// Gdiplus (gdiplus.lib)
+
 using namespace Gdiplus;
 
 class CGifHandler : public Image

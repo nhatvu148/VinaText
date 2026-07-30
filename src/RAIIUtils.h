@@ -8,6 +8,8 @@
 
 #pragma once
 
+
+#include <afxmt.h>		// CCriticalSection / CSingleLock
 #ifndef _RAII_IDIOM_H
 #define _RAII_IDIOM_H
 

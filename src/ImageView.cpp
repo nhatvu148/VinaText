@@ -7,6 +7,7 @@
 #*******************************************************************************/
 
 #include "stdafx.h"
+#include <gdiplus.h>		// Gdiplus (gdiplus.lib)
 #include "MainFrm.h"
 #include "ImageDoc.h"
 #include "ImageView.h"

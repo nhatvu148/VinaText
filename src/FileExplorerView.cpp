@@ -7,6 +7,7 @@
 #*******************************************************************************/
 
 #include "stdafx.h"
+#include <objbase.h>		// CoInitialize / CoCreateInstance
 #include "VinaTextApp.h"
 #include "MainFrm.h"
 #include "FileExplorerDoc.h"

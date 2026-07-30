@@ -7,6 +7,7 @@
 #*******************************************************************************/
 
 #include "stdafx.h"
+#include <Iphlpapi.h>		// GetAdaptersInfo / MIB_IFTABLE
 #include "SystemInfo.h"  
 #include "float.h"  
 #include "winperf.h"  
