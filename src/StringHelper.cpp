@@ -7,6 +7,7 @@
 #*******************************************************************************/
 
 #include "stdafx.h"
+#include <wininet.h>		// INTERNET_SCHEME / HINTERNET
 #include "StringHelper.h"
 #include "AppSettings.h"
 #include "AppUtil.h"

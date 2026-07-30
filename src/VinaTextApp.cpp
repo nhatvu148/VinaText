@@ -7,6 +7,7 @@
 #*******************************************************************************/
 
 #include "stdafx.h"
+#include <afxole.h>		// AfxOleInit
 #include "afxwinappex.h"
 #include "afxdialogex.h"
 

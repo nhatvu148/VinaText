@@ -26,9 +26,6 @@
 #include <afxext.h>         // MFC extensions
 #include <afxdisp.h>        // MFC Automation classes
 
-#ifndef _AFX_NO_OLE_SUPPORT
-#include <afxdtctl.h>           // MFC support for Internet Explorer 4 Common Controls
-#endif
 #ifndef _AFX_NO_AFXCMN_SUPPORT
 #include <afxcmn.h>             // MFC support for Windows Common Controls
 #endif // _AFX_NO_AFXCMN_SUPPORT
@@ -36,14 +33,11 @@
 #include <afxcontrolbars.h>     // MFC support for ribbons and control bars
 #include <afxtempl.h> //MFC Template support
 #include <afxmt.h> //MFC Multi-threading support
-#include <afxole.h> //MFC OLE support
 #include <shlobj.h> //IShellFolder support
-#include <lm.h> //WNet support
 #include <uxtheme.h> //XP themes support
 #include <atlcom.h>
 #include <atlcoll.h>
 #include <atlbase.h>
-#include <atlhost.h>
 #include <afxres.h>
 #include <map>
 #include <vector>
@@ -86,7 +80,6 @@
 #include <inttypes.h>
 #include <stdlib.h>
 #include <shlwapi.h>
-#include <wininet.h>
 #include <mutex>
 #include <gdiplus.h>
 #pragma comment(lib, "gdiplus.lib")

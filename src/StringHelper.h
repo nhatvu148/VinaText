@@ -8,6 +8,8 @@
 
 #pragma once
 
+
+#include <wininet.h>		// INTERNET_SCHEME / HINTERNET
 #include "StringUtil.h"		// core/
 
 //////////////////////////////////
