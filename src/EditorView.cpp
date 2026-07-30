@@ -26,7 +26,6 @@
 #include "AppSettings.h"
 #include "TemporarySettings.h"
 #include "SearchEngine.h"
-#include "DirectoryNotifier.h"
 #include "Debugger.h"
 #include "Compiler.h"
 #include "TextFormatConverter.h"
