@@ -194,6 +194,38 @@ jobs:
         shell: cmd
         run: msbuild VinaText.sln /p:Configuration=Release /p:Platform=x64 /m /v:minimal /nologo
 
+      # The PostBuildEvent xcopies Packages/ next to the executable. Nothing else
+      # checks it, and getting it wrong means the app starts and then cannot find
+      # any of its data - the failure that went unnoticed through PRs #4-#17
+      # because CI compiles the MFC app but never runs it.
+      - name: Verify Packages/ was deployed next to the exe
+        shell: pwsh
+        run: |
+          $out = "bin/x64/Release/Packages"
+          $required = @(
+            "data-packages/languages.json",
+            "data-packages/theme-light.json",
+            "data-packages/theme-dark.json",
+            "data-packages/syntax-highlight-file-extension.dat",
+            "language-packages/cpp-data.ee-package"
+          )
+          $missing = @()
+          foreach ($f in $required) {
+            if (-not (Test-Path "$out/$f")) { $missing += $f }
+          }
+          $count = (Get-ChildItem -Recurse -File $out -ErrorAction SilentlyContinue).Count
+          Write-Host "$out contains $count files"
+          if ($missing.Count -gt 0) {
+            Write-Host "MISSING from the output directory:"
+            $missing | ForEach-Object { Write-Host "  $_" }
+            throw "PostBuildEvent did not deploy Packages/"
+          }
+          # Source and deployed copy must agree, or the copy is stale.
+          $a = (Get-FileHash "Packages/data-packages/languages.json").Hash
+          $b = (Get-FileHash "$out/data-packages/languages.json").Hash
+          if ($a -ne $b) { throw "deployed languages.json differs from Packages/" }
+          Write-Host "Packages/ deployed and matching source"
+
       - name: Upload build output
         if: success()
         uses: actions/upload-artifact@v4

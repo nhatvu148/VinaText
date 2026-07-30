@@ -25,6 +25,7 @@ import ast
 import json
 import os
 import re
+import subprocess
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -251,43 +252,47 @@ def verify(languages_doc, themes, light, dark):
 
 
 def check_deployed_copies():
-    """The JSON is deployed by hand-copying, so the copies drift.
+    """Packages/ is the single source; the build copies it next to the executable.
 
-    Packages/data-packages is the source of truth; the app loads from
-    bin/x64/<config>/Packages/data-packages, which exists per configuration and
-    is updated by remembering to copy. That failed the first time it was tested:
-    adding editorBackground updated the source and left both deployed copies a
-    palette entry short.
+    This used to compare Packages/data-packages against hand-maintained copies
+    under bin/x64/<config>/Packages. Those copies are gone: src/VinaText.vcxproj
+    now has a PostBuildEvent that xcopies Packages/ into $(OutDir), so there is
+    one source and no copy to drift.
 
-    Nothing else catches this. The C++ tests and the checks above all read the
-    source copy, so a stale deployed copy is invisible to them and shows up only
-    as wrong colours at runtime. Until Phase 0's CMake copies Packages/ to the
-    output directory, this comparison is the guard.
+    What remains worth checking is that the source tree still holds the files the
+    application loads by name, because a rename or a deletion here is silent until
+    something fails to find its data at runtime.
     """
     problems = []
-    src_dir = DATA_DIR
-    for config in ("Release", "Debug"):
-        dest_dir = os.path.join(ROOT, "bin", "x64", config, "Packages", "data-packages")
-        if not os.path.isdir(dest_dir):
-            continue
-        for fname in sorted(os.listdir(src_dir)):
-            if not fname.endswith(".json"):
-                continue
-            dest = os.path.join(dest_dir, fname)
-            if not os.path.exists(dest):
-                problems.append("bin/x64/%s is missing %s" % (config, fname))
-                continue
-            with open(os.path.join(src_dir, fname), "rb") as f:
-                a = f.read()
-            with open(dest, "rb") as f:
-                b = f.read()
-            if a != b:
-                problems.append(
-                    "bin/x64/%s/Packages/data-packages/%s has drifted from "
-                    "Packages/data-packages/%s - copy the source file over it"
-                    % (config, fname, fname))
+    required = ["data-packages/languages.json",
+                "data-packages/theme-light.json",
+                "data-packages/theme-dark.json",
+                "data-packages/syntax-highlight-file-extension.dat",
+                "data-packages/all-file-extension.dat",
+                "data-packages/file-format-description.dat"]
+    pkg = os.path.join(ROOT, "Packages")
+    for rel in required:
+        if not os.path.exists(os.path.join(pkg, rel)):
+            problems.append("Packages/%s is missing - the app loads it by name" % rel)
+
+    # The old bin/ copies must not be COMMITTED again, or the drift returns. Test
+    # what git tracks, not what is on disk: after a build the output directory
+    # legitimately contains this data - that is the point of the PostBuildEvent.
+    try:
+        tracked = subprocess.run(
+            ["git", "ls-files", "bin/x64/*/Packages/*"],
+            cwd=ROOT, capture_output=True, text=True, check=True).stdout.split()
+    except (OSError, subprocess.CalledProcessError):
+        tracked = []                      # not a git checkout; nothing to assert
+    if tracked:
+        problems.append(
+            "%d files under bin/x64/*/Packages are committed - that tree is a build "
+            "output now, written by the PostBuildEvent. Untrack them: %s%s"
+            % (len(tracked), ", ".join(tracked[:3]), " ..." if len(tracked) > 3 else ""))
+
     if not problems:
-        print("deployed copies: bin/x64/{Release,Debug} match Packages/data-packages")
+        print("Packages/: %d files, single source, deployed by the build"
+              % sum(len(f) for _, _, f in os.walk(pkg)))
     return problems
 
 

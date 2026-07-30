@@ -484,6 +484,33 @@ so it needs `QFile`/`QString` equivalents before `Hpslib` can go.
 
 ---
 
+## 6b. `Packages/` consolidation — what was reconciled
+
+`Packages/` was duplicated under `bin/x64/Release/` and `bin/x64/Debug/`, maintained by
+hand-copying. Both copies are now build outputs, written by a `PostBuildEvent` in
+`src/VinaText.vcxproj` from a single source at the repository root.
+
+The two copies had **diverged in exactly two of 61 files** (`diff -rq` over the whole tree,
+not a sampled or heuristic comparison). **`Release` was taken as canonical** because it is the
+shipping configuration. Recorded here rather than only in a commit message, because a dropped
+edit that exists only in git history is the same silent-drift problem the consolidation was
+meant to end.
+
+| File | `Release` — kept | `Debug` — discarded |
+|---|---|---|
+| `extension-packages/user-extensions.dat` | CRLF + CR line endings | LF, plus one extra blank line at 41 |
+| `language-packages/html-data.ee-package` | `- Please change to your **target web** browser to view HTML file (CHROME_BROWSER, FIREFOX_BROWSER, EDGE_BROWSER, DEFAULT_BROWSER)` | `- Please change to your **default** browser to view HTML file (…)` |
+
+Neither affects behaviour: the first is whitespace, the second is a line of guidance text in a
+config file's comment header. On the second, `Release`'s wording is also the better of the two
+— the sentence lists four browser options including `DEFAULT_BROWSER`, so "target web browser"
+describes the choice and "default browser" describes only one of the four.
+
+If the `Debug` wording was the intentional later edit, restoring it is a one-line change to
+`Packages/language-packages/html-data.ee-package`.
+
+---
+
 ## 7. How to reproduce these numbers
 
 ```bash
