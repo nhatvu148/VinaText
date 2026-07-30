@@ -109,6 +109,7 @@ but because the PCH is. **Breaking this header gates everything else.**
 > | `UXReaderDocumentPage.cpp` | `Gdiplus::` | yes |
 > | `UXReaderDocumentPane.cpp` | `GET_X_LPARAM` | yes |
 > | `UXReaderMainWindow.cpp` | `GET_X_LPARAM` / `GET_Y_LPARAM` | **no — absent from the vcxproj** |
+> | `UXReaderDocument.cpp` | `PathRemoveExtensionW` / `PathStripPathW` (`shlwapi.h`) | yes |
 > Removing `gdiplus.h` and `WindowsX.h` from the PCH left the build green, so the
 > chain still supplies them today. **It is a latent dependency on MFC's own internal includes,
 > and a future toolset could break it.** If that ever happens the fix is a small vendored-code
