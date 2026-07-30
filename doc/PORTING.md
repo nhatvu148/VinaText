@@ -19,6 +19,27 @@
 | **delete** | 35 | 110 | 59 | 11,329 | No Qt counterpart needed — framework scaffolding, custom controls Qt ships natively, or Windows-only ActiveX/COM. |
 | **Total** | **137** | **2,292** | **882** | **77,092** | |
 
+### The 137 is a frozen baseline, not a live count
+
+Every figure in this document is the **2026-07-26 measurement** and is deliberately not
+re-run as work lands, so that §4's estimates stay comparable against the ground they were
+made on. Files that have since left `src/` are annotated **→ `core/`** in the tables below
+and listed here:
+
+| moved | to | PR | rows annotated |
+|---|---|---|---|
+| `LexerParser.{h,cpp}` | `core/Tokenizer.{h,cpp}` | #25 | §3, §5, §6c |
+
+**`src/*.cpp` is 124 today, not 137** — §2's thirteen dead files account for the rest. Re-run
+§7's commands for a current count; do not read one off these tables. The first draft of this
+very paragraph said "136", by subtracting 1 from the frozen 137 instead of counting, which is
+the mistake the paragraph exists to warn against.
+
+`CString` is **3,145** by §7's `\bCString\b` convention, and reconciles against §2's 3,165
+exactly: −22 for `LexerParser`, +2 for the two `CString(...)` boundary conversions #25 adds at
+the call sites. (Note the word boundary: an unanchored `grep CString` returns 3,946, because it
+also counts `CStringArray`, `CStringList` and `CStringT`.)
+
 ### Reconciling with the brief's 4,138
 
 The table above accounts for 2,292 + 882 = **3,174** `CString` occurrences, not 4,138. The
@@ -158,7 +179,7 @@ class tokens · **std** = `std::` occurrences.
 | `DiffEngine.cpp` | 324 | 20 +12 | 6 | 0 | 0 | Diff algorithm. No Win32. |
 | `FindPathWorker.cpp` | 241 | 16 +10 | 8 | 0 | 6 | Path search worker. Threading moves to platform/. |
 | `AppSettings.cpp` | 414 | 8 +17 | 6 | 0 | 0 | Config already file-based (issue #44). Maps onto QSettings. |
-| `LexerParser.cpp` | 297 | 13 +9 | 14 | 0 | 0 | Language/keyword parsing. Feeds Scintilla lexers. |
+| `LexerParser.cpp` | 297 | 13 +9 | 14 | 0 | 0 | **→ `core/Tokenizer` (#25).** Not language parsing — a delimiter tokenizer; 7 of 10 methods had no caller. See §6c correction 3. |
 | `UserExtension.cpp` | 170 | 12 +6 | 2 | 2 | 0 | User-defined tool commands. Decouple from EditorView/EditorDoc first. |
 | `TemplateCreator.cpp` | 145 | 7 +2 | 2 | 1 | 0 | File-template generation. |
 | `RecentCloseFileManager.cpp` | 61 | 4 +4 | 2 | 0 | 1 | MRU list. |
@@ -389,7 +410,7 @@ because nothing calls it. Each split needs a `using Base::name;` for every share
 | `RecentCloseFileManager.cpp` | 8 | 61 | MRU list. |
 | `TemplateCreator.cpp` | 9 | 145 | File-template generation. |
 | `UserExtension.cpp` | 18 | 170 | User-defined tool commands. Decouple from EditorView/EditorDoc first. |
-| `LexerParser.cpp` | 22 | 297 | Language/keyword parsing. Feeds Scintilla lexers. |
+| `LexerParser.cpp` | 22 | 297 | **→ `core/Tokenizer` (#25).** Delimiter tokenizer, not language parsing. See §6c correction 3. |
 | `AppSettings.cpp` | 25 | 414 | Config already file-based (issue #44). Maps onto QSettings. |
 | `FindPathWorker.cpp` | 26 | 241 | Path search worker. Threading moves to platform/. |
 
@@ -561,7 +582,7 @@ first published version of this table said so wrongly. Both corrections are belo
 | `StringHelper` | 6 | 30 | 0 | 478 |
 | `FindReplaceTextWorker` | 3 | 15 | 62 | 362 |
 | `DiffEngine` | **1** | 0 | 32 | 323 |
-| `LexerParser` | **1** | 0 | 22 | 297 |
+| ~~`LexerParser`~~ → `core/` | **1** | 0 | 22 | 297 |
 | `UserExtension` | **1** | 0 | 18 | 171 |
 | `SpellChecker` | **1** | 0 | 2 | 280 |
 
@@ -596,8 +617,49 @@ real growth.
 `UserExtension`, `SpellChecker` — then `FileUtil` and `EditorDatabase`, then `AppSettings` once
 the settings macro is dealt with, then `PathUtil` last.
 
-`LexerParser` is the most valuable of the four: language and keyword parsing that `ui-qt/`
-needs as much as `ui-mfc/`.
+**Correction 3 — "`LexerParser` is the most valuable of the four: language and keyword
+parsing" was wrong, and the file name is why.** It was picked first on that basis. Reading it
+found no lexing and no parsing: `CLexingParser` was a generic character-delimited tokenizer,
+and its only two callers split a `|`-separated file-extension list in
+`CEditorCtrl::GetLexerNameFromExtension`. The 297 LOC were also not 297 LOC of work — of ten
+methods, **three were reachable and seven had no caller in the tree**.
+
+That makes the file name the fourth thing on this list that failed to predict move cost, after
+build membership (§6c note 1), implementation coupling (note 2) and call-site churn (note 3).
+The first three at least measured something. This one was inferred from a nine-character
+identifier, and no measurement stood behind it — a triage row that says what a file *does*
+should be read as a hypothesis until someone opens the file.
+
+**What the move actually cost (#25):** `core/Tokenizer.{h,cpp}`, 3 methods, ~45 lines, and a
+two-line change at each of the two call sites to convert `CString` → `std::wstring` at the
+boundary. `src/LexerParser.{h,cpp}` deleted. The seven unreachable methods were **not** ported,
+because both of the alternatives were bad — they carried two defects that only a port would
+have had to make a decision about:
+
+- `NextInt` / `NextLong` / `NextFloat` / `NextDouble` / `NextBool` parsed via
+  `::sscanf_s((LPCSTR)(LPCTSTR)strReturn, ...)`. Under `_UNICODE` — how VinaText builds —
+  `LPCTSTR` is `const wchar_t*`, so the cast reinterprets a UTF-16 buffer as narrow characters
+  and every ASCII digit is followed by a zero byte, which `sscanf` reads as the terminator.
+  Demonstrated: `NextInt(L"42")` → **4**, `NextDouble(L"3.5")` → **3**.
+- `NextString(bRemoveQuotes = TRUE)` could not terminate. Its post-quote scan
+  (`LexerParser.cpp:93-105`) advanced `m_nPosition` only on a delimiter match, so any other
+  character spun the loop on the same index forever. Demonstrated: 1,000,000 iterations with no
+  progress at position 4 of `"ab"xcd`.
+
+Both were latent — nothing called these methods, so neither ever ran. Porting them would have
+meant either reproducing broken behaviour or silently changing behaviour, and the third option
+is the honest one: **the dead surface is deleted and the reason is recorded**, in
+`core/Tokenizer.h` where the next reader will find it.
+
+Equivalence for the surface that *is* live was established by differential test rather than by
+inspection: `CLexingParser::Next` transcribed verbatim, run against `Core::CTokenizer` over
+every string of length ≤ 6 from an alphabet of letters and delimiters, across six delimiter
+sets — **117,186 pairs, zero mismatches**. `core/tests/TestTokenizer.cpp` then pins the
+edge cases that look like oversights and are deliberately preserved, notably that a leading
+delimiter yields a leading empty token but a trailing one yields no trailing empty token.
+
+`DiffEngine` is now the pick for the next move — but on the strength of its 323 LOC and 32
+`CString`, which is to say: not yet read.
 
 Reproduce, per candidate:
 

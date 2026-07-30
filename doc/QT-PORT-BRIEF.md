@@ -152,7 +152,7 @@ Measured on core-layer candidate headers:
 | `TextFormatConverter.h` | **0** | 0 | 22 |
 | `UnicodeUtils.h` | **0** | 0 | 13 |
 | `Cryptography.h` | 3 | 0 | 0 |
-| `LexerParser.h` | 9 | 0 | 0 |
+| ~~`LexerParser.h`~~ → `core/Tokenizer.h` (#25) | 9 | 0 | 0 |
 | `DiffEngine.h` | 12 | 4 | 0 |
 | `FileUtil.h` | 14 | 0 | 42 |
 | `AppSettings.h` | 17 | 0 | 3 |
@@ -411,7 +411,7 @@ forward (`git rm --cached` + `.gitignore`) once vcpkg lands. Tell contributors t
 | **1. Break `stdafx.h`** | Per-file includes; PCH reduced to std headers only. Mechanical, ~420 files, parallelizable | Windows, unchanged |
 | **2. Extract `core/`** | Move + `CString`→`QString`. Start with the 3 zero-`CString` files, end with `PathUtil` (106 sites) | Windows, unchanged |
 | **3. Qt shell** | `QMainWindow`, `QTabWidget`, 11 × `QDockWidget` | First Linux/macOS **alpha** |
-| **4. Editor** | `ScintillaEditBase` + port `EditorLexerDark` / `EditorLexerLight` / `LexerParser` | Usable **beta** |
+| **4. Editor** | `ScintillaEditBase` + port `EditorLexerDark` / `EditorLexerLight`. ~~`LexerParser`~~ — done early as `core/Tokenizer` (#25); it was a delimiter tokenizer, not a lexer | Usable **beta** |
 | **5. Dialogs + platform** | ~40 `*Dlg` → `.ui`; `platform/` impls; viewers | Feature parity |
 | **6. Cutover** | Flip Windows to Qt, delete `ui-mfc/`, unify installers | Qt on all three |
 

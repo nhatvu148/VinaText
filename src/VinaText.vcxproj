@@ -400,7 +400,6 @@
     <ClInclude Include="EditorView.h" />
     <ClInclude Include="AppUtil.h" />
     <ClInclude Include="VinaTextProgressBar.h" />
-    <ClInclude Include="LexerParser.h" />
     <ClInclude Include="MainFrm.h" />
     <ClInclude Include="MultiThreadWorker.h" />
     <ClInclude Include="ReplaceDlg.h" />
@@ -417,6 +416,7 @@
     <ClInclude Include="..\core\TextTransform.h" />
     <ClInclude Include="..\core\LanguageData.h" />
     <ClInclude Include="..\core\StringUtil.h" />
+    <ClInclude Include="..\core\Tokenizer.h" />
     <ClInclude Include="EditorLanguageData.h" />
     <ClInclude Include="StringHelper.h" />
     <ClInclude Include="targetver.h" />
@@ -432,6 +432,9 @@
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
     <ClCompile Include="..\core\LanguageData.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\core\Tokenizer.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
     <ClCompile Include="EditorLanguageData.cpp" />
@@ -601,7 +604,6 @@
     <ClCompile Include="EditorView.cpp" />
     <ClCompile Include="AppUtil.cpp" />
     <ClCompile Include="VinaTextProgressBar.cpp" />
-    <ClCompile Include="LexerParser.cpp" />
     <ClCompile Include="MainFrm.cpp" />
     <ClCompile Include="MultiThreadWorker.cpp" />
     <ClCompile Include="ReplaceDlg.cpp" />
