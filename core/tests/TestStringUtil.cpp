@@ -21,6 +21,7 @@
 
 #include <iostream>
 #include <string>
+#include <vector>
 
 namespace
 {
@@ -114,6 +115,32 @@ int main()
 		std::string u = "xxyyhelloyyxx";
 		SU::TrimLeadingAndTrailing(u, std::string("xy"));
 		CheckEqual(u, "hello", "TrimLeadingAndTrailing does both");
+	}
+
+	// --- Split, including the quirk that must not be "fixed" ---
+	{
+		const std::vector<std::string> one = SU::Split("a b c", " ");
+		Check(one.size() == 3 && one[0] == "a" && one[1] == "b" && one[2] == "c",
+			"single-character delimiter splits cleanly");
+
+		// A multi-character delimiter advances by one char, so every token after the
+		// first keeps the delimiter's tail. CWebHandler::ResultParser relies on this -
+		// see the comment on Split. Pinned here so a well-meaning correction fails
+		// loudly instead of silently breaking the translate feature.
+		const std::vector<std::string> two = SU::Split("x[\"alpha[\"beta", "[\"");
+		Check(two.size() == 3, "multi-char delimiter yields 3 tokens");
+		if (two.size() == 3)
+		{
+			CheckEqual(two[0], "x", "multi-char: first token is clean");
+			CheckEqual(two[1], "\"alpha", "multi-char: token keeps the stray quote (INTENTIONAL)");
+			CheckEqual(two[2], "\"beta", "multi-char: last token keeps the stray quote (INTENTIONAL)");
+		}
+
+		const std::vector<std::string> none = SU::Split("abc", ",");
+		Check(none.size() == 1 && none[0] == "abc", "no delimiter yields the whole string");
+
+		const std::vector<std::wstring> wide = SU::Split(std::wstring(L"a;b"), std::wstring(L";"));
+		Check(wide.size() == 2 && wide[0] == L"a" && wide[1] == L"b", "wide Split");
 	}
 
 	std::cout << "\n" << (g_Checks - g_Failures) << "/" << g_Checks << " checks passed\n";

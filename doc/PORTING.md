@@ -329,20 +329,48 @@ be green on every one of these PRs or the signal is worthless.
 | `StringHelper.cpp` | Wave 1 | Genuine `core/` candidate, **blocked**: uses `AppSettingMgr.m_nPageAlignmentWidth`, plus `TCHAR`/`_T()` |
 | `TextFormatConverter.cpp` | Wave 1 | Genuine `core/` candidate, **blocked**: needs `StringHelper::trim` and `AppUtils::SplitterStdString` |
 
-**So Wave 1 is not a wave.** The real cheapest start, in order:
+**So Wave 1 is not a wave.** Progress since:
 
-1. **`StringHelper.cpp`** (477 LOC) — parameterise the single `AppSettingMgr` lookup so the
-   caller passes the page width, then move. This unblocks the next item.
-2. **`TextFormatConverter.cpp`** (563 LOC) — follows `StringHelper`; also needs
-   `AppUtils::SplitterStdString`, a generic helper that belongs in `core/` anyway and is part
-   of the `AppUtil` split already listed in §5.
+1. ✅ **`StringHelper.cpp`** — *split*, not moved. The portable majority is now
+   `Core::CStringUtil` in `core/StringUtil.h`; `STDStringHelper` derives from it so no call
+   site changed. Four members stayed behind: `Format` (MSVC `_vscwprintf`),
+   `ExpandEnvironmentStrings` (Win32, unused), `to_lower(std::wstring)` (Win32
+   `LCMapStringEx`), `find_caseinsensitive` (MSVC `_wcsnicmp`).
+   `AppUtils::SplitterStdString` / `SplitterWStdString` also folded in as
+   `Core::CStringUtil::Split`, with the originals kept as forwarders.
+2. ⛔ **`TextFormatConverter.cpp`** — **also needs splitting, not moving.** A trial move
+   compiled off-Windows and turned up four dependencies no grep had shown:
+
+   | Site | Dependency |
+   |---|---|
+   | `base64_decode`, 1 line | `LOG_OUTPUT_MESSAGE_COLOR(_T(...), BasicColors::orange)` — logs into a dock pane. **UI.** |
+   | `sha256_hash`, 1 line | `wsprintf(..., TEXT("%02x"), ...)` — Win32 |
+   | 4 sites | `variadic_string_format`, a free template still in `src/StringHelper.h` |
+   | header | missing `<sstream>`, previously supplied by `stdafx.h` |
+
+   The first is the real blocker: `core/` cannot log into the UI. Either the function
+   returns an error for the caller to report, or the logging moves out. Both change
+   behaviour on the failure path, so it wants its own change — not a silent drop of a
+   user-visible error message.
 
 Everything else nominally in `core/` carries `CString` and belongs in Wave 2 or 3.
 
-**Lesson for the remaining buckets.** Before moving any file, check three things the counts do
-not capture: is it in `src/VinaText.vcxproj` at all; what does its `#include` list actually
-drag in; and do its public signatures mention MFC types. All three failures above would have
-been caught by that check, and it costs about a minute per file.
+**Lesson for the remaining buckets — the check has four steps, not three.** Before moving any
+file: is it in `src/VinaText.vcxproj` at all; what does its `#include` list drag in; do its
+public signatures mention MFC types; **and does it actually compile off Windows?**
+
+The fourth step is the one that earns its keep. A token grep for
+`CString|TCHAR|DWORD|INTERNET` cleared `StringHelper`'s extracted block, and the compiler
+then rejected it for `LCMapStringEx`, `_wcsnicmp` and a missing `<memory>`. The same grep
+cleared `TextFormatConverter`, and the compiler found four more. **Neither `LCMapStringEx` nor
+`wsprintf` nor a missing include matches any pattern you would think to write.** Every
+`core/` candidate gets a trial compile before anyone estimates it.
+
+**And one hazard created by the split-with-inheritance pattern itself:** any name declared on
+both sides of the split is hidden by C++ member-name lookup. `to_lower` hit this — the base
+overload silently stopped resolving, and neither the Windows build nor the tests noticed
+because nothing calls it. Each split needs a `using Base::name;` for every shared name.
+`AppUtil`, `RAIIUtils` and `GuiUtils` in §5 are queued for the same treatment.
 
 ### Wave 2 — light migration (1–30 sites)
 

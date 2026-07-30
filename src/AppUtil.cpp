@@ -24,7 +24,8 @@
 #include "AppSettings.h"
 #include "TemporarySettings.h"
 #include "tinyXml\tinyxml.h"
-#include "StringHelper.h"        
+#include "StringHelper.h"
+#include "StringUtil.h"		// core/        
 #include <imm.h>
 #include "afxtaskdialog.h"
 
@@ -915,30 +916,18 @@ CString AppUtils::GetFileFormatDescription(const CString & strFileExt)
 
 std::vector<std::string> AppUtils::SplitterStdString(const std::string & str, const std::string & delimiter)
 {
-	std::vector<std::string> strings;
-	std::string::size_type pos = 0;
-	std::string::size_type prev = 0;
-	while ((pos = str.find(delimiter, prev)) != std::string::npos)
-	{
-		strings.push_back(str.substr(prev, pos - prev));
-		prev = pos + 1;
-	}
-	strings.push_back(str.substr(prev));
-	return strings;
+	// Single implementation now lives in core/StringUtil.h. Kept as a forwarder so
+	// the existing call sites are untouched. Note the one-character advance quirk
+	// documented there - CWebHandler::ResultParser depends on it.
+	return Core::CStringUtil::Split(str, delimiter);
 }
 
 std::vector<std::wstring> AppUtils::SplitterWStdString(const std::wstring & str, const std::wstring & delimiter)
 {
-	std::vector<std::wstring> strings;
-	std::wstring::size_type pos = 0;
-	std::wstring::size_type prev = 0;
-	while ((pos = str.find(delimiter, prev)) != std::wstring::npos)
-	{
-		strings.push_back(str.substr(prev, pos - prev));
-		prev = pos + 1;
-	}
-	strings.push_back(str.substr(prev));
-	return strings;
+	// Single implementation now lives in core/StringUtil.h. Kept as a forwarder so
+	// the existing call sites are untouched. Note the one-character advance quirk
+	// documented there - CWebHandler::ResultParser depends on it.
+	return Core::CStringUtil::Split(str, delimiter);
 }
 
 CFrameWnd* AppUtils::GetActiveFrame()
