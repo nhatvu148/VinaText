@@ -64,6 +64,7 @@
 #include <codecvt>
 #include <string>
 #include <array>
+#include <io.h>		// _open_osfhandle - see ProcessRedirect
 #include <iostream>
 #include <cctype>
 #include <memory>
