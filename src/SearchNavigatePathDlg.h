@@ -11,7 +11,6 @@
 
 #include <afxdtctl.h>		// CDateTimeCtrl
 #include "DialogBase.h"
-#include "afxdtctl.h"
 
 // CSearchNavigatePathDlg dialog
 
