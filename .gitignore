@@ -11,3 +11,4 @@ bin/x64
 # Python bytecode from tools/
 __pycache__/
 *.pyc
+build/
