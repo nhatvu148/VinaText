@@ -7,6 +7,7 @@
 #*******************************************************************************/
 
 #include "stdafx.h"
+#include <shlobj.h>		// IShellFolder
 #include <objbase.h>		// CoInitialize / CoCreateInstance
 #include "GuiUtils.h"
 #include "AppUtil.h"

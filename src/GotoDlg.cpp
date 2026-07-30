@@ -7,6 +7,7 @@
 #*******************************************************************************/
 
 #include "stdafx.h"
+#include <uxtheme.h>		// SetWindowTheme
 #include "Resource.h"
 #include "GotoDlg.h"
 #include "AppUtil.h"

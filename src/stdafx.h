@@ -30,8 +30,6 @@
 #endif // _AFX_NO_AFXCMN_SUPPORT
 
 #include <afxcontrolbars.h>     // MFC support for ribbons and control bars
-#include <shlobj.h> //IShellFolder support
-#include <uxtheme.h> //XP themes support
 #include <atlcom.h>
 #include <atlcoll.h>
 #include <atlbase.h>

@@ -7,6 +7,7 @@
 #*******************************************************************************/
 
 #include "stdafx.h"
+#include <uxtheme.h>		// SetWindowTheme
 #include <afxtempl.h>		// CList
 #include "TreeHelper.h"
 #include <functional>
