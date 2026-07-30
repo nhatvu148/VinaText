@@ -7,6 +7,11 @@ bin/x64/Release/VinaText.exe
 bin/x64/Release/VinaText.pdb
 bin/x64/Debug/VinaText.exe
 bin/x64/Debug/VinaText.pdb
+# NOTE: this ignores the whole tree, and git cannot re-include a path whose
+# parent directory is excluded - so anything genuinely needed under bin/x64 has
+# to be added with `git add -f`. Everything currently tracked there predates this
+# rule. Adding Packages/data-packages/*.json in PR #4 looked like it worked and
+# silently did nothing; tools/extract_language_data.py now checks for that.
 bin/x64
 # Python bytecode from tools/
 __pycache__/

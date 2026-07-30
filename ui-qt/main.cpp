@@ -63,12 +63,6 @@ namespace
 		return static_cast<long>(pEditor->send(iMessage, wParam, lParam));
 	}
 
-	// EDITOR_THEME_BACKGROUND_COLOR::THEME_BACKGROUND_COLOR_MONOKAI from
-	// src/EnumDef.h - RGB(39, 40, 34). Hard-coded here because the theme JSON has
-	// no editor-background entry; the dark palette's "comment_monokai" is what
-	// identifies monokai as the dark default. See the note in ApplyLanguageFor.
-	const sptr_t kEditorBackground = (34 << 16) | (40 << 8) | 39;
-
 	// COLORREF ordering is 0x00BBGGRR, which is what Scintilla expects - the same
 	// convention ui-mfc/ already relies on.
 	sptr_t ToScintillaColour(const Core::SColor& c)
@@ -221,18 +215,28 @@ private:
 		SendScintilla(m_pEditor, SCI_SETKEYWORDS, 0,
 			reinterpret_cast<sptr_t>(pLang->_Keywords.c_str()));
 
-		// The editor background is NOT in the extracted theme JSON - it lives in
-		// EDITOR_THEME_BACKGROUND_COLOR in src/EnumDef.h as an app setting, so #3
-		// never captured it. Without it the widget keeps Qt's white default and a
-		// dark theme paints white-on-white: editorTextColor is #FFFFFF here.
-		//
-		// This mirrors CEditorCtrl::LoadEditorSettings (src/Editor.cpp:135-148):
+		// Mirrors CEditorCtrl::LoadEditorSettings (src/Editor.cpp:135-148):
 		// set STYLE_DEFAULT, broadcast it with SCI_STYLECLEARALL, then apply the
 		// per-style foregrounds on top.
-		Core::SColor defaultFore;
-		m_Theme.ResolveColor("editorTextColor", defaultFore);
+		// Check both. SColor default-constructs to black, so a missing key would
+		// paint black on black - the same class of invisible-text bug this data was
+		// added to fix, and just as hard to attribute. A stale copy of the theme is
+		// the realistic way that happens.
+		Core::SColor defaultFore, background;
+		const bool bHaveFore = m_Theme.ResolveColor("editorTextColor", defaultFore);
+		const bool bHaveBack = m_Theme.ResolveColor("editorBackground", background);
+		if (!bHaveFore || !bHaveBack)
+		{
+			statusBar()->showMessage(
+				tr("Theme is missing %1 - the editor colours will be wrong. Is this an "
+				   "out-of-date copy of theme-dark.json?")
+					.arg(!bHaveFore ? QStringLiteral("editorTextColor")
+									: QStringLiteral("editorBackground")));
+			qWarning("theme: missing %s", !bHaveFore ? "editorTextColor" : "editorBackground");
+			return;
+		}
 		SendScintilla(m_pEditor, SCI_STYLESETFORE, STYLE_DEFAULT, ToScintillaColour(defaultFore));
-		SendScintilla(m_pEditor, SCI_STYLESETBACK, STYLE_DEFAULT, kEditorBackground);
+		SendScintilla(m_pEditor, SCI_STYLESETBACK, STYLE_DEFAULT, ToScintillaColour(background));
 		SendScintilla(m_pEditor, SCI_STYLECLEARALL);
 
 		Core::SColor caret;

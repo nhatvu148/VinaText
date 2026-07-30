@@ -122,7 +122,7 @@ int main(int argc, char** argv)
 		}
 
 		CheckEqual<std::string>(theme.GetName(), strName, strName + ": name");
-		CheckEqual<size_t>(theme.GetPalette().size(), 33, strName + ": palette size");
+		CheckEqual<size_t>(theme.GetPalette().size(), 34, strName + ": palette size");
 
 		// Pin a couple of concrete values. tools/extract_language_data.py --verify is
 		// the authority on JSON-vs-C++ equivalence, but these catch a stray edit to the
@@ -130,6 +130,23 @@ int main(int argc, char** argv)
 		Core::SColor probe;
 		Check(theme.ResolveColor("black", probe) && probe._Red == 0
 			&& probe._Green == 0 && probe._Blue == 0, strName + ": black is #000000");
+		// editorBackground is what the editor paints behind the text. It is not a
+		// per-language style, so the original extraction missed it entirely and the
+		// Qt frontend rendered a dark theme on a white background until it was added.
+		Core::SColor background;
+		Check(theme.ResolveColor("editorBackground", background),
+			strName + ": editorBackground is present");
+		if (strName == "light")
+		{
+			Check(background._Red == 255 && background._Green == 255 && background._Blue == 255,
+				"light: editorBackground is #FFFFFF");
+		}
+		else
+		{
+			Check(background._Red == 39 && background._Green == 40 && background._Blue == 34,
+				"dark: editorBackground is #272822 (monokai)");
+		}
+
 		if (strName == "light")
 		{
 			Check(theme.ResolveColor("comment", probe) && probe._Red == 10
