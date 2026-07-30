@@ -35,7 +35,7 @@ counts, and sets the Phase 2 work order.
   "~101k" figure in the brief comes from; do not attribute it to the `.cpp` alone.
 - `find src -name '*.cpp'` = 193 — includes vendored `uchardet`, `tinyXml`, `pdf/UXReader`.
   **Do not rewrite vendored code.** Use the `src/*.cpp` glob.
-- `src/stdafx.h` is a god-header pulling all of MFC/ATL/Win32/GDI+/Boost into **all 137**
+- `src/stdafx.h` is a god-header pulling all of MFC/ATL/Win32/GDI+ into **all 137**
   `.cpp`. Breaking it gates every other phase. (Four files spell it `StdAfx.h`; a
   case-sensitive grep undercounts to 133. Use `grep -il`.)
 - Code style: see `doc/code_convention.txt` (C++11+, `MyClass`/`MyMethod` upper camel,

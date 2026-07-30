@@ -51,14 +51,33 @@ is made. Don't re-open it.
 ⚠️ Use `src/*.cpp` (137 files) for triage globs, **not** `find src -name '*.cpp'` (193) —
 the latter sweeps in vendored third-party code that must not be rewritten.
 
-**Vendored deps** (`include/`): `boost`, `checksum`, `curl`, `json`, `scintilla`.
+**Vendored deps** (`include/`): ~~`boost`~~, `checksum`, `curl`, `json`, `scintilla`.
+Boost was removed entirely on 2026-07-31 — see the note below.
 
-**Prebuilt binary blobs** (`lib/`, Debug+Release × x64): `boost_python-vc140-mt-1_57`,
-`libboost_iostreams`, `libboost_serialization`, `libboost_wserialization`, `libcurl`.
-→ **Boost 1.57 is from 2014**, vc140, Windows-x64-only. This is the single worst dependency
-problem in the repo.
+**Prebuilt binary blobs** (`lib/`, Debug+Release × x64): ~~`boost_python-vc140-mt-1_57`,
+`libboost_iostreams`, `libboost_serialization`, `libboost_wserialization`~~, `libcurl`.
+→ Boost 1.57 was from 2014, vc140, Windows-x64-only, and the brief called it the single worst
+dependency problem in the repo.
 
-**Licences already tracked** (`license/`): Boost, Curl, Mozilla, PDFium, Scintilla, VinaText.
+> ✅ **RESOLVED, 2026-07-31.** Boost is gone. It turned out to be far less of a dependency
+> than it looked:
+>
+> - **Nothing linked any Boost library.** No `AdditionalDependencies` entry in any of the four
+>   configurations, no `#pragma comment(lib, ...)`, and no MSVC auto-link. The ten `.lib`
+>   files — python, python3, iostreams, regex, serialization, wserialization — were dead
+>   weight. **97 MB, deleted; the Windows linker confirmed it.**
+> - **The real dependency was four header-only components, 20 call sites.** `crc.hpp` and
+>   `uuid/sha1.hpp` became `core/Checksum.h`, proven byte-identical against the published
+>   CRC-32 and FIPS 180-4 vectors. `algorithm/string.hpp` and `algorithm/string/join.hpp`
+>   became `core/TextTransform.h`, which performs the *same* `std::transform` against the
+>   *same* `std::locale()` rather than an approximation.
+> - **`include/boost` deleted: 10,483 files, 119 MB.**
+>
+> Working tree **451 MB → 246 MB**. Phase 0's "Boost 1.57 → vcpkg" item is closed without
+> needing vcpkg at all.
+
+**Licences already tracked** (`license/`): Curl, Mozilla, PDFium, Qt, Scintilla, VinaText.
+(`License-Boost.txt` was removed with the dependency; `License-Qt.txt` added with the Qt frontend.)
 Follow this same pattern when adding Qt.
 
 **Settings: already portable — no registry work needed.** Config lives in a file
@@ -80,7 +99,6 @@ atlcom.h  atlcoll.h  atlbase.h  atlhost.h            <- ATL
 windows.h  shlobj.h  lm.h  uxtheme.h  WindowsX.h  TlHelp32.h
 comdef.h  winperf.h  Iphlpapi.h  shlwapi.h  wininet.h
 gdiplus.h  (+ #pragma comment(lib, "gdiplus.lib"), "iphlpapi.lib")
-boost/algorithm/string.hpp
 EnumDef.h  MacroDef.h
 ```
 
@@ -233,7 +251,8 @@ Compliance checklist:
 - Link Qt **dynamically** (`windeployqt` / `macdeployqt`). Never static — static linking can
   pull the whole app under LGPL unless you also publish relinkable object files.
 - Don't defeat relinking (no signing/packaging that blocks swapping the Qt libs).
-- Add Qt licence text to `license/` (same pattern as Boost/Curl/PDFium/Scintilla).
+- Add Qt licence text to `license/` (same pattern as Curl/PDFium/Scintilla). **Done** —
+  `license/License-Qt.txt`.
 - Add "Uses Qt under LGPLv3" to `AppAboutDlg`, and state the exact Qt version.
 - Offer a link to that Qt version's corresponding source.
 - Publish any patches you make to Qt itself (you won't make any).
@@ -346,7 +365,8 @@ If native Windows look is ever wanted instead, Qt 6.7+ ships `QWindows11Style`
 (`app.setStyle("windows11")`; also available: `windowsvista`, `windows`, `fusion`).
 
 **D8. Do NOT rewrite git history to shrink the 163 MB.** Two forks exist; a rewrite breaks
-every clone and issue link. Stop tracking `include/boost`, `bin/*.dll`, `lib/*.lib` going
+every clone and issue link. ~~Stop tracking `include/boost`~~ — **deleted outright, it was
+unused**. Stop tracking `bin/*.dll`, `lib/*.lib` going
 forward (`git rm --cached` + `.gitignore`) once vcpkg lands. Tell contributors to
 `git clone --depth 1`.
 
@@ -356,7 +376,7 @@ forward (`git rm --cached` + `.gitignore`) once vcpkg lands. Tell contributors t
 
 | Phase | Work | Ships to users |
 |---|---|---|
-| **0. Build** | `.sln` → CMake; Boost 1.57 / curl / PDFium → vcpkg; GH Actions matrix | Windows, unchanged |
+| **0. Build** | `.sln` → CMake; ~~Boost 1.57~~ (removed outright) / curl / PDFium → vcpkg; GH Actions matrix | Windows, unchanged |
 | **1. Break `stdafx.h`** | Per-file includes; PCH reduced to std headers only. Mechanical, ~420 files, parallelizable | Windows, unchanged |
 | **2. Extract `core/`** | Move + `CString`→`QString`. Start with the 3 zero-`CString` files, end with `PathUtil` (106 sites) | Windows, unchanged |
 | **3. Qt shell** | `QMainWindow`, `QTabWidget`, 11 × `QDockWidget` | First Linux/macOS **alpha** |
