@@ -153,7 +153,7 @@ Measured on core-layer candidate headers:
 | `UnicodeUtils.h` | **0** | 0 | 13 |
 | `Cryptography.h` | 3 | 0 | 0 |
 | ~~`LexerParser.h`~~ → `core/Tokenizer.h` (#25) | 9 | 0 | 0 |
-| `DiffEngine.h` | 12 | 4 | 0 | ← algorithm → `core/LineDiff` (#26); HTML renderer stays in `ui-mfc/` |
+| `DiffEngine.h` — algorithm → `core/LineDiff` (#26), HTML renderer stays | 12 | 4 | 0 |
 | `FileUtil.h` | 14 | 0 | 42 |
 | `AppSettings.h` | 17 | 0 | 3 |
 | `PathUtil.h` | **106** | 6 | 5 |
