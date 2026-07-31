@@ -12,12 +12,12 @@
 // MFC, no Win32 and no Qt dependency. The intent is that it links into both
 // frontends.
 //
-// NOT YET WIRED UP. Nothing consumes this class today: it is absent from
-// src/VinaText.vcxproj and src/EditorColor{Light,Dark}.h remain the live source
-// of truth for the MFC build. Switching the frontend over changes what Windows
-// compiles, so it is a separate change - see core/tests/TestLanguageData.cpp,
-// which is what currently exercises this code (built and run by CI on Linux and
-// macOS).
+// Both frontends read this now: src/EditorLanguageData.cpp for the MFC build's
+// metadata and keywords, and ui-qt/EditorWidget.cpp for everything. The colour
+// tables in src/EditorColor{Light,Dark}.h are still the live source of truth for
+// the MFC build's colours, so tools/extract_language_data.py --verify keeps the
+// JSON and the C++ in step. core/tests/ exercises this code on Linux and macOS,
+// where the MFC application cannot be built at all.
 //
 // Deliberately std::string rather than CString or QString - the payload is ASCII
 // lexer configuration, so there is nothing to gain from UTF-16 here, and staying
@@ -40,6 +40,18 @@ namespace Core
 		std::string	_Color;		// palette key, e.g. "comment"
 	};
 
+	// Bold/italic/underline for one Scintilla style. Deliberately NOT part of a
+	// theme: the MFC lexer initialisers apply the same attributes in the light and
+	// the dark build, so this belongs to the language.
+	struct SStyleAttribute
+	{
+		std::string	_Style;				// symbolic name, e.g. "SCE_P_WORD"
+		int			_Value = 0;			// resolved numeric value from SciLexer.h
+		bool		_Bold = false;
+		bool		_Italic = false;
+		bool		_Underline = false;
+	};
+
 	struct SLanguageInfo
 	{
 		std::string	_Id;
@@ -53,10 +65,16 @@ namespace Core
 		// The Lexilla lexer name to pass to CreateLexer. Frequently NOT _Id: the
 		// shipping app lexes .java, .js, .cs and .json with the "cpp" lexer.
 		std::string	_LexerName;
+		// Which theme style table colours this language. Usually _Id, but xml is
+		// coloured from html's table - Scintilla's xml lexer emits the SCE_H_*
+		// family, so xml's own SCE_C_* table is never applied to anything.
+		std::string	_StyleTable;
 		std::string	_CommentLine;
 		std::string	_CommentStart;
 		std::string	_CommentEnd;
 		std::string	_Keywords;
+		// Only the styles that carry an attribute; most languages have none.
+		std::vector<SStyleAttribute> _StyleAttributes;
 	};
 
 	struct SColor

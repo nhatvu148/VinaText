@@ -97,7 +97,7 @@ if(VINATEXT_BUILD_TESTS)
     # No test framework on purpose: these must build anywhere a C++11 compiler
     # exists, with no package manager and no network. Each returns non-zero on
     # failure, which is all ctest needs.
-    foreach(test_name TestLanguageData TestLanguageLookup TestStringUtil TestChecksum TestTextTransform TestTokenizer TestLineDiff)
+    foreach(test_name TestLanguageData TestLanguageLookup TestStyleAttributes TestStringUtil TestChecksum TestTextTransform TestTokenizer TestLineDiff)
         add_executable(${test_name} core/tests/${test_name}.cpp)
         target_link_libraries(${test_name} PRIVATE vinatext_core)
         if(MSVC)
@@ -113,6 +113,10 @@ if(VINATEXT_BUILD_TESTS)
     # Differential: core/'s lexer choice against a transcription of the MFC one.
     add_test(NAME core.LanguageLookup
              COMMAND TestLanguageLookup "${CMAKE_CURRENT_SOURCE_DIR}/Packages/data-packages")
+    # Differential: bold/italic per style, against a transcription of the 13 MFC
+    # lexer initialisers that carry attribute logic.
+    add_test(NAME core.StyleAttributes
+             COMMAND TestStyleAttributes "${CMAKE_CURRENT_SOURCE_DIR}/Packages/data-packages")
     add_test(NAME core.StringUtil COMMAND TestStringUtil)
     add_test(NAME core.Checksum COMMAND TestChecksum)
     add_test(NAME core.TextTransform COMMAND TestTextTransform)

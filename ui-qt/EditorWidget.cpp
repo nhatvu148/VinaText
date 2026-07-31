@@ -277,7 +277,10 @@ void CEditorWidget::ApplyLanguageStyles(const Core::CEditorTheme& theme)
 	Send(SCI_SETILEXER, 0, reinterpret_cast<sptr_t>(pLexer));
 	Send(SCI_SETKEYWORDS, 0, reinterpret_cast<sptr_t>(m_pLanguage->_Keywords.c_str()));
 
-	const std::vector<Core::SStyleMapping>* pStyles = theme.FindStyles(m_pLanguage->_Id);
+	// _StyleTable, not _Id: xml is coloured from html's table, because that is
+	// the one the shipping app walks for it (doc/PORTING.md 6e).
+	const std::vector<Core::SStyleMapping>* pStyles =
+		theme.FindStyles(m_pLanguage->_StyleTable);
 	if (pStyles != nullptr)
 	{
 		for (const Core::SStyleMapping& style : *pStyles)
@@ -287,6 +290,25 @@ void CEditorWidget::ApplyLanguageStyles(const Core::CEditorTheme& theme)
 			{
 				Send(SCI_STYLESETFORE, style._Value, ToScintillaColour(colour));
 			}
+		}
+	}
+
+	// Weight and slant come from the language, not the theme: the MFC lexer
+	// initialisers apply the same ones in both builds (doc/PORTING.md 6e). This
+	// has to run after SCI_STYLECLEARALL, which resets them.
+	for (const Core::SStyleAttribute& attribute : m_pLanguage->_StyleAttributes)
+	{
+		if (attribute._Bold)
+		{
+			Send(SCI_STYLESETBOLD, attribute._Value, 1);
+		}
+		if (attribute._Italic)
+		{
+			Send(SCI_STYLESETITALIC, attribute._Value, 1);
+		}
+		if (attribute._Underline)
+		{
+			Send(SCI_STYLESETUNDERLINE, attribute._Value, 1);
 		}
 	}
 	Send(SCI_COLOURISE, 0, -1);
