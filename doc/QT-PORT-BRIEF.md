@@ -423,6 +423,24 @@ open/save, lexer + both themes from `core/LanguageData`, find, status bar — **
 docking, no settings UI**. Scope beyond the checklist waits for beta, so interleaving cannot
 degenerate into everything-half-done.
 
+> **Status, 2026-07-31: the checklist is met.** The 319-line spike is now 1,767 lines across
+> nine files in `ui-qt/`, and every item is done: tabs (`QTabWidget`, close/modified/duplicate
+> handling), open/save (encoding and line endings preserved), lexer + both themes from
+> `core/LanguageData`, find (bar, not dialog — `src/FindDlg.cpp` is 899 lines of `.rc` and is
+> Phase 5), status bar (position, language, encoding, EOL).
+>
+> **Nothing beyond it was built, and one thing was deliberately not pulled:** the user
+> extension override in `UserCustomizeData.cpp`, because the shell does not need it yet.
+> That is D9 working as intended.
+>
+> Verified headlessly rather than asserted: `--selftest` runs 117 checks over six files whose
+> encodings and line endings are the point (CRLF+BOM, UTF-16, Latin-1, no trailing newline),
+> and every document is saved to a copy that must be **byte-identical** to the original.
+> `--screenshot` renders both themes to PNG, which CI uploads on Linux and macOS.
+>
+> The window chrome is still the platform's default — D7's unified QSS theme is not on the
+> alpha checklist, so the editor is themed and the menu bar is not.
+
 **D8. Do NOT rewrite git history to shrink the 163 MB.** Two forks exist; a rewrite breaks
 every clone and issue link. ~~Stop tracking `include/boost`~~ — **deleted outright, it was
 unused**. Stop tracking `bin/*.dll`, `lib/*.lib` going
@@ -438,7 +456,7 @@ forward (`git rm --cached` + `.gitignore`) once vcpkg lands. Tell contributors t
 | **0. Build** | `.sln` → CMake; ~~Boost 1.57~~ (removed outright) / curl / PDFium → vcpkg; GH Actions matrix | Windows, unchanged |
 | **1. Break `stdafx.h`** | Per-file includes; PCH reduced to std headers only. Mechanical, ~420 files, parallelizable | Windows, unchanged |
 | **2. Extract `core/`** | Move + `CString`→`QString`. Start with the 3 zero-`CString` files, end with `PathUtil` (106 sites) | Windows, unchanged |
-| **3. Qt shell** | `QMainWindow`, `QTabWidget`, 11 × `QDockWidget`. **Interleaves with Phase 2 from 2026-07-31 (D9)** — alpha checklist: tabs, open/save, lexer + themes, find, status bar | First Linux/macOS **alpha** |
+| **3. Qt shell** | `QMainWindow`, `QTabWidget`, 9 × `QDockWidget`. **Interleaves with Phase 2 from 2026-07-31 (D9)** — alpha checklist ✅ done: tabs, open/save, lexer + themes, find, status bar. Docks are beta | First Linux/macOS **alpha** |
 | **4. Editor** | `ScintillaEditBase` + port `EditorLexerDark` / `EditorLexerLight`. ~~`LexerParser`~~ — done early as `core/Tokenizer` (#25); it was a delimiter tokenizer, not a lexer | Usable **beta** |
 | **5. Dialogs + platform** | ~40 `*Dlg` → `.ui`; `platform/` impls; viewers | Feature parity |
 | **6. Cutover** | Flip Windows to Qt, delete `ui-mfc/`, unify installers | Qt on all three |

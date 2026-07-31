@@ -1,0 +1,63 @@
+#!/usr/bin/env python3
+"""
+Write the encoding/line-ending fixtures ui-qt/'s --selftest opens.
+
+These exist for one assertion: that opening a file and saving it unmodified
+produces the same bytes. That is not a nicety. src/Textfile.cpp detects encodings
+with uchardet and is a Wave 2 file nobody has pulled yet, so the Qt frontend
+trusts only a byte-order mark and falls back to Latin-1 for bytes that are not
+valid UTF-8. An editor that guesses wrong and then WRITES is the failure a user
+notices after their file is already overwritten.
+
+Generated rather than committed: the interesting part of each file is its exact
+bytes, and a repository is the one place those are most likely to be quietly
+normalised - by an editor, by .gitattributes, by a linter.
+
+Usage:
+    python3 tools/make_selftest_fixtures.py <output-directory>
+"""
+
+import os
+import sys
+
+
+def main():
+    if len(sys.argv) != 2:
+        print(__doc__.strip())
+        return 2
+    out = sys.argv[1]
+    os.makedirs(out, exist_ok=True)
+
+    files = {
+        # CRLF line endings behind a UTF-8 BOM. Both must survive a save.
+        "crlf-bom.cpp": b"\xef\xbb\xbf" + (
+            "// comment\r\n"
+            "int main(int argc, char** argv)\r\n"
+            "{\r\n"
+            "\treturn 0;\r\n"
+            "}\r\n").encode("utf-8"),
+
+        # UTF-16 LE with a BOM, and non-ASCII text - saving this as UTF-8 would
+        # double its size and change every byte.
+        "utf16.py": b"\xff\xfe" + (
+            "# tiếng Việt comment\n"
+            "def main():\n"
+            "    return 'xin chào'\n").encode("utf-16-le"),
+
+        # Not valid UTF-8. The fallback has to be lossless, or these bytes change.
+        "latin1.md": "# Caf\xe9 heading\n\nSome text with \xa9 and \xf1.\n".encode("latin-1"),
+
+        # No trailing newline: the classic off-by-one in a save path.
+        "no-trailing-newline.py": b"def f():\n    return 1",
+    }
+
+    for name, payload in sorted(files.items()):
+        path = os.path.join(out, name)
+        with open(path, "wb") as f:
+            f.write(payload)
+        print("wrote %-28s %5d bytes" % (path, len(payload)))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

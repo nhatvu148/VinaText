@@ -1,10 +1,10 @@
 #*******************************************************************************
 # ui-qt — the Qt frontend.
 #
-# Today this is a Phase 3 SPIKE, not the frontend: one window, one editor, no
-# docks, no tabs, no dialogs. Its job is to prove D2 - that upstream Scintilla's
-# qt/ScintillaEditBase works for this project off Windows - which had never been
-# tested.
+# The Phase 3 alpha shell. It was a spike proving D2 (upstream Scintilla's
+# qt/ScintillaEditBase works off Windows); under D9 it is now the shell, fixed to
+# that decision's checklist: tabs, open/save, lexer + both themes, find, status
+# bar. No dialogs, no docking, no settings UI.
 #
 # D3: Qt MUST be linked dynamically. Never add a static Qt build here.
 #*******************************************************************************
@@ -15,7 +15,16 @@ qt_standard_project_setup()
 
 add_subdirectory(${CMAKE_SOURCE_DIR}/thirdparty ${CMAKE_BINARY_DIR}/thirdparty)
 
-qt_add_executable(vinatext-qt main.cpp)
+qt_add_executable(vinatext-qt
+    main.cpp
+    EditorData.cpp
+    EditorData.h
+    EditorWidget.cpp
+    EditorWidget.h
+    FindBar.cpp
+    FindBar.h
+    MainWindow.cpp
+    MainWindow.h)
 
 target_link_libraries(vinatext-qt PRIVATE
     VinaText::core
@@ -23,11 +32,19 @@ target_link_libraries(vinatext-qt PRIVATE
     Lexilla::lexilla
     Qt6::Widgets)
 
-# The spike runs from the build tree, where the MFC app's
-# PathUtils::GetVinaTextPackagePath() convention does not apply. Point it at the
-# JSON in the source tree; --data overrides.
+# ui-qt/ is new code and is held to the same wall core/ is: a warning here is a
+# mistake, not a legacy artefact. The MFC tree is untouched by this.
+if(MSVC)
+    target_compile_options(vinatext-qt PRIVATE /W4 /WX)
+else()
+    target_compile_options(vinatext-qt PRIVATE -Wall -Wextra -Werror)
+endif()
+
+# Run from the build tree, where the MFC app's PathUtils::GetVinaTextPackagePath()
+# convention does not apply. Point at the JSON in the source tree; --data overrides.
 target_compile_definitions(vinatext-qt PRIVATE
-    VINATEXT_DATA_DIR="${CMAKE_SOURCE_DIR}/Packages/data-packages")
+    VINATEXT_DATA_DIR="${CMAKE_SOURCE_DIR}/Packages/data-packages"
+    VINATEXT_VERSION="${PROJECT_VERSION}")
 
 set_target_properties(vinatext-qt PROPERTIES
     MACOSX_BUNDLE FALSE          # a plain binary is easier to run from a terminal
