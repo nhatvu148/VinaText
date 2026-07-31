@@ -60,6 +60,12 @@ int main(int argc, char* argv[])
 		QStringLiteral("[file...]"));
 	parser.process(app);
 
+	// Every mode that never shows a window belongs in here. A modal box with
+	// nobody to dismiss it does not fail, it HANGS - and under
+	// QT_QPA_PLATFORM=offscreen in CI that is a job that runs until its timeout
+	// with no useful output. Add new headless modes to this line.
+	const bool bHeadless = parser.isSet(selfTestOption) || parser.isSet(screenshotOption);
+
 	CEditorData data;
 	QString strError;
 	if (!data.Load(parser.value(dataOption), strError))
@@ -69,7 +75,7 @@ int main(int argc, char* argv[])
 		// start rather than come up looking broken.
 		qCritical("cannot load editor data from %s: %s",
 			qPrintable(parser.value(dataOption)), qPrintable(strError));
-		if (!parser.isSet(selfTestOption))
+		if (!bHeadless)
 		{
 			QMessageBox::critical(nullptr, QStringLiteral("VinaText"),
 				QStringLiteral("Cannot load editor data from %1:\n%2")

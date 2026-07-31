@@ -173,6 +173,25 @@ jobs:
           ./qtbuild/ui-qt/vinatext-qt --screenshot qtbuild/screenshots \
             core/LanguageData.cpp ui-qt/MainWindow.cpp
 
+      # Both headless modes must FAIL, not block, when the data is missing. A
+      # modal error box with nobody to dismiss it hangs the job until its timeout
+      # and says nothing - so this asserts the exit code and, with the alarm, that
+      # there is an exit code at all. perl rather than timeout(1), which the macOS
+      # runner does not ship.
+      - name: Headless modes fail fast without their data
+        if: steps.probe.outputs.present == 'yes'
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          set -uo pipefail
+          run_capped() { perl -e 'alarm 30; exec @ARGV' -- "$@"; echo $?; }
+          a=$(run_capped ./qtbuild/ui-qt/vinatext-qt --data /nonexistent \
+                --selftest core/LanguageData.cpp | tail -1)
+          b=$(run_capped ./qtbuild/ui-qt/vinatext-qt --data /nonexistent \
+                --screenshot qtbuild core/LanguageData.cpp | tail -1)
+          echo "selftest exit=$a  screenshot exit=$b  (2 = refused to start, 142 = alarm, i.e. hung)"
+          test "$a" = "2" && test "$b" = "2"
+
       - name: Upload the screenshots
         if: steps.probe.outputs.present == 'yes'
         uses: actions/upload-artifact@v4
