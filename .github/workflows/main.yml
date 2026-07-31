@@ -86,11 +86,13 @@ jobs:
         run: ctest --test-dir build --output-on-failure
 
   # ---------------------------------------------------------------------------
-  # The Qt spike. Builds Scintilla + Lexilla from source and asserts, headlessly,
-  # that the lexer actually styles a document - see doc/QT-PORT-BRIEF.md D2.
+  # The Qt alpha shell. Builds Scintilla + Lexilla from source and runs the shell
+  # headlessly through D9's checklist - tabs, open/save, lexer, both themes, find,
+  # status bar - then renders both themes to PNGs and uploads them, so the alpha
+  # can be looked at without building it.
   # ---------------------------------------------------------------------------
   qt-spike:
-    name: Qt spike (${{ matrix.os }})
+    name: Qt alpha shell (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -133,17 +135,71 @@ jobs:
         if: steps.probe.outputs.present == 'yes'
         run: cmake --build qtbuild --parallel
 
-      # "It compiled" is not evidence the editor works. --selftest loads a file,
-      # runs Lexilla, and reads the style bytes back: more than one distinct
-      # style means the lexer genuinely classified the text.
+      # "It compiled" is not evidence the editor edits, and CI cannot click. The
+      # self-test opens real files in tabs, asserts each got a lexer and more than
+      # one distinct style, switches both themes and asserts the colours actually
+      # changed, runs find (including a zero-length regex, which hangs without the
+      # guard in HighlightMatches), reads the status bar back, and saves every
+      # document to a temporary copy that must be BYTE-IDENTICAL to the original.
+      #
+      # The four files are chosen for their encodings and line endings, not their
+      # contents: CRLF+BOM, UTF-16, Latin-1 and a plain LF file with no trailing
+      # newline. An editor that cannot round-trip those corrupts the first file a
+      # user opens with it.
+      - name: Build the encoding fixtures
+        if: steps.probe.outputs.present == 'yes'
+        run: python3 tools/make_selftest_fixtures.py qtbuild/fixtures
+
       - name: Self-test (headless)
         if: steps.probe.outputs.present == 'yes'
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
           set -euo pipefail
-          ./qtbuild/ui-qt/vinatext-qt --selftest tools/extract_language_data.py
-          ./qtbuild/ui-qt/vinatext-qt --selftest core/LanguageData.cpp
+          ./qtbuild/ui-qt/vinatext-qt --selftest \
+            core/LanguageData.cpp tools/extract_language_data.py \
+            qtbuild/fixtures/crlf-bom.cpp qtbuild/fixtures/utf16.py \
+            qtbuild/fixtures/latin1.md qtbuild/fixtures/no-trailing-newline.py
+
+      # A port whose whole point is that it now runs somewhere other than Windows
+      # should be able to show that without asking anyone to build it.
+      - name: Render both themes
+        if: steps.probe.outputs.present == 'yes'
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          set -euo pipefail
+          mkdir -p qtbuild/screenshots
+          ./qtbuild/ui-qt/vinatext-qt --screenshot qtbuild/screenshots \
+            core/LanguageData.cpp ui-qt/MainWindow.cpp
+
+      # Both headless modes must FAIL, not block, when the data is missing. A
+      # modal error box with nobody to dismiss it hangs the job until its timeout
+      # and says nothing - so this asserts the exit code and, with the alarm, that
+      # there is an exit code at all. perl rather than timeout(1), which the macOS
+      # runner does not ship.
+      - name: Headless modes fail fast without their data
+        if: steps.probe.outputs.present == 'yes'
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          set -uo pipefail
+          run_capped() { perl -e 'alarm 30; exec @ARGV' -- "$@"; echo $?; }
+          a=$(run_capped ./qtbuild/ui-qt/vinatext-qt --data /nonexistent \
+                --selftest core/LanguageData.cpp | tail -1)
+          b=$(run_capped ./qtbuild/ui-qt/vinatext-qt --data /nonexistent \
+                --screenshot qtbuild core/LanguageData.cpp | tail -1)
+          echo "selftest exit=$a  screenshot exit=$b  (2 = refused to start, 142 = alarm, i.e. hung)"
+          test "$a" = "2" && test "$b" = "2"
+
+      - name: Upload the screenshots
+        if: steps.probe.outputs.present == 'yes'
+        uses: actions/upload-artifact@v4
+        with:
+          name: vinatext-qt-${{ matrix.os }}
+          path: qtbuild/screenshots/*.png
+          if-no-files-found: error
+          retention-days: 14
 
   # ---------------------------------------------------------------------------
   # The Windows MFC build. This is the regression test that matters: per D5 the
