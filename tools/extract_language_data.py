@@ -214,6 +214,13 @@ def parse_lexer_dispatch():
     for stem, (lexer, lang_id) in sorted(initialisers.items()):
         if lang_id is None:
             continue                        # Init_text_Editor - the plain-text fallback
+        if lang_id in out and out[lang_id]["lexer"] != lexer:
+            # Two initialisers, one language id, two different Lexilla lexers. One
+            # field cannot hold both, and silently keeping either would change how
+            # half of that language's files are highlighted.
+            raise SystemExit("language %r is initialised twice with different lexers "
+                             "(%r and %r); languages.json cannot represent that"
+                             % (lang_id, out[lang_id]["lexer"], lexer))
         out[lang_id] = {"extensions": "", "lexer": lexer}
 
     for index, ext in enumerate(extensions):
@@ -227,10 +234,17 @@ def parse_lexer_dispatch():
         if lang_id is None:
             raise SystemExit("extensions %r dispatch to Init_%s_Editor, which sets no "
                              "language metadata" % (ext, stem))
+        # MERGED, not overwritten. GetLexerNameFromExtension walks every row and
+        # returns on the first token that matches, so two rows reaching one
+        # language means both rows' extensions select it. Overwriting would drop
+        # the first row's extensions, and nothing downstream could tell: --verify
+        # would compare the JSON against the same overwritten mapping and pass.
         if out[lang_id]["extensions"]:
-            notes.append("%s claims two extension rows: %r and %r"
-                         % (lang_id, out[lang_id]["extensions"], ext))
-        out[lang_id]["extensions"] = ext
+            notes.append("%s claims two extension rows, %r and %r - merged, which is "
+                         "what the MFC scan does" % (lang_id, out[lang_id]["extensions"], ext))
+            out[lang_id]["extensions"] += "|" + ext
+        else:
+            out[lang_id]["extensions"] = ext
         if token != lang_id:
             notes.append("%s is written %r in arrLexerNames" % (lang_id, token))
 
@@ -332,12 +346,25 @@ def check_lexer_dispatch(languages_doc):
                                 % lang)
 
         # Re-counted from the raw header with a different expression than
-        # parse_lexer_dispatch() uses.
-        n_ext_rows = len(re.findall(r'_T\("[^"]*"\),\s*//', read(COMMON_DEF_H)))
+        # parse_lexer_dispatch() uses. Counting TOKENS rather than rows is the
+        # point: a row that gets dropped or merged away changes the token count,
+        # while a row count can be matched by a table that lost an extension.
+        raw_array = re.search(r"arrLangExtensions\s*\[\s*\]\s*=\s*\{(.*?)\}\s*;",
+                              read(COMMON_DEF_H), re.S)
+        cpp_tokens = []
+        if raw_array is None:
+            problems.append("cannot find arrLangExtensions[] in EditorCommonDef.h")
+        else:
+            for row in re.findall(r'_T\(\s*"([^"]*)"\s*\)', raw_array.group(1)):
+                cpp_tokens.extend(t for t in row.split("|") if t)
+        json_tokens = [t for e in by_id.values() for t in e.get("extensions", "").split("|") if t]
+        if sorted(cpp_tokens) != sorted(json_tokens):
+            missing = sorted(set(cpp_tokens) - set(json_tokens))
+            extra = sorted(set(json_tokens) - set(cpp_tokens))
+            problems.append("extension tokens differ from the C++: %d in the header, %d in "
+                            "the JSON; missing from the JSON=%s, not in the header=%s"
+                            % (len(cpp_tokens), len(json_tokens), missing, extra))
         n_mapped = sum(1 for e in by_id.values() if e.get("extensions"))
-        if n_ext_rows != n_mapped:
-            problems.append("counted %d commented extension rows in EditorCommonDef.h but "
-                            "%d languages carry extensions" % (n_ext_rows, n_mapped))
     else:
         print("note: the C++ extension table is gone - languages.json is now its only source")
 
