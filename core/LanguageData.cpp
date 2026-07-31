@@ -59,6 +59,31 @@ namespace Core
 			return true;
 		}
 
+		// CString::CompareNoCase is _tcsicmp, which follows the C runtime locale -
+		// and CommandLine.cpp installs the user's via _tsetlocale(LC_ALL, ""). This
+		// is deliberately ASCII-only instead, because every extension in the table
+		// is ASCII: for ASCII input the two agree exactly, and any input where they
+		// could disagree matches no row either way and falls through to plain text.
+		bool EqualsNoCaseAscii(const std::string& strLeft, const std::string& strRight)
+		{
+			if (strLeft.size() != strRight.size())
+			{
+				return false;
+			}
+			for (std::string::size_type i = 0; i < strLeft.size(); ++i)
+			{
+				char a = strLeft[i];
+				char b = strRight[i];
+				if (a >= 'A' && a <= 'Z') { a = static_cast<char>(a - 'A' + 'a'); }
+				if (b >= 'A' && b <= 'Z') { b = static_cast<char>(b - 'A' + 'a'); }
+				if (a != b)
+				{
+					return false;
+				}
+			}
+			return true;
+		}
+
 		bool ParseDocument(const std::string& strJson, picojson::value& value, std::string& strError)
 		{
 			const std::string strParseError = picojson::parse(value, strJson);
@@ -141,6 +166,8 @@ namespace Core
 			}
 			info._Name = ReadString(entry, "name");
 			info._Extension = ReadString(entry, "extension");
+			info._Extensions = ReadString(entry, "extensions");
+			info._LexerName = ReadString(entry, "lexer");
 			info._CommentLine = ReadString(entry, "commentLine");
 			info._CommentStart = ReadString(entry, "commentStart");
 			info._CommentEnd = ReadString(entry, "commentEnd");
@@ -163,6 +190,70 @@ namespace Core
 			}
 		}
 		return nullptr;
+	}
+
+	std::string CLanguageTable::ExtensionOf(const std::string& strFileName)
+	{
+		const std::string::size_type nDot = strFileName.rfind('.');
+		if (nDot == std::string::npos)
+		{
+			return std::string();
+		}
+		return strFileName.substr(nDot + 1);
+	}
+
+	const SLanguageInfo* CLanguageTable::FindByExtension(const std::string& strExtension) const
+	{
+		if (strExtension.empty())
+		{
+			return nullptr;
+		}
+		for (std::vector<SLanguageInfo>::const_iterator it = m_Languages.begin();
+			it != m_Languages.end(); ++it)
+		{
+			const std::string& strList = it->_Extensions;
+			if (strList.empty())
+			{
+				continue;			// selected by file name only, e.g. makefile
+			}
+			// Splits on '|' as CLexingParser did at the MFC call site. An empty
+			// token - from "|py", or from the trailing '|' the user override file
+			// writes - can never match here, because an empty strExtension was
+			// rejected above.
+			std::string::size_type nStart = 0;
+			while (nStart <= strList.size())
+			{
+				std::string::size_type nEnd = strList.find('|', nStart);
+				if (nEnd == std::string::npos)
+				{
+					nEnd = strList.size();
+				}
+				if (EqualsNoCaseAscii(strList.substr(nStart, nEnd - nStart), strExtension))
+				{
+					return &(*it);
+				}
+				nStart = nEnd + 1;
+			}
+		}
+		return nullptr;
+	}
+
+	const SLanguageInfo* CLanguageTable::DetectForFileName(const std::string& strFileName) const
+	{
+		// Both special cases are transcribed from CEditorCtrl::DetectFileLexer,
+		// including its inconsistency: CMakeLists.txt is matched case-sensitively
+		// (operator==) and Makefile case-insensitively (CompareNoCase). Preserved
+		// rather than tidied, so the two frontends agree about "makefile" vs
+		// "MAKEFILE" vs "cmakelists.txt" - all three of which reach this code.
+		if (strFileName == "CMakeLists.txt")
+		{
+			return FindById("cmake");
+		}
+		if (EqualsNoCaseAscii(strFileName, "Makefile"))
+		{
+			return FindById("makefile");
+		}
+		return FindByExtension(ExtensionOf(strFileName));
 	}
 
 	//////////////////////////////////////////////////////////////////////////

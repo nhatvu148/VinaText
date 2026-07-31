@@ -44,7 +44,15 @@ namespace Core
 	{
 		std::string	_Id;
 		std::string	_Name;
+		// A display label, NOT the file-extension mapping - it says "r" for autoit
+		// and "javascript" for javascript. Match on _Extensions instead.
 		std::string	_Extension;
+		// Every file extension that selects this language, '|'-separated and
+		// without dots: "cpp|cxx|h|hh|hpp|hxx|cc".
+		std::string	_Extensions;
+		// The Lexilla lexer name to pass to CreateLexer. Frequently NOT _Id: the
+		// shipping app lexes .java, .js, .cs and .json with the "cpp" lexer.
+		std::string	_LexerName;
 		std::string	_CommentLine;
 		std::string	_CommentStart;
 		std::string	_CommentEnd;
@@ -69,6 +77,28 @@ namespace Core
 		// Returns nullptr when the language is unknown.
 		const SLanguageInfo* FindById(const std::string& strId) const;
 		const std::string& GetPlainTextLabel() const { return m_PlainTextLabel; }
+
+		// Which language a file extension selects - "cpp", not ".cpp", not "a.cpp".
+		// Case-insensitive over ASCII. Returns nullptr for plain text, which is not
+		// a language: it has no metadata, no keywords and no lexer.
+		//
+		// First match wins, in file order, exactly as CEditorCtrl::
+		// GetLexerNameFromExtension walks arrLangExtensions.
+		const SLanguageInfo* FindByExtension(const std::string& strExtension) const;
+
+		// Which language a FILE NAME selects - "main.cpp" or "Makefile", never a
+		// path. Path splitting stays in the frontend: QFileInfo::fileName() on the
+		// Qt side, PathUtils::GetFilenameFromPath on the MFC side. core/ does not
+		// own path syntax yet (PathUtil is the last Phase 2 item), and nothing here
+		// needs it to.
+		//
+		// Transcribes CEditorCtrl::DetectFileLexer, quirks included: two file names
+		// beat any extension, and the two comparisons do not agree about case.
+		const SLanguageInfo* DetectForFileName(const std::string& strFileName) const;
+
+		// The extension of a file name: everything after its last '.', or empty.
+		// "main.tar.gz" -> "gz"; "Makefile" -> ""; ".gitignore" -> "gitignore".
+		static std::string ExtensionOf(const std::string& strFileName);
 
 	private:
 		std::vector<SLanguageInfo>	m_Languages;
