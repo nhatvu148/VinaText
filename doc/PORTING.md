@@ -788,6 +788,10 @@ about since the first draft and what these five corrections keep re-learning.
 `StringHelper`'s remaining split (39), then `PathUtil` (353), then `AppSettings` (783) last.
 `EditorDatabase`, `SpellChecker` and `UserExtension` leave the `core/` list.
 
+**Since 2026-07-31 this order is a demand-driven backlog, not a schedule** — brief §4 D9:
+Phase 3 runs in parallel and pulls these when the Qt frontend needs them. In particular,
+`PathUtil` and `AppSettings` are expected to move **in slices**, not wholesale.
+
 **"Sites" means occurrences, not lines.** `grep -o ... | wc -l` and `grep -c` are not the same
 measurement and differ on real data here: `PathUtils::` is **353 occurrences on 349 lines**,
 because four lines carry two calls each —

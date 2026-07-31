@@ -395,6 +395,34 @@ and it avoids uncanny valley on macOS/Linux.
 If native Windows look is ever wanted instead, Qt 6.7+ ships `QWindows11Style`
 (`app.setStyle("windows11")`; also available: `windowsvista`, `windows`, `fusion`).
 
+**D9. Phases 2 and 3 interleave. Extraction is demand-driven from here on.** (Decided
+2026-07-31, revising the strictly sequential §5 order.) Phase 3 starts immediately around the
+working spike; the remaining `core/` moves happen when — and in the shape that — `ui-qt/`
+actually needs them. Four reasons, all from evidence this port already produced:
+
+1. **Speculative extraction keeps mis-estimating; demand-driven extraction has not.** §6c of
+   PORTING.md carries five corrections, every one an estimate made without a consumer. The
+   moves driven by a real consumer (`LanguageData` for the spike, `Tokenizer`, `LineDiff`)
+   landed clean. A second frontend is the ground truth for what `core/` needs; planning
+   documents keep proving they are not.
+2. **D6's API shapes are only validated by a second consumer.** One frontend (MFC) exercising
+   the `std::wstring` boundaries proves nothing about whether they fit Qt. Finding a wrong
+   shape at Phase 3 was always inevitable; finding it *now* is strictly cheaper than after
+   `PathUtil`'s 353 sites and `AppSettings`' 783 have been committed to that shape.
+3. **The two hardest files get easier, not harder.** `PathUtil` (353) and `AppSettings` (783)
+   moved wholesale are the two riskiest changes in the plan. Driven by demand they split
+   naturally: the slice the Qt shell needs this week, the rest when something needs it. Some
+   of `AppSettings` maps to `QSettings` and may never need to move at all.
+4. **The user is the tester, and feedback needs a surface.** Every week without a clickable
+   alpha is a week of decisions made without the only feedback that matters for an editor.
+
+**What this does NOT change:** the MFC build ships unchanged (its guardrail is untouched —
+`ui-qt/` cannot modify `src/` except via `core/` extractions, which the Windows CI job
+arbitrates). D6 stands. The alpha is gated by a fixed checklist, not by taste: tabs,
+open/save, lexer + both themes from `core/LanguageData`, find, status bar — **no dialogs, no
+docking, no settings UI**. Scope beyond the checklist waits for beta, so interleaving cannot
+degenerate into everything-half-done.
+
 **D8. Do NOT rewrite git history to shrink the 163 MB.** Two forks exist; a rewrite breaks
 every clone and issue link. ~~Stop tracking `include/boost`~~ — **deleted outright, it was
 unused**. Stop tracking `bin/*.dll`, `lib/*.lib` going
@@ -410,12 +438,15 @@ forward (`git rm --cached` + `.gitignore`) once vcpkg lands. Tell contributors t
 | **0. Build** | `.sln` → CMake; ~~Boost 1.57~~ (removed outright) / curl / PDFium → vcpkg; GH Actions matrix | Windows, unchanged |
 | **1. Break `stdafx.h`** | Per-file includes; PCH reduced to std headers only. Mechanical, ~420 files, parallelizable | Windows, unchanged |
 | **2. Extract `core/`** | Move + `CString`→`QString`. Start with the 3 zero-`CString` files, end with `PathUtil` (106 sites) | Windows, unchanged |
-| **3. Qt shell** | `QMainWindow`, `QTabWidget`, 11 × `QDockWidget` | First Linux/macOS **alpha** |
+| **3. Qt shell** | `QMainWindow`, `QTabWidget`, 11 × `QDockWidget`. **Interleaves with Phase 2 from 2026-07-31 (D9)** — alpha checklist: tabs, open/save, lexer + themes, find, status bar | First Linux/macOS **alpha** |
 | **4. Editor** | `ScintillaEditBase` + port `EditorLexerDark` / `EditorLexerLight`. ~~`LexerParser`~~ — done early as `core/Tokenizer` (#25); it was a delimiter tokenizer, not a lexer | Usable **beta** |
 | **5. Dialogs + platform** | ~40 `*Dlg` → `.ui`; `platform/` impls; viewers | Feature parity |
 | **6. Cutover** | Flip Windows to Qt, delete `ui-mfc/`, unify installers | Qt on all three |
 
 - Phases 0–2 are **~40% of total effort with near-zero user-facing risk**.
+- **Order is 0 → 1 → (2 ∥ 3) → 4 → 5 → 6 since D9**: Phase 2's remainder is a demand-driven
+  backlog (`FileUtil` → `FindReplaceTextWorker` → `StringHelper` rest → `PathUtil` →
+  `AppSettings`, per PORTING.md §6c correction 5), pulled when `ui-qt/` needs each piece.
 - Phase 4 is the cheapest big win — Scintilla's message API is identical across platforms, so
   lexer and theme work survives largely intact.
 - Phase 5 is the long tail and the most parallelizable across a team.
