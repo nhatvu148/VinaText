@@ -67,7 +67,9 @@ add_library(vinatext_core STATIC
     core/Checksum.h
     core/TextTransform.h
     core/Tokenizer.cpp
-    core/Tokenizer.h)
+    core/Tokenizer.h
+    core/LineDiff.cpp
+    core/LineDiff.h)
 
 add_library(VinaText::core ALIAS vinatext_core)
 
@@ -95,7 +97,7 @@ if(VINATEXT_BUILD_TESTS)
     # No test framework on purpose: these must build anywhere a C++11 compiler
     # exists, with no package manager and no network. Each returns non-zero on
     # failure, which is all ctest needs.
-    foreach(test_name TestLanguageData TestStringUtil TestChecksum TestTextTransform TestTokenizer)
+    foreach(test_name TestLanguageData TestStringUtil TestChecksum TestTextTransform TestTokenizer TestLineDiff)
         add_executable(${test_name} core/tests/${test_name}.cpp)
         target_link_libraries(${test_name} PRIVATE vinatext_core)
         if(MSVC)
@@ -112,6 +114,7 @@ if(VINATEXT_BUILD_TESTS)
     add_test(NAME core.Checksum COMMAND TestChecksum)
     add_test(NAME core.TextTransform COMMAND TestTextTransform)
     add_test(NAME core.Tokenizer COMMAND TestTokenizer)
+    add_test(NAME core.LineDiff COMMAND TestLineDiff)
 endif()
 
 #-------------------------------------------------------------------------------

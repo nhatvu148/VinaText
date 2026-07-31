@@ -417,6 +417,7 @@
     <ClInclude Include="..\core\LanguageData.h" />
     <ClInclude Include="..\core\StringUtil.h" />
     <ClInclude Include="..\core\Tokenizer.h" />
+    <ClInclude Include="..\core\LineDiff.h" />
     <ClInclude Include="EditorLanguageData.h" />
     <ClInclude Include="StringHelper.h" />
     <ClInclude Include="targetver.h" />
@@ -435,6 +436,9 @@
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
     <ClCompile Include="..\core\Tokenizer.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\core\LineDiff.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
     <ClCompile Include="EditorLanguageData.cpp" />

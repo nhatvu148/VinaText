@@ -18,7 +18,62 @@
 #include "stdafx.h"
 #include "FilePartition.h"
 #include "DiffEngine.h"
-#include "PathUtil.h"
+#include "LineDiff.h"		// core/ - owns the alignment algorithm
+
+#include <vector>
+
+// The algorithm itself now lives in core/LineDiff.{h,cpp} so ui-qt/ can use it
+// too. What is left here is the HTML report renderer, which is presentation and
+// stays with the MFC frontend, plus the adapter below.
+//
+// core/ is dependency-free and speaks std::wstring, so conversion happens at
+// this boundary (brief D6). Note that option filtering - ignore case, ignore
+// indentation - deliberately does NOT move: CFilePartition::GetLine applies it
+// with CString::MakeLower, whose Unicode behaviour core/ cannot reproduce
+// without changing which lines compare equal. See the note in core/LineDiff.h.
+
+namespace
+{
+	// core/ and FilePartition.h declare the same four statuses in the same order;
+	// this maps rather than casts so that reordering either one is a compile
+	// error instead of a silently mislabelled diff.
+	LineStatus ToLineStatus(Core::ELineStatus eStatus)
+	{
+		switch (eStatus)
+		{
+		case Core::LineChanged:	return Changed;
+		case Core::LineAdded:	return Added;
+		case Core::LineDeleted:	return Deleted;
+		case Core::LineNormal:
+		default:				return Normal;
+		}
+	}
+
+	// _Raw is what the report shows, _Compare is what matching uses. That is
+	// exactly the existing GetRawLine / GetLine split, so no filtering logic
+	// is duplicated here.
+	void FillSide(CFilePartition& partition, Core::SDiffSide& side)
+	{
+		const long nbLines = partition.GetNBLines();
+		side._Raw.reserve(static_cast<size_t>(nbLines));
+		side._Compare.reserve(static_cast<size_t>(nbLines));
+		for (long i = 0; i < nbLines; i++)
+		{
+			side._Raw.push_back(std::wstring(partition.GetRawLine(i).GetString()));
+			side._Compare.push_back(std::wstring(partition.GetLine(i).GetString()));
+		}
+	}
+
+	void EmitSide(const std::vector<Core::SDiffLine>& lines, CFilePartition& out)
+	{
+		for (size_t i = 0; i < lines.size(); i++)
+		{
+			// AddString takes a non-const reference, so this needs an lvalue.
+			CString strLine(lines[i]._Text.c_str());
+			out.AddString(strLine, ToLineStatus(lines[i]._Status));
+		}
+	}
+}
 
 CDiffEngine::CDiffEngine()
 {
@@ -38,133 +93,20 @@ BOOL CDiffEngine::Diff(	/*in*/CFilePartition &f1, /*in*/CFilePartition &f2,
 {
 	f1_bis.SetName( f1.GetName() );
 	f2_bis.SetName( f2.GetName() );
-	long nbf1Lines = f1.GetNBLines();
-	long nbf2Lines = f2.GetNBLines();
-	// special empty file case
-	if ( nbf1Lines==0 )
-	{
-		long nLinef2 = 0;
-		CString s;
-		while ( nLinef2<nbf2Lines )
-		{
-			f1_bis.AddBlankLine();
-			f2_bis.AddString( f2.GetRawLine(nLinef2++), Normal);
-		}
-		return TRUE;
-	}
-	long i = 0;
-	long nf2CurrentLine = 0;
-	while ( i<nbf1Lines )
-	{
-		// process this line (and possibly update indexes as well)
-		long nLinef2 = nf2CurrentLine;
-		if ( nLinef2 >= nbf2Lines )
-		{
-			// it's time to end the game now
-			while ( i < nbf1Lines )
-			{
-				f1_bis.AddString( f1.GetRawLine(i), Deleted);
-				f2_bis.AddBlankLine();
-				i++;
-			}
-			break;
-		}
-		if ( f1.MatchLine(i, f2, /*out*/nLinef2) )
-		{
-			BOOL bDeleted = FALSE;
-			if (nLinef2 > nf2CurrentLine)
-			{
-				long itmp = nf2CurrentLine;
-				bDeleted = f2.MatchLine(nf2CurrentLine, f1, /*out*/itmp) && (itmp<nLinef2);
-				if (bDeleted)
-				{
-					long j = itmp - i;
-					while ( j>0 )
-					{
-						f1_bis.AddString( f1.GetRawLine(i), Deleted);
-						f2_bis.AddBlankLine();
 
-						i++;
-						j--;
-					}
-					// please note nf2CurrentLine is not updated
-					continue; // jump here to loop iteration
-				}
-			}
-			// matched, so either the lines were identical, or f2 has added one or more lines
-			if (nLinef2 > nf2CurrentLine)
-			{
-				// add blank lines to f1_bis
-				long j = nLinef2 - nf2CurrentLine;
-				while ( j>0 )
-				{
-					f1_bis.AddBlankLine();
-					f2_bis.AddString( f2.GetRawLine(nLinef2-j), Added );
+	Core::SDiffSide left, right;
+	FillSide(f1, left);
+	FillSide(f2, right);
 
-					j--;
-				}
-			}
-			// exactly matched
-			f1_bis.AddString( f1.GetRawLine(i), Normal);
-			f2_bis.AddString( f2.GetRawLine(nLinef2), Normal);
-			nf2CurrentLine = nLinef2 + 1; // next line in f2
-		}
-		else
-		{
-			// this line is not found at all in f2, either it's because it has been changed, or even deleted
-			long nLinef1 = i;
-			if ( f2.MatchLine(nLinef2, f1, /*out*/nLinef1) )
-			{
-				// the dual line in f2 can be found in f1, that's because
-				// the current line in f1 has been deleted
-				f1_bis.AddString( f1.GetRawLine(i), Deleted);
-				f2_bis.AddBlankLine();
-				// this whole block is flagged as deleted
-				if (nLinef1>i+1)
-				{
-					long j = nLinef1 - (i+1);
-					while ( j>0 )
-					{
-						i++;
+	std::vector<Core::SDiffLine> leftOut, rightOut;
+	if ( !Core::DiffLines(left, right, leftOut, rightOut) )
+		return FALSE;
 
-						f1_bis.AddString( f1.GetRawLine(i), Deleted);
-						f2_bis.AddBlankLine();
-						j--;
-					}
-				}
-				// note : nf2CurrentLine is not incremented
-			}
-			else
-			{
-				// neither added, nor deleted, so it's flagged as changed
-				f1_bis.AddString( f1.GetRawLine(i), Changed);
-				f2_bis.AddString( f2.GetRawLine(nLinef2), Changed);
+	EmitSide(leftOut, f1_bis);
+	EmitSide(rightOut, f2_bis);
 
-				nf2CurrentLine = nLinef2 + 1; // next line in f2
-			}
-		}
-		i++; // next line in f1
-	}
-	// are there any remaining lines from f2?
-	while ( nf2CurrentLine < nbf2Lines )
-	{
-		f1_bis.AddBlankLine();
-		f2_bis.AddString( f2.GetRawLine(nf2CurrentLine), Added );
-		nf2CurrentLine++;
-	}
 	return TRUE;
 }
-
-
-
-
-
-
-
-// build html report
-//
-
-
 
 void CDiffEngine::SetTitles(CString &szHeader, CString &szFooter)
 {
