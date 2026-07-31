@@ -67,9 +67,15 @@ CEditorWidget::CEditorWidget(const CEditorData& data, QWidget* pParent)
 	Send(SCI_SETMARGINMASKN, MARGIN_FOLDING, SC_MASK_FOLDERS);
 	Send(SCI_SETMARGINSENSITIVEN, MARGIN_FOLDING, 1);
 	Send(SCI_SETMARGINWIDTHN, MARGIN_FOLDING, 0);
+	// SC_AUTOMATICFOLD_CLICK makes Scintilla handle fold-margin clicks itself, and
+	// there is deliberately no marginClicked handler here: Editor::NotifyMarginClick
+	// returns as soon as it has folded (Editor.cxx:2675-2695), BEFORE building the
+	// notification at 2697, so any handler would be dead code. Verified by A/B with
+	// a synthetic click - 0 invocations with this flag, 1 without it, the fold
+	// toggling either way. Its built-in handling is also richer than a plain
+	// toggle: shift expands children, ctrl toggles them, shift+ctrl folds all.
 	Send(SCI_SETAUTOMATICFOLD, SC_AUTOMATICFOLD_CLICK | SC_AUTOMATICFOLD_SHOW
 		| SC_AUTOMATICFOLD_CHANGE);
-	connect(this, &ScintillaEditBase::marginClicked, this, &CEditorWidget::OnMarginClicked);
 	Send(SCI_SETCARETLINEVISIBLE, 1);
 	Send(SCI_SETINDICATORCURRENT, FIND_INDICATOR);
 	Send(SCI_INDICSETSTYLE, FIND_INDICATOR, INDIC_ROUNDBOX);
@@ -402,16 +408,6 @@ void CEditorWidget::ApplyFoldMargin(const Core::CEditorTheme& theme)
 	// No lexer means no fold levels, so the margin would only ever be blank.
 	Send(SCI_SETMARGINWIDTHN, MARGIN_FOLDING,
 		m_pLanguage != nullptr ? FOLD_MARGIN_WIDTH : 0);
-}
-
-void CEditorWidget::OnMarginClicked(Scintilla::Position position, Scintilla::KeyMod, int margin)
-{
-	if (margin != MARGIN_FOLDING)
-	{
-		return;
-	}
-	const sptr_t nLine = Send(SCI_LINEFROMPOSITION, static_cast<uptr_t>(position));
-	Send(SCI_TOGGLEFOLD, static_cast<uptr_t>(nLine));
 }
 
 void CEditorWidget::UpdateLineNumberMargin()

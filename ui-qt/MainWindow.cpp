@@ -17,6 +17,7 @@
 #include <QActionGroup>
 #include <QApplication>
 #include <QCloseEvent>
+#include <QMouseEvent>
 #include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
@@ -582,6 +583,7 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 	//----------------------------------------------------------------------
 	// Lexer, both themes, find, status bar - per tab
 	//----------------------------------------------------------------------
+	int nFoldClicksChecked = 0;
 	for (int i = 0; i < GetTabCount(); ++i)
 	{
 		m_pTabs->setCurrentIndex(i);
@@ -648,6 +650,50 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 				.arg(strName).arg(nLineMatches).arg(nLines));
 		pEditor->ClearHighlight();
 
+		// Folding. Clicking the fold margin must actually fold, and this is the
+		// only way to know: Scintilla handles that click internally under
+		// SC_AUTOMATICFOLD_CLICK, so no signal fires and nothing in the widget's
+		// own code runs. An A/B with this click is what proved a marginClicked
+		// handler here would be dead code.
+		if (pEditor->Send(SCI_GETMARGINWIDTHN, 2) > 0)
+		{
+			pEditor->Send(SCI_COLOURISE, 0, -1);
+			sptr_t nHeaderLine = -1;
+			const sptr_t nLines = pEditor->Send(SCI_GETLINECOUNT);
+			for (sptr_t line = 0; line < nLines && nHeaderLine < 0; ++line)
+			{
+				if (pEditor->Send(SCI_GETFOLDLEVEL, static_cast<uptr_t>(line))
+					& SC_FOLDLEVELHEADERFLAG)
+				{
+					nHeaderLine = line;
+				}
+			}
+			// Not every file has a foldable block - a four-line markdown fixture
+			// does not - so this is counted, not required per file, and the count
+			// is asserted once at the end.
+			if (nHeaderLine >= 0)
+			{
+				const int nX = static_cast<int>(pEditor->Send(SCI_GETMARGINWIDTHN, 0)) + 8;
+				const int nY = static_cast<int>(pEditor->Send(SCI_POINTYFROMPOSITION, 0,
+					pEditor->Send(SCI_POSITIONFROMLINE, static_cast<uptr_t>(nHeaderLine)))) + 2;
+				const QPointF at(nX, nY);
+				QMouseEvent press(QEvent::MouseButtonPress, at, at,
+					Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+				QMouseEvent release(QEvent::MouseButtonRelease, at, at,
+					Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+				QApplication::sendEvent(pEditor->viewport(), &press);
+				QApplication::sendEvent(pEditor->viewport(), &release);
+				Require(pEditor->Send(SCI_GETALLLINESVISIBLE) == 0,
+					QStringLiteral("%1: clicking the fold margin folded the block")
+						.arg(strName));
+				QApplication::sendEvent(pEditor->viewport(), &press);
+				QApplication::sendEvent(pEditor->viewport(), &release);
+				Require(pEditor->Send(SCI_GETALLLINESVISIBLE) == 1,
+					QStringLiteral("%1: clicking it again unfolded").arg(strName));
+				++nFoldClicksChecked;
+			}
+		}
+
 		// Status bar.
 		pEditor->Send(SCI_GOTOPOS, 0);
 		UpdateStatusBar();
@@ -660,6 +706,9 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 			&& !m_pStatusLanguage->text().isEmpty(),
 			QStringLiteral("%1: status bar is populated").arg(strName));
 	}
+
+	Require(nFoldClicksChecked > 0,
+		QStringLiteral("the fold-margin click was exercised on at least one file"));
 
 	//----------------------------------------------------------------------
 	// Save. The check is byte equality against the file that was opened: an
