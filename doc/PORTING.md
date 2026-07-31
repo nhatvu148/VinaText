@@ -788,6 +788,17 @@ about since the first draft and what these five corrections keep re-learning.
 `StringHelper`'s remaining split (39), then `PathUtil` (353), then `AppSettings` (783) last.
 `EditorDatabase`, `SpellChecker` and `UserExtension` leave the `core/` list.
 
+**"Sites" means occurrences, not lines.** `grep -o ... | wc -l` and `grep -c` are not the same
+measurement and differ on real data here: `PathUtils::` is **353 occurrences on 349 lines**,
+because four lines carry two calls each —
+
+    src/FileExplorerCtrl.cpp:1294   src/FileExplorerCtrl.cpp:5746
+    src/PathResultWindow.cpp:720    src/VinaTextApp.cpp:222
+
+— and `AppSettingMgr` is **783 on 778**. Occurrences is the right unit for this table: the cost
+of moving a type is the number of expressions that must be edited, and two on one line is two
+edits. Every command below uses `-o`; substituting `-c` reproduces 349 and 778 instead.
+
 Reproduce — the point is to count the identifier the CALL SITE writes, which is not always the
 type's name:
 
