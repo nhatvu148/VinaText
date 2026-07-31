@@ -373,6 +373,45 @@ int main(int argc, char** argv)
 		Check(!bFound, "html/SCE_H_ATTRIBUTE stays plain - its rule is commented out");
 	}
 
+	//----------------------------------------------------------------------
+	// Malformed input. The data is generated, so the realistic corruption is a
+	// hand edit - and the failure that matters is the QUIET one: a style that
+	// keeps its bold, passes every other check, and simply never renders italic.
+	//----------------------------------------------------------------------
+	{
+		const std::string strHead =
+			"{\"plainTextLabel\":\"plain text\",\"languages\":[{"
+			"\"id\":\"probe\",\"name\":\"probe\",\"extension\":\"p\","
+			"\"extensions\":\"p\",\"lexer\":\"cpp\",\"commentLine\":\"//\","
+			"\"commentStart\":\"\",\"commentEnd\":\"\",\"keywords\":\"\","
+			"\"styleAttributes\":[";
+		const std::string strTail = "]}]}";
+
+		struct SCase { const char* _Entry; bool _ShouldLoad; const char* _What; };
+		const SCase kCases[] = {
+			{ "{\"style\":\"S\",\"value\":1,\"bold\":true}", true,
+			  "a well-formed attribute loads" },
+			// The two the fold used to swallow, both alongside a valid "bold".
+			{ "{\"style\":\"S\",\"value\":1,\"bold\":true,\"italic\":\"yes\"}", false,
+			  "a wrong-typed value is rejected, not folded to false" },
+			{ "{\"style\":\"S\",\"value\":1,\"bold\":true,\"Italic\":true}", false,
+			  "a mistyped key is rejected, not ignored" },
+			{ "{\"style\":\"S\",\"value\":1,\"bold\":false}", false,
+			  "an attribute that sets nothing is rejected" },
+			{ "{\"style\":\"S\",\"bold\":true}", false,
+			  "an attribute with no numeric value is rejected" },
+		};
+		for (size_t i = 0; i < sizeof(kCases) / sizeof(kCases[0]); ++i)
+		{
+			Core::CLanguageTable probe;
+			std::string strProbeError;
+			const bool bLoaded = probe.LoadFromString(
+				strHead + kCases[i]._Entry + strTail, strProbeError);
+			Check(bLoaded == kCases[i]._ShouldLoad,
+				std::string(kCases[i]._What) + " (error: " + strProbeError + ")");
+		}
+	}
+
 	std::cout << (g_Failures == 0 ? "PASS" : "FAIL") << ": TestStyleAttributes - "
 		<< g_Checks << " checks, " << nCompared << " styles compared against the "
 		<< "transcribed MFC original (" << nWithAttributes << " carrying an attribute), "

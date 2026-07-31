@@ -31,12 +31,28 @@ namespace Core
 			return true;
 		}
 
-		// Absent means false. Present but not a bool is a malformed file, and is
-		// reported by the caller checking that something was actually set.
-		bool ReadBool(const picojson::object& obj, const std::string& strKey)
+		// Absent means false; present means it must actually be a bool.
+		//
+		// Reporting the wrong type here rather than folding it into false matters
+		// because the fold is silent exactly when it is least visible: a style with
+		// "bold": true and "italic": "yes" keeps its bold, passes every other
+		// check, and simply never renders italic.
+		bool ReadBool(const picojson::object& obj, const std::string& strKey, bool& bOut,
+			std::string& strError)
 		{
 			const picojson::object::const_iterator it = obj.find(strKey);
-			return it != obj.end() && it->second.is<bool>() && it->second.get<bool>();
+			if (it == obj.end())
+			{
+				bOut = false;
+				return true;
+			}
+			if (!it->second.is<bool>())
+			{
+				strError = "\"" + strKey + "\" is not true or false";
+				return false;
+			}
+			bOut = it->second.get<bool>();
+			return true;
 		}
 
 		std::string ReadString(const picojson::object& obj, const std::string& strKey)
@@ -213,9 +229,36 @@ namespace Core
 							+ "\" has no numeric \"value\"";
 						return false;
 					}
-					style._Bold = ReadBool(attribute, "bold");
-					style._Italic = ReadBool(attribute, "italic");
-					style._Underline = ReadBool(attribute, "underline");
+					// A key this does not know is a typo - "Italic" for "italic" -
+					// and picojson would hand it over without complaint. The data
+					// is generated, so any hand edit is exactly where that happens.
+					static const char* const KNOWN_KEYS[] = {
+						"style", "value", "bold", "italic", "underline" };
+					for (picojson::object::const_iterator itKey = attribute.begin();
+						itKey != attribute.end(); ++itKey)
+					{
+						bool bKnown = false;
+						for (size_t i = 0; i < sizeof(KNOWN_KEYS) / sizeof(KNOWN_KEYS[0]); ++i)
+						{
+							bKnown = bKnown || itKey->first == KNOWN_KEYS[i];
+						}
+						if (!bKnown)
+						{
+							strError = "style attribute \"" + style._Style + "\" of \""
+								+ info._Id + "\" has an unknown key \"" + itKey->first + "\"";
+							return false;
+						}
+					}
+
+					std::string strAttributeError;
+					if (!ReadBool(attribute, "bold", style._Bold, strAttributeError)
+						|| !ReadBool(attribute, "italic", style._Italic, strAttributeError)
+						|| !ReadBool(attribute, "underline", style._Underline, strAttributeError))
+					{
+						strError = "style attribute \"" + style._Style + "\" of \"" + info._Id
+							+ "\": " + strAttributeError;
+						return false;
+					}
 					// An entry that sets nothing is data that cannot do anything -
 					// far more likely a typo in a key name than an intent.
 					if (!style._Bold && !style._Italic && !style._Underline)
