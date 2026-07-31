@@ -115,6 +115,43 @@ void CMainWindow::BuildMenus()
 		pThemeGroup->addAction(pAction);
 	}
 	pDark->setChecked(true);
+
+	pView->addSeparator();
+	QAction* pWrap = pView->addAction(tr("&Word Wrap"), this, [this](bool bOn)
+	{
+		OnToggleWordWrap(bOn);
+	});
+	pWrap->setCheckable(true);
+	pWrap->setShortcut(QKeySequence(Qt::ALT | Qt::Key_Z));
+	QAction* pEdge = pView->addAction(tr("&Long Line Marker"), this, [this](bool bOn)
+	{
+		OnToggleLongLineMarker(bOn);
+	});
+	pEdge->setCheckable(true);
+}
+
+void CMainWindow::OnToggleWordWrap(bool bEnable)
+{
+	m_bWordWrap = bEnable;
+	for (int i = 0; i < m_pTabs->count(); ++i)
+	{
+		if (CEditorWidget* pEditor = qobject_cast<CEditorWidget*>(m_pTabs->widget(i)))
+		{
+			pEditor->SetWordWrap(bEnable);
+		}
+	}
+}
+
+void CMainWindow::OnToggleLongLineMarker(bool bEnable)
+{
+	m_bLongLineMarker = bEnable;
+	for (int i = 0; i < m_pTabs->count(); ++i)
+	{
+		if (CEditorWidget* pEditor = qobject_cast<CEditorWidget*>(m_pTabs->widget(i)))
+		{
+			pEditor->SetLongLineMarker(bEnable);
+		}
+	}
 }
 
 void CMainWindow::BuildStatusBar()
@@ -155,6 +192,8 @@ CEditorWidget* CMainWindow::AddTab(CEditorWidget* pEditor)
 	});
 
 	pEditor->ApplyTheme(m_Theme);
+	pEditor->SetWordWrap(m_bWordWrap);
+	pEditor->SetLongLineMarker(m_bLongLineMarker);
 	pEditor->setFocus();
 	UpdateStatusBar();
 	UpdateWindowTitle();
@@ -692,6 +731,35 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 					QStringLiteral("%1: clicking it again unfolded").arg(strName));
 				++nFoldClicksChecked;
 			}
+		}
+
+		// View toggles. Both start off, as on Windows, and both must survive being
+		// turned on and off again - a toggle that only works once is a real bug
+		// and an easy one to ship.
+		Require(!pEditor->IsWordWrap() && !pEditor->IsLongLineMarker(),
+			QStringLiteral("%1: wrap and the long-line marker start off").arg(strName));
+		OnToggleWordWrap(true);
+		Require(pEditor->IsWordWrap(), QStringLiteral("%1: wrap turns on").arg(strName));
+		OnToggleWordWrap(false);
+		Require(!pEditor->IsWordWrap(), QStringLiteral("%1: wrap turns off").arg(strName));
+		OnToggleLongLineMarker(true);
+		Require(pEditor->IsLongLineMarker(),
+			QStringLiteral("%1: the long-line marker turns on").arg(strName));
+		OnToggleLongLineMarker(false);
+		Require(!pEditor->IsLongLineMarker(),
+			QStringLiteral("%1: the long-line marker turns off").arg(strName));
+
+		// Indentation guides come from the language, and the one that differs is
+		// python - so assert the mode matches what core/ says rather than that it
+		// is merely non-zero.
+		const Core::SLanguageInfo* pLang = m_Data.DetectLanguage(strName);
+		if (pLang != nullptr)
+		{
+			const sptr_t nWanted = (pLang->_IndentGuides == "lookforward")
+				? SC_IV_LOOKFORWARD : SC_IV_LOOKBOTH;
+			Require(pEditor->Send(SCI_GETINDENTATIONGUIDES) == nWanted,
+				QStringLiteral("%1: indentation guides are %2 as core/ specifies")
+					.arg(strName, QString::fromStdString(pLang->_IndentGuides)));
 		}
 
 		// Status bar.

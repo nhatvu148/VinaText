@@ -14,7 +14,8 @@
       "extensions": "ada|ads|adb",
       "lexer": "ada",
       "styleTable": "ada",
-      "foldMarker": " --- "
+      "foldMarker": " --- ",
+      "indentGuides": "lookboth"
     },
     {
       "id": "asm",
@@ -27,7 +28,8 @@
       "extensions": "asm",
       "lexer": "asm",
       "styleTable": "asm",
-      "foldMarker": " --- "
+      "foldMarker": " --- ",
+      "indentGuides": "lookboth"
     },
     {
       "id": "autoit",
@@ -40,7 +42,8 @@
       "extensions": "au3",
       "lexer": "cpp",
       "styleTable": "autoit",
-      "foldMarker": " --- "
+      "foldMarker": " --- ",
+      "indentGuides": "lookboth"
     },
     {
       "id": "bash",
@@ -53,7 +56,8 @@
       "extensions": "sh",
       "lexer": "bash",
       "styleTable": "bash",
-      "foldMarker": " { ... } "
+      "foldMarker": " { ... } ",
+      "indentGuides": "lookboth"
     },
     {
       "id": "batch",
@@ -88,7 +92,8 @@
         }
       ],
       "styleTable": "batch",
-      "foldMarker": " --- "
+      "foldMarker": " --- ",
+      "indentGuides": "lookboth"
     },
     {
       "id": "c",
@@ -101,7 +106,8 @@
       "extensions": "c",
       "lexer": "cpp",
       "styleTable": "c",
-      "foldMarker": " { ... } "
+      "foldMarker": " { ... } ",
+      "indentGuides": "lookboth"
     },
     {
       "id": "cmake",
@@ -114,7 +120,8 @@
       "extensions": "cmake",
       "lexer": "cmake",
       "styleTable": "cmake",
-      "foldMarker": " --- "
+      "foldMarker": " --- ",
+      "indentGuides": "lookboth"
     },
     {
       "id": "cpp",
@@ -127,7 +134,8 @@
       "extensions": "cpp|cxx|h|hh|hpp|hxx|cc",
       "lexer": "cpp",
       "styleTable": "cpp",
-      "foldMarker": " { ... } "
+      "foldMarker": " { ... } ",
+      "indentGuides": "lookboth"
     },
     {
       "id": "cs",
@@ -140,7 +148,8 @@
       "extensions": "cs",
       "lexer": "cpp",
       "styleTable": "cs",
-      "foldMarker": " { ... } "
+      "foldMarker": " { ... } ",
+      "indentGuides": "lookboth"
     },
     {
       "id": "css",
@@ -186,7 +195,8 @@
         }
       ],
       "styleTable": "css",
-      "foldMarker": " { ... } "
+      "foldMarker": " { ... } ",
+      "indentGuides": "lookboth"
     },
     {
       "id": "erlang",
@@ -199,7 +209,8 @@
       "extensions": "erl|hrl",
       "lexer": "erlang",
       "styleTable": "erlang",
-      "foldMarker": " --- "
+      "foldMarker": " --- ",
+      "indentGuides": "lookboth"
     },
     {
       "id": "flexlicense",
@@ -239,7 +250,8 @@
         }
       ],
       "styleTable": "flexlicense",
-      "foldMarker": " --- "
+      "foldMarker": " --- ",
+      "indentGuides": "lookboth"
     },
     {
       "id": "fortran",
@@ -252,7 +264,8 @@
       "extensions": "f|for|f90|f95|f77",
       "lexer": "fortran",
       "styleTable": "fortran",
-      "foldMarker": " --- "
+      "foldMarker": " --- ",
+      "indentGuides": "lookboth"
     },
     {
       "id": "freebasic",
@@ -277,7 +290,8 @@
         }
       ],
       "styleTable": "freebasic",
-      "foldMarker": " --- "
+      "foldMarker": " --- ",
+      "indentGuides": "lookboth"
     },
     {
       "id": "go",
@@ -290,7 +304,8 @@
       "extensions": "go",
       "lexer": "cpp",
       "styleTable": "go",
-      "foldMarker": " --- "
+      "foldMarker": " --- ",
+      "indentGuides": "lookboth"
     },
     {
       "id": "html",
@@ -355,7 +370,8 @@
         }
       ],
       "styleTable": "html",
-      "foldMarker": " < ... > "
+      "foldMarker": " < ... > ",
+      "indentGuides": "lookboth"
     },
     {
       "id": "inno",
@@ -368,7 +384,8 @@
       "extensions": "iss",
       "lexer": "asm",
       "styleTable": "inno",
-      "foldMarker": " --- "
+      "foldMarker": " --- ",
+      "indentGuides": "lookboth"
     },
     {
       "id": "java",
@@ -381,7 +398,8 @@
       "extensions": "java",
       "lexer": "cpp",
       "styleTable": "java",
-      "foldMarker": " { ... } "
+      "foldMarker": " { ... } ",
+      "indentGuides": "lookboth"
     },
     {
       "id": "javascript",
@@ -394,7 +412,8 @@
       "extensions": "js|jsx",
       "lexer": "cpp",
       "styleTable": "javascript",
-      "foldMarker": " { ... } "
+      "foldMarker": " { ... } ",
+      "indentGuides": "lookboth"
     },
     {
       "id": "json",
@@ -439,7 +458,8 @@
         }
       ],
       "styleTable": "json",
-      "foldMarker": " { ... } "
+      "foldMarker": " { ... } ",
+      "indentGuides": "lookboth"
     },
     {
       "id": "lua",
@@ -452,7 +472,8 @@
       "extensions": "lua",
       "lexer": "lua",
       "styleTable": "lua",
-      "foldMarker": " --- "
+      "foldMarker": " --- ",
+      "indentGuides": "lookboth"
     },
     {
       "id": "makefile",
@@ -465,7 +486,8 @@
       "extensions": "",
       "lexer": "makefile",
       "styleTable": "makefile",
-      "foldMarker": " --- "
+      "foldMarker": " --- ",
+      "indentGuides": "lookboth"
     },
     {
       "id": "markdown",
@@ -515,7 +537,8 @@
         }
       ],
       "styleTable": "markdown",
-      "foldMarker": " { ... } "
+      "foldMarker": " { ... } ",
+      "indentGuides": "lookboth"
     },
     {
       "id": "matlab",
@@ -528,7 +551,8 @@
       "extensions": "m",
       "lexer": "matlab",
       "styleTable": "matlab",
-      "foldMarker": " --- "
+      "foldMarker": " --- ",
+      "indentGuides": "lookboth"
     },
     {
       "id": "pascal",
@@ -563,7 +587,8 @@
         }
       ],
       "styleTable": "pascal",
-      "foldMarker": " --- "
+      "foldMarker": " --- ",
+      "indentGuides": "lookboth"
     },
     {
       "id": "perl",
@@ -576,7 +601,8 @@
       "extensions": "pl|pm|cgi|pod",
       "lexer": "perl",
       "styleTable": "perl",
-      "foldMarker": " --- "
+      "foldMarker": " --- ",
+      "indentGuides": "lookboth"
     },
     {
       "id": "php",
@@ -589,7 +615,8 @@
       "extensions": "php|php3|php4|php5|phps|phpt|phtml",
       "lexer": "cpp",
       "styleTable": "php",
-      "foldMarker": " { ... } "
+      "foldMarker": " { ... } ",
+      "indentGuides": "lookboth"
     },
     {
       "id": "powershell",
@@ -649,7 +676,8 @@
         }
       ],
       "styleTable": "powershell",
-      "foldMarker": " --- "
+      "foldMarker": " --- ",
+      "indentGuides": "lookboth"
     },
     {
       "id": "protobuf",
@@ -662,7 +690,8 @@
       "extensions": "proto",
       "lexer": "cpp",
       "styleTable": "protobuf",
-      "foldMarker": " --- "
+      "foldMarker": " --- ",
+      "indentGuides": "lookboth"
     },
     {
       "id": "python",
@@ -714,7 +743,8 @@
         }
       ],
       "styleTable": "python",
-      "foldMarker": " --- "
+      "foldMarker": " --- ",
+      "indentGuides": "lookforward"
     },
     {
       "id": "r",
@@ -749,7 +779,8 @@
         }
       ],
       "styleTable": "r",
-      "foldMarker": " --- "
+      "foldMarker": " --- ",
+      "indentGuides": "lookboth"
     },
     {
       "id": "resource",
@@ -762,7 +793,8 @@
       "extensions": "rc",
       "lexer": "cpp",
       "styleTable": "resource",
-      "foldMarker": " --- "
+      "foldMarker": " --- ",
+      "indentGuides": "lookboth"
     },
     {
       "id": "ruby",
@@ -775,7 +807,8 @@
       "extensions": "rb",
       "lexer": "ruby",
       "styleTable": "ruby",
-      "foldMarker": " --- "
+      "foldMarker": " --- ",
+      "indentGuides": "lookboth"
     },
     {
       "id": "rust",
@@ -788,7 +821,8 @@
       "extensions": "rs",
       "lexer": "rust",
       "styleTable": "rust",
-      "foldMarker": " { ... } "
+      "foldMarker": " { ... } ",
+      "indentGuides": "lookboth"
     },
     {
       "id": "sql",
@@ -801,7 +835,8 @@
       "extensions": "sql|spec|body|sps|spb|sf|sp",
       "lexer": "sql",
       "styleTable": "sql",
-      "foldMarker": " --- "
+      "foldMarker": " --- ",
+      "indentGuides": "lookboth"
     },
     {
       "id": "tcl",
@@ -814,7 +849,8 @@
       "extensions": "tcl",
       "lexer": "tcl",
       "styleTable": "tcl",
-      "foldMarker": " --- "
+      "foldMarker": " --- ",
+      "indentGuides": "lookboth"
     },
     {
       "id": "typescript",
@@ -827,7 +863,8 @@
       "extensions": "ts|tsx",
       "lexer": "cpp",
       "styleTable": "typescript",
-      "foldMarker": " { ... } "
+      "foldMarker": " { ... } ",
+      "indentGuides": "lookboth"
     },
     {
       "id": "vb",
@@ -852,7 +889,8 @@
         }
       ],
       "styleTable": "vb",
-      "foldMarker": " --- "
+      "foldMarker": " --- ",
+      "indentGuides": "lookboth"
     },
     {
       "id": "vcxproject",
@@ -865,7 +903,8 @@
       "extensions": "vcxproj|filters|user|vcproj|csproj|csxproj|vbproj|dbproj|sln",
       "lexer": "cpp",
       "styleTable": "vcxproject",
-      "foldMarker": " --- "
+      "foldMarker": " --- ",
+      "indentGuides": "lookboth"
     },
     {
       "id": "verilog",
@@ -878,7 +917,8 @@
       "extensions": "v|sv|vh|svh",
       "lexer": "verilog",
       "styleTable": "verilog",
-      "foldMarker": " --- "
+      "foldMarker": " --- ",
+      "indentGuides": "lookboth"
     },
     {
       "id": "vhdl",
@@ -891,7 +931,8 @@
       "extensions": "vhd|vhdl",
       "lexer": "vhdl",
       "styleTable": "vhdl",
-      "foldMarker": " --- "
+      "foldMarker": " --- ",
+      "indentGuides": "lookboth"
     },
     {
       "id": "xml",
@@ -951,7 +992,8 @@
         }
       ],
       "styleTable": "html",
-      "foldMarker": " < ... > "
+      "foldMarker": " < ... > ",
+      "indentGuides": "lookboth"
     }
   ]
 }

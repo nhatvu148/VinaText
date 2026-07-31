@@ -45,6 +45,13 @@ public:
 	// theme switch.
 	void ApplyTheme(EEditorTheme theme);
 
+	// View toggles, mirroring CEditorCtrl::EnableTextWrappingMode and
+	// EnableLongLineChecker. Both start off, as they do on Windows.
+	void SetWordWrap(bool bEnable);
+	bool IsWordWrap() const;
+	void SetLongLineMarker(bool bEnable);
+	bool IsLongLineMarker() const;
+
 	// Status-bar material.
 	QString GetLanguageLabel() const;
 	QString GetEncodingLabel() const;

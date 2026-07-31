@@ -41,6 +41,13 @@ namespace
 	// identically, at lines 42 and 43).
 	const int FOLD_MARGIN_WIDTH = 16;
 
+	// Scintilla.h publishes SC_CURSORNORMAL/ARROW/WAIT/REVERSEARROW but not the
+	// hand, even though Platform.h's Cursor enum has it at 8 (invalid, text,
+	// arrow, up, wait, horizontal, vertical, reverseArrow, hand) and PlatQt maps
+	// it to Qt::PointingHandCursor. src/EditorCommonDef.h:41 names the same 8;
+	// this is that constant, not a magic number.
+	const int CURSOR_HAND = 8;
+
 	// Matches SC_DEFAUFT_TAB_WIDTH in src/EditorCommonDef.h (sic).
 	const int DEFAULT_TAB_WIDTH = 4;
 
@@ -77,6 +84,37 @@ CEditorWidget::CEditorWidget(const CEditorData& data, QWidget* pParent)
 	Send(SCI_SETAUTOMATICFOLD, SC_AUTOMATICFOLD_CLICK | SC_AUTOMATICFOLD_SHOW
 		| SC_AUTOMATICFOLD_CHANGE);
 	Send(SCI_SETCARETLINEVISIBLE, 1);
+	Send(SCI_SETCARETLINEVISIBLEALWAYS, 1);
+	// AppSettings ships m_bDrawCaretLineFrame TRUE (src/AppSettings.h:76).
+	Send(SCI_SETCARETLINEFRAME, 1);
+
+	// The horizontal scrollbar sizes itself to the widest line seen, and the view
+	// may scroll past the last line - both as src/Editor.cpp:380-384.
+	Send(SCI_SETSCROLLWIDTH, 1);
+	Send(SCI_SETSCROLLWIDTHTRACKING, 1);
+	Send(SCI_SETENDATLASTLINE, 0);
+
+	// Wrapping starts off and shows a marker at the end of a wrapped line; the
+	// View menu toggles it, exactly as CEditorCtrl::EnableTextWrappingMode does.
+	Send(SCI_SETWRAPMODE, SC_WRAP_NONE);
+	Send(SCI_SETWRAPVISUALFLAGS, SC_WRAPVISUALFLAG_END);
+
+	// The long-line marker's column is set here and the MODE only by the toggle,
+	// so it is invisible until asked for - the same two-step the MFC uses
+	// (src/Editor.cpp:417 sets the column, :3711 turns the mode on).
+	Send(SCI_SETEDGECOLUMN, 80);		// AppSettingMgr.m_nLongLineMaximum
+	Send(SCI_SETEDGEMODE, EDGE_NONE);
+
+	// A hand cursor over every margin (src/Editor.cpp:357-359).
+	Send(SCI_SETMARGINCURSORN, MARGIN_LINE_NUMBERS, CURSOR_HAND);
+	Send(SCI_SETMARGINCURSORN, MARGIN_SYMBOLS, CURSOR_HAND);
+	Send(SCI_SETMARGINCURSORN, MARGIN_FOLDING, CURSOR_HAND);
+
+	// NOT ported: SCI_USEPOPUP(0) at src/Editor.cpp:415. The MFC frontend
+	// disables Scintilla's context menu because it supplies its own; ui-qt/ does
+	// not have one yet, so copying that call would leave right-click doing
+	// nothing at all. Being faithful here would be a worse editor. Revisit when
+	// ui-qt/ grows a context menu.
 	Send(SCI_SETINDICATORCURRENT, FIND_INDICATOR);
 	Send(SCI_INDICSETSTYLE, FIND_INDICATOR, INDIC_ROUNDBOX);
 	Send(SCI_INDICSETALPHA, FIND_INDICATOR, 80);
@@ -255,6 +293,7 @@ void CEditorWidget::ApplyEditorStyles(const Core::CEditorTheme& theme)
 	if (theme.ResolveColor("editorCaretColor", colour))
 	{
 		Send(SCI_SETCARETFORE, ToScintillaColour(colour));
+		Send(SCI_SETADDITIONALCARETFORE, ToScintillaColour(colour));
 	}
 	// The caret line uses the text colour at low alpha, which is what
 	// src/Editor.cpp:405 does. The palette's "currentline" entry is a Monokai
@@ -305,6 +344,10 @@ void CEditorWidget::ApplyLanguageStyles(const Core::CEditorTheme& theme)
 
 	// _StyleTable, not _Id: xml is coloured from html's table, because that is
 	// the one the shipping app walks for it (doc/PORTING.md 6e).
+	// Guides that stop at a blank line for Python, both directions otherwise.
+	Send(SCI_SETINDENTATIONGUIDES,
+		m_pLanguage->_IndentGuides == "lookforward" ? SC_IV_LOOKFORWARD : SC_IV_LOOKBOTH);
+
 	const std::vector<Core::SStyleMapping>* pStyles =
 		theme.FindStyles(m_pLanguage->_StyleTable);
 	if (pStyles != nullptr)
@@ -423,6 +466,29 @@ void CEditorWidget::UpdateLineNumberMargin()
 	const sptr_t nWidth = Send(SCI_TEXTWIDTH, STYLE_LINENUMBER,
 		reinterpret_cast<sptr_t>(sample.constData()));
 	Send(SCI_SETMARGINWIDTHN, 0, nWidth);
+}
+
+//////////////////////////////////////////////////////////////////////////
+// View toggles
+
+void CEditorWidget::SetWordWrap(bool bEnable)
+{
+	Send(SCI_SETWRAPMODE, bEnable ? SC_WRAP_WORD : SC_WRAP_NONE);
+}
+
+bool CEditorWidget::IsWordWrap() const
+{
+	return Send(SCI_GETWRAPMODE) != SC_WRAP_NONE;
+}
+
+void CEditorWidget::SetLongLineMarker(bool bEnable)
+{
+	Send(SCI_SETEDGEMODE, bEnable ? EDGE_LINE : EDGE_NONE);
+}
+
+bool CEditorWidget::IsLongLineMarker() const
+{
+	return Send(SCI_GETEDGEMODE) != EDGE_NONE;
 }
 
 //////////////////////////////////////////////////////////////////////////

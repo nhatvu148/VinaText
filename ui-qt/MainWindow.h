@@ -67,6 +67,8 @@ private:
 	bool OnSaveAs();
 	bool OnCloseTab(int nIndex);
 	void OnSetTheme(EEditorTheme theme);
+	void OnToggleWordWrap(bool bEnable);
+	void OnToggleLongLineMarker(bool bEnable);
 	void OnShowFind();
 	void OnHideFind();
 	void OnFind(bool bBackward);
@@ -86,5 +88,9 @@ private:
 	QLabel*				m_pStatusEncoding = nullptr;
 	QLabel*				m_pStatusEol = nullptr;
 	EEditorTheme		m_Theme = EEditorTheme::Dark;
+	// View state is per window, not per document: a new tab inherits it, which is
+	// what every editor with a wrap toggle does.
+	bool				m_bWordWrap = false;
+	bool				m_bLongLineMarker = false;
 	QString				m_strLastDirectory;
 };
