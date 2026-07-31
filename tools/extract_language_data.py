@@ -187,17 +187,27 @@ def parse_lexer_dispatch():
         # token -> Init function stem
         dispatch = dict(re.findall(r'czLexer\s*==\s*"([^"]+)"\s*\)\s*\n\s*Init_(\w+)_Editor',
                                    chain.group(1)))
-        # Init function stem -> (Lexilla lexer name, languages.json id)
+        # Init function stem -> (Lexilla lexer name, languages.json id, colour table)
         initialisers = {}
         for m in re.finditer(r"void\s+\w+::Init_(\w+)_Editor\([^)]*\)\s*\n\{(.*?)\n\}", src, re.S):
-            stem, body = m.group(1), m.group(2)
+            stem, body = m.group(1), strip_comments(m.group(2))
             lexers = re.findall(r'SetLexer\(\s*"([^"]*)"\s*\)', body)
             ids = re.findall(r'ApplyLanguageMetadata\(\s*\w+\s*,\s*"([^"]*)"\s*\)', body)
             if len(lexers) != 1 or len(ids) > 1:
                 raise SystemExit("%s: Init_%s_Editor has %d SetLexer and %d "
                                  "ApplyLanguageMetadata calls; expected 1 and 0-1"
                                  % (os.path.basename(path), stem, len(lexers), len(ids)))
-            initialisers[stem] = (lexers[0], ids[0] if ids else None)
+            # Which g_rgb_Syntax_* table it walks. Usually the language's own, but
+            # NOT always - Init_xml_Editor walks html's, because Scintilla's xml
+            # lexer emits the SCE_H_* family. A frontend that assumes the table is
+            # named after the language colours .xml files from a table the
+            # shipping app never applies.
+            tables = set(re.findall(r"g_rgb_Syntax_(\w+)\s*\[", body))
+            if len(tables) > 1:
+                raise SystemExit("%s: Init_%s_Editor walks %d different colour tables (%s)"
+                                 % (os.path.basename(path), stem, len(tables), sorted(tables)))
+            initialisers[stem] = (lexers[0], ids[0] if ids else None,
+                                  tables.pop() if tables else None)
         per_source[os.path.basename(path)] = (dispatch, initialisers)
 
     (name_a, a), (name_b, b) = sorted(per_source.items())
@@ -211,9 +221,12 @@ def parse_lexer_dispatch():
 
     # Every language with an initialiser gets its Lexilla name, whether or not any
     # file extension reaches it: `makefile` is selected by filename, not extension.
-    for stem, (lexer, lang_id) in sorted(initialisers.items()):
+    for stem, (lexer, lang_id, table) in sorted(initialisers.items()):
         if lang_id is None:
             continue                        # Init_text_Editor - the plain-text fallback
+        if table is None:
+            raise SystemExit("Init_%s_Editor sets language metadata but walks no colour "
+                             "table" % stem)
         if lang_id in out and out[lang_id]["lexer"] != lexer:
             # Two initialisers, one language id, two different Lexilla lexers. One
             # field cannot hold both, and silently keeping either would change how
@@ -221,7 +234,9 @@ def parse_lexer_dispatch():
             raise SystemExit("language %r is initialised twice with different lexers "
                              "(%r and %r); languages.json cannot represent that"
                              % (lang_id, out[lang_id]["lexer"], lexer))
-        out[lang_id] = {"extensions": "", "lexer": lexer}
+        out[lang_id] = {"extensions": "", "lexer": lexer, "styleTable": table}
+        if table != lang_id:
+            notes.append("%s is coloured from the %r table, not its own" % (lang_id, table))
 
     for index, ext in enumerate(extensions):
         token = tokens[index]
@@ -258,6 +273,205 @@ def parse_lexer_dispatch():
     return out, notes
 
 
+def strip_comments(text):
+    """Remove // and /* */ comments, leaving string literals alone.
+
+    Needed because Init_html_Editor carries a commented-out attribute rule that
+    ends `else */if (...)`. A scanner that sees that `else` reads the chain
+    structure wrongly; worse, a scanner that sees the commented-out block would
+    make SCE_H_ATTRIBUTE bold and italic in ui-qt/ when Windows renders it plain.
+    The disabled rule must stay disabled.
+    """
+    out = []
+    i = 0
+    while i < len(text):
+        two = text[i:i + 2]
+        if two == "//":
+            i = text.find("\n", i)
+            if i < 0:
+                break
+        elif two == "/*":
+            end = text.find("*/", i + 2)
+            i = len(text) if end < 0 else end + 2
+        elif text[i] in "\"'":
+            quote = text[i]
+            out.append(text[i])
+            i += 1
+            while i < len(text) and text[i] != quote:
+                if text[i] == "\\":
+                    out.append(text[i])
+                    i += 1
+                if i < len(text):
+                    out.append(text[i])
+                    i += 1
+            if i < len(text):
+                out.append(text[i])
+                i += 1
+        else:
+            out.append(text[i])
+            i += 1
+    return "".join(out)
+
+
+def _split_top_level_branches(body):
+    """The if / else if / else chains of a loop body, as (kind, condition, block).
+
+    A brace scanner rather than a regex: the blocks nest, and a regex that
+    "works" on today's 13 functions is a regex that silently mis-reads the
+    fourteenth. Returns branches in source order; `kind` is 'if', 'elseif' or
+    'else', and a new 'if' starts a new chain.
+    """
+    branches = []
+    i = 0
+    while i < len(body):
+        m = re.compile(r"\b(else\s+if|else|if)\b").search(body, i)
+        if m is None:
+            break
+        kind = {"if": "if", "else": "else", "else if": "elseif"}[
+            re.sub(r"\s+", " ", m.group(1))]
+
+        cursor = m.end()
+        condition = ""
+        if kind in ("if", "elseif"):
+            open_paren = body.find("(", cursor)
+            if open_paren < 0:
+                break
+            depth, j = 0, open_paren
+            while j < len(body):
+                if body[j] == "(":
+                    depth += 1
+                elif body[j] == ")":
+                    depth -= 1
+                    if depth == 0:
+                        break
+                j += 1
+            condition = body[open_paren + 1:j]
+            cursor = j + 1
+
+        open_brace = body.find("{", cursor)
+        if open_brace < 0 or body[cursor:open_brace].strip():
+            # A braceless branch body. None exist today; refusing beats guessing.
+            raise SystemExit("unbraced %s branch in a lexer initialiser - this parser "
+                             "only handles braced blocks" % kind)
+        depth, j = 0, open_brace
+        while j < len(body):
+            if body[j] == "{":
+                depth += 1
+            elif body[j] == "}":
+                depth -= 1
+                if depth == 0:
+                    break
+            j += 1
+        branches.append((kind, condition, body[open_brace + 1:j]))
+        i = j + 1
+    return branches
+
+
+ATTRIBUTE_MESSAGES = {"SCI_STYLESETBOLD": "bold",
+                      "SCI_STYLESETITALIC": "italic",
+                      "SCI_STYLESETUNDERLINE": "underline"}
+
+
+def parse_style_attributes(styles_by_language, sce):
+    """Which styles the MFC lexer initialisers render bold, italic or underlined.
+
+    This lives in neither colour header: it is an if-chain inside each
+    Init_<x>_Editor, applied per style constant as the colour table is walked.
+    The JSON carries colour and nothing else, so ui-qt/ renders Python keywords
+    at normal weight where the Windows build renders them bold.
+
+    Extraction SIMULATES the chains rather than pattern-matching them, because
+    the shapes differ: Init_python_Editor has two independent `if` chains, so its
+    SCE_P_WORD takes the first chain's bold and then falls to the second chain's
+    else. Anything that assumed one chain would get that wrong and look right.
+
+    Attributes are theme-independent - the 13 functions are byte-identical
+    between EditorLexerLight.cpp and EditorLexerDark.cpp once the namespace is
+    normalised - so they belong with the language, not with a theme.
+
+    Matching is NUMERIC, because `iItem == SCE_H_TAG` is a comparison of numbers
+    and the initialisers exploit that. Init_xml_Editor tests SCE_H_* constants
+    while walking a table written in SCE_C_* names: at runtime Scintilla's xml
+    lexer emits the H family, so the H names are the meaningful ones and the
+    table's C names are labels on the same integers. Matching by name instead
+    would attribute nine styles that the running program never touches, and miss
+    the three it does. See doc/PORTING.md 6e.
+    """
+    per_source = {}
+    for path in LEXER_SOURCES:
+        src = read(path)
+        found = {}
+        for m in re.finditer(r"void\s+\w+::Init_(\w+)_Editor\([^)]*\)\s*\n\{(.*?)\n\}", src, re.S):
+            stem, body = m.group(1), m.group(2)
+            if not any(msg in body for msg in ATTRIBUTE_MESSAGES):
+                continue
+
+            language = re.search(r"ApplyLanguageMetadata\(\s*\w+\s*,\s*\"([^\"]*)\"\s*\)", body)
+            table = re.search(r"g_rgb_Syntax_(\w+)\s*\[", body)
+            if language is None or table is None:
+                raise SystemExit("Init_%s_Editor applies style attributes but names no "
+                                 "language or no colour table" % stem)
+
+            loop = re.search(r"for\s*\([^)]*\)\s*\{(.*)\n\t\}", strip_comments(body), re.S)
+            if loop is None:
+                raise SystemExit("Init_%s_Editor: cannot find the colour-table loop" % stem)
+            branches = _split_top_level_branches(loop.group(1))
+
+            # Group the branches back into chains: a new 'if' starts one.
+            chains, current = [], []
+            for branch in branches:
+                if branch[0] == "if" and current:
+                    chains.append(current)
+                    current = []
+                current.append(branch)
+            if current:
+                chains.append(current)
+
+            # Now run every style constant of this language's table through them.
+            symbols = [symbol for symbol, _ in styles_by_language.get(table.group(1), [])]
+            # NB: table.group(1), not the language id - see parse_lexer_dispatch.
+            if not symbols:
+                raise SystemExit("Init_%s_Editor walks g_rgb_Syntax_%s, which has no styles"
+                                 % (stem, table.group(1)))
+            for symbol in symbols:
+                if symbol not in sce:
+                    raise SystemExit("style %r in g_rgb_Syntax_%s is not defined in "
+                                     "SciLexer.h" % (symbol, table.group(1)))
+                applied = set()
+                for chain in chains:
+                    for kind, condition, block in chain:
+                        wanted = set()
+                        for name in re.findall(r"\bSCE_[A-Z0-9_]+\b", condition):
+                            if name not in sce:
+                                raise SystemExit("Init_%s_Editor tests %r, which is not "
+                                                 "defined in SciLexer.h" % (stem, name))
+                            wanted.add(sce[name])
+                        matches = (kind == "else" or sce[symbol] in wanted)
+                        if not matches:
+                            continue
+                        for message, attribute in ATTRIBUTE_MESSAGES.items():
+                            # `..., iItem, 1)` sets it; the codebase never passes 0,
+                            # and a 0 would mean the opposite, so check the value.
+                            for value in re.findall(
+                                    r"%s\s*,\s*iItem\s*,\s*(\d+)" % message, block):
+                                if value == "1":
+                                    applied.add(attribute)
+                                else:
+                                    raise SystemExit(
+                                        "Init_%s_Editor sets %s to %s, which this "
+                                        "extraction does not model" % (stem, message, value))
+                        break                   # first matching branch of the chain wins
+                if applied:
+                    found.setdefault(language.group(1), {})[symbol] = sorted(applied)
+        per_source[os.path.basename(path)] = found
+
+    (name_a, a), (name_b, b) = sorted(per_source.items())
+    if a != b:
+        raise SystemExit("%s and %s apply different style attributes - the two themes have "
+                         "drifted apart" % (name_a, name_b))
+    return a
+
+
 _DISPATCH_CACHE = []
 
 
@@ -270,8 +484,33 @@ def cached_dispatch():
 
 def dispatch_fields_for(lang_id):
     mapping, _ = cached_dispatch()
-    entry = mapping.get(lang_id, {"extensions": "", "lexer": ""})
-    return {"extensions": entry["extensions"], "lexer": entry["lexer"]}
+    entry = mapping.get(lang_id, {"extensions": "", "lexer": "", "styleTable": ""})
+    return {"extensions": entry["extensions"], "lexer": entry["lexer"],
+            "styleTable": entry.get("styleTable") or ""}
+
+
+_ATTRIBUTE_CACHE = []
+
+
+def cached_style_attributes():
+    """{language id: [{"style", "value", "bold"/"italic"/"underline"}]}, from the C++."""
+    if not _ATTRIBUTE_CACHE:
+        sce = parse_sce_constants()
+        parsed = parse_style_attributes(parse_header(LIGHT_H)["styles"], sce)
+        out = {}
+        for lang, styles in parsed.items():
+            rows = []
+            for symbol, attributes in styles.items():
+                if symbol not in sce:
+                    raise SystemExit("style %r in %r is not defined in SciLexer.h"
+                                     % (symbol, lang))
+                row = {"style": symbol, "value": sce[symbol]}
+                for attribute in attributes:
+                    row[attribute] = True
+                rows.append(row)
+            out[lang] = sorted(rows, key=lambda r: (r["value"], r["style"]))
+        _ATTRIBUTE_CACHE.append(out)
+    return _ATTRIBUTE_CACHE[0]
 
 
 def dispatch_sources_present():
@@ -299,12 +538,23 @@ def sync_dispatch_fields(languages_path):
     with open(languages_path, encoding="utf-8") as f:
         doc = json.load(f)
 
+    attributes = cached_style_attributes()
     changed = []
     for entry in doc.get("languages", []):
         for field, value in sorted(dispatch_fields_for(entry["id"]).items()):
             if entry.get(field) != value:
                 changed.append("%s.%s -> %r" % (entry["id"], field, value))
             entry[field] = value
+        # Bold/italic/underline live in the Init_* if-chains, in neither colour
+        # header, and are identical between the two themes - so they belong to
+        # the language rather than to a theme. Absent means "nothing special".
+        rows = attributes.get(entry["id"], [])
+        if entry.get("styleAttributes", []) != rows:
+            changed.append("%s.styleAttributes -> %d style(s)" % (entry["id"], len(rows)))
+        if rows:
+            entry["styleAttributes"] = rows
+        else:
+            entry.pop("styleAttributes", None)
 
     unknown = sorted(set(mapping) - {e["id"] for e in doc.get("languages", [])})
     if unknown:
@@ -336,7 +586,7 @@ def check_lexer_dispatch(languages_doc):
         mapping, _ = cached_dispatch()
         for lang, want in sorted(mapping.items()):
             got = by_id.get(lang, {})
-            for field in ("extensions", "lexer"):
+            for field in ("extensions", "lexer", "styleTable"):
                 if got.get(field) != want[field]:
                     problems.append("%s.%s: JSON says %r, the C++ says %r"
                                     % (lang, field, got.get(field), want[field]))
@@ -344,6 +594,15 @@ def check_lexer_dispatch(languages_doc):
             if lang not in mapping and (entry.get("extensions") or entry.get("lexer")):
                 problems.append("%s carries extensions/lexer but no C++ initialiser sets them"
                                 % lang)
+
+        for lang, rows in sorted(cached_style_attributes().items()):
+            got = by_id.get(lang, {}).get("styleAttributes", [])
+            if got != rows:
+                problems.append("%s.styleAttributes: JSON has %d style(s), the C++ has %d"
+                                % (lang, len(got), len(rows)))
+        for lang, entry in sorted(by_id.items()):
+            if entry.get("styleAttributes") and lang not in cached_style_attributes():
+                problems.append("%s carries styleAttributes but the C++ sets none" % lang)
 
         # Re-counted from the raw header with a different expression than
         # parse_lexer_dispatch() uses. Counting TOKENS rather than rows is the
@@ -403,9 +662,13 @@ def check_lexer_dispatch(languages_doc):
             problems.append("hand-checked %r dispatch: %r != %r" % (lang, actual, want))
 
     if not problems:
+        n_attr_styles = sum(len(e.get("styleAttributes", [])) for e in by_id.values())
+        n_attr_langs = sum(1 for e in by_id.values() if e.get("styleAttributes"))
         print("lexer dispatch: %d file extensions over %d languages, matching the C++"
               % (len(seen_token), n_mapped if dispatch_sources_present() else
                  sum(1 for e in by_id.values() if e.get("extensions"))))
+        print("style attributes: %d bold/italic style(s) over %d languages"
+              % (n_attr_styles, n_attr_langs))
     return problems
 
 

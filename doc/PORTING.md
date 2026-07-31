@@ -955,6 +955,89 @@ cmake -S . -B build -G Ninja && cmake --build build --parallel
 
 ---
 
+## 6e. The second pull: weight, slant, and the table a language is actually coloured from
+
+§6d extracted *which lexer* a file gets. This is *how its styles are drawn* — and it found a
+live divergence the alpha shipped with.
+
+**The visible gap.** The Windows build draws Python keywords bold, class and function names
+bold-italic, and strings italic. The Qt alpha drew all of them at normal weight, because
+`theme-*.json` carries colour and nothing else. Weight and slant are an if-chain inside each
+`Init_<x>_Editor`, applied per style constant as the colour table is walked — **13 languages,
+75 styles**.
+
+**They belong to the language, not to a theme.** The 13 chains are byte-identical between
+`EditorLexerLight.cpp` and `EditorLexerDark.cpp` once the namespace is normalised, so
+`languages.json` gains a `styleAttributes` array rather than both theme files gaining a
+duplicate — the same deduplication the original extraction made.
+
+**Three things reading it found that no count would have.**
+
+**1. The comparisons are numeric, and one initialiser depends on that.** `iItem == SCE_H_TAG`
+compares integers. `Init_xml_Editor` tests `SCE_H_*` constants while its loop variable holds
+values from a table written in `SCE_C_*` names — legitimate, because Scintilla's `xml` lexer
+emits the H family. An extraction that matched constant *names* would have attributed nine
+styles the running program never touches. The extractor resolves every name through
+`SciLexer.h` and compares numbers.
+
+**2. `xml` is coloured from `html`'s table — and `ui-qt/` was not.** `Init_xml_Editor` walks
+`g_rgb_Syntax_html` (**111** styles), not `g_rgb_Syntax_xml` (**28**). The alpha looked the
+table up by language id, so every `.xml` file in the Qt build was coloured from a table the
+shipping app applies to nothing, with C-family style numbers against an H-family lexer.
+`languages.json` gains `styleTable` — the same shape as §6d's `lexer` field, for the same
+reason: **the name of a thing is not the name of the thing it uses.** `xml` is the only
+language affected; the other 41 use their own.
+
+**3. Two colour tables are dead.** `g_rgb_Syntax_xml` (28 styles) and `g_rgb_Syntax_python_2`
+(16) are defined and walked by no initialiser. `xml`'s is dead precisely *because* of finding
+2. They are data-only and left in place — deleting them changes what Windows compiles, so it
+belongs with the Phase 4 lexer rewrite, not here.
+
+Had the rule ever run against `xml`'s own table, **3 of its 9 constants** would have matched
+anything at all; the other six are ≥ 56 and that table stops at 27. Against the table it
+really walks, all nine fire.
+
+**Also preserved: a rule that is switched off.** `Init_html_Editor` carries a commented-out
+block that would make `SCE_H_ATTRIBUTE` bold and italic. The extractor strips comments before
+parsing, so the rule stays off and `.html` attributes stay plain — as they are on Windows. A
+parser that ignored comments would have found the `else */if` and mis-read the whole chain.
+
+**Equivalence, again by differential test.** `core/tests/TestStyleAttributes.cpp` transcribes
+all 13 chains from `EditorLexerDark.cpp` — structure included, because **two of them
+(`python`, `r`) are not one if/else-if chain but two independent `if` chains**, so a style
+matched by the first still falls through the second to its `else`. **1,238 styles compared, 0
+disagreements.** The transcription reads no JSON and shares no code with the Python extractor.
+
+Reproduce:
+
+```bash
+# 13 languages, 75 styles, and the JSON still reproduces the C++
+python3 tools/extract_language_data.py --verify | grep 'style attributes'
+
+# which language is coloured from another's table
+python3 tools/extract_language_data.py 2>&1 | grep 'coloured from'
+
+# table sizes, dead tables, and how much of the xml rule could ever have fired
+python3 - <<'PY'
+import sys, re; sys.path.insert(0, 'tools')
+import extract_language_data as x
+sce = x.parse_sce_constants(); st = x.parse_header(x.LIGHT_H)['styles']
+src = x.strip_comments(x.read('src/EditorLexerDark.cpp'))
+body = re.search(r'void\s+\w+::Init_xml_Editor\([^)]*\)\s*\n\{(.*?)\n\}', src, re.S).group(1)
+names = re.findall(r'SCE_[A-Z0-9_]+', re.search(r'if\s*\((.*?)\)\s*\{', body, re.S).group(1))
+own = {sce[s] for s, _ in st['xml']}; html = {sce[s] for s, _ in st['html']}
+print('xml rule constants:', len(names))
+print('  match xml\'s own table :', sum(1 for n in names if sce[n] in own))
+print('  match the html table  :', sum(1 for n in names if sce[n] in html))
+print('table sizes: xml=%d html=%d python_2=%d' % (len(st['xml']), len(st['html']), len(st['python_2'])))
+PY
+
+# the differential test
+ctest --test-dir build -R core.StyleAttributes --output-on-failure
+```
+
+---
+
 ## 7. How to reproduce these numbers
 
 ```bash
