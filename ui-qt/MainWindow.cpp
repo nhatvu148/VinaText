@@ -58,6 +58,13 @@ CMainWindow::CMainWindow(const CEditorData& data, QWidget* pParent)
 	{
 		UpdateStatusBar();
 		UpdateWindowTitle();
+		if (!m_pFindBar->isHidden())
+		{
+			// The highlights belong to the document that was searched. Re-running
+			// the pattern here is what stops the count in the bar from describing
+			// a tab the user is no longer looking at.
+			OnPatternChanged();
+		}
 	});
 	connect(m_pFindBar, &CFindBar::FindRequested, this, &CMainWindow::OnFind);
 	connect(m_pFindBar, &CFindBar::PatternChanged, this, &CMainWindow::OnPatternChanged);

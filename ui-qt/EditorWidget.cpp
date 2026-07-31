@@ -55,6 +55,12 @@ CEditorWidget::CEditorWidget(const CEditorData& data, QWidget* pParent)
 	Send(SCI_SETINDICATORCURRENT, FIND_INDICATOR);
 	Send(SCI_INDICSETSTYLE, FIND_INDICATOR, INDIC_ROUNDBOX);
 	Send(SCI_INDICSETALPHA, FIND_INDICATOR, 80);
+
+	// The margin is sized for the line count, so it has to follow it. Without
+	// this, a document that grows past 999 lines clips its own line numbers until
+	// something else re-styles the editor.
+	connect(this, &ScintillaEditBase::linesAdded,
+		this, [this](Scintilla::Position) { UpdateLineNumberMargin(); });
 }
 
 QString CEditorWidget::GetDisplayName() const
