@@ -544,6 +544,55 @@ int main(int argc, char** argv)
 		Check(pInfo == nullptr, "cmakelists.txt (lower case) is not the cmake special case");
 	}
 
+	//----------------------------------------------------------------------
+	// Fold markers. CEditorCtrl::LoadEditorSettings (src/Editor.cpp:193-207)
+	// picks one by VinaText TOKEN; languages.json carries it by language id. The
+	// token list is transcribed here, so the re-keying is checked rather than
+	// trusted - and the trap is that five cpp-LEXED languages are absent from the
+	// list and must fall through to the default.
+	//----------------------------------------------------------------------
+	{
+		const char* const kCppMarkerTokens[] = {
+			"cpp", "c", "cs", "java", "javascript", "typescript", "phpscript",
+			"rust", "kix", "markdown", "css", "bash" };
+		const char* const kHtmlMarkerTokens[] = { "hypertext", "xml" };
+
+		size_t nMarkerChecks = 0;
+		for (size_t i = 0; i < nDispatchRows; ++i)
+		{
+			const std::string strToken = ORIGINAL_DISPATCH[i]._Token;
+			std::string strExpected = " --- ";			// FOLDED_MARKER_TEXT
+			for (size_t j = 0; j < sizeof(kCppMarkerTokens) / sizeof(kCppMarkerTokens[0]); ++j)
+			{
+				if (strToken == kCppMarkerTokens[j]) { strExpected = " { ... } "; }
+			}
+			for (size_t j = 0; j < sizeof(kHtmlMarkerTokens) / sizeof(kHtmlMarkerTokens[0]); ++j)
+			{
+				if (strToken == kHtmlMarkerTokens[j]) { strExpected = " < ... > "; }
+			}
+
+			const Core::SLanguageInfo* pInfo =
+				languages.FindById(ORIGINAL_DISPATCH[i]._LanguageId);
+			const std::string strActual = pInfo ? pInfo->_FoldMarker : std::string();
+			++nMarkerChecks;
+			Check(strActual == strExpected,
+				std::string(ORIGINAL_DISPATCH[i]._LanguageId) + " fold marker: got '"
+					+ strActual + "', the MFC original gives '" + strExpected + "'");
+		}
+		Check(nMarkerChecks == 42, "checked the fold marker of every dispatched language");
+
+		// The trap, named: lexed as cpp, folded as plain text.
+		const char* const kCppLexedButPlainFold[] = {
+			"go", "protobuf", "autoit", "resource", "vcxproject" };
+		for (size_t i = 0; i < sizeof(kCppLexedButPlainFold) / sizeof(kCppLexedButPlainFold[0]); ++i)
+		{
+			const Core::SLanguageInfo* pInfo = languages.FindById(kCppLexedButPlainFold[i]);
+			Check(pInfo != nullptr && pInfo->_LexerName == "cpp" && pInfo->_FoldMarker == " --- ",
+				std::string(kCppLexedButPlainFold[i])
+					+ " is lexed as cpp but folds with the plain-text marker");
+		}
+	}
+
 	// ExtensionOf is documented behaviour, not an implementation detail: the Qt
 	// frontend relies on it agreeing with QFileInfo::suffix().
 	Check(Core::CLanguageTable::ExtensionOf("main.cpp") == "cpp", "ExtensionOf: main.cpp");

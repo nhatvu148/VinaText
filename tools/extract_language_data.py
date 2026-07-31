@@ -39,6 +39,7 @@ DARK_H = os.path.join(ROOT, "src", "EditorColorDark.h")
 COMMON_DEF_H = os.path.join(ROOT, "src", "EditorCommonDef.h")
 LEXER_SOURCES = [os.path.join(ROOT, "src", "EditorLexerLight.cpp"),
                  os.path.join(ROOT, "src", "EditorLexerDark.cpp")]
+EDITOR_CPP = os.path.join(ROOT, "src", "Editor.cpp")
 SCILEXER_H = os.path.join(ROOT, "include", "scintilla", "SciLexer.h")
 # Runtime data lives under Packages/, matching the existing layout the app already
 # uses (PathUtils::GetVinaTextPackagePath -> "Packages\"). Today that tree only
@@ -260,6 +261,8 @@ def parse_lexer_dispatch():
             out[lang_id]["extensions"] += "|" + ext
         else:
             out[lang_id]["extensions"] = ext
+        # Kept only so parse_fold_markers can re-key its chain; never emitted.
+        out[lang_id]["token"] = token
         if token != lang_id:
             notes.append("%s is written %r in arrLexerNames" % (lang_id, token))
 
@@ -472,6 +475,55 @@ def parse_style_attributes(styles_by_language, sce):
     return a
 
 
+def parse_fold_markers(dispatch):
+    """What a folded block shows when it is collapsed: " { ... } ", " < ... > " or " --- ".
+
+    CEditorCtrl::LoadEditorSettings picks one with an if-chain over the VinaText
+    lexer TOKEN (src/Editor.cpp:193-207) - the third of the three name spaces in
+    6d, the one deliberately not carried into the JSON. So the chain is read here
+    and re-keyed onto language ids, which is the only name a second frontend has.
+
+    Keying on the Lexilla lexer name instead would be wrong and would look right:
+    `go`, `protobuf`, `autoit`, `resource` and `vcxproject` are all lexed as cpp,
+    and none of them is in the chain's list - they fold with " --- ".
+
+    Returns {language id: marker string}, omitting the default.
+    """
+    src = strip_comments(read(EDITOR_CPP))
+    markers = {}
+    for m in re.finditer(r'#define\s+(FOLDED_MARKER_\w+)\s+"([^"]*)"', read(COMMON_DEF_H)):
+        markers[m.group(1)] = m.group(2)
+    if len(markers) != 3:
+        raise SystemExit("expected 3 FOLDED_MARKER_* defines in EditorCommonDef.h, found %d"
+                         % len(markers))
+
+    # The one chain that sets the DEFAULT fold text; SCI_TOGGLEFOLDSHOWTEXT
+    # elsewhere is a per-fold override and not what a newly opened file uses.
+    block = re.search(r"(if\s*\(\s*m_strLexerName\s*==.*?SCI_SETDEFAULTFOLDDISPLAYTEXT.*?"
+                      r"FOLDED_MARKER_TEXT[^;]*;\s*\})", src, re.S)
+    if block is None:
+        raise SystemExit("%s: cannot find the SCI_SETDEFAULTFOLDDISPLAYTEXT chain" % EDITOR_CPP)
+
+    token_to_marker = {}
+    for branch in re.finditer(r"(if\s*\((.*?)\)|else)\s*\{([^}]*)\}", block.group(1), re.S):
+        condition, body = branch.group(2) or "", branch.group(3)
+        used = re.search(r"(FOLDED_MARKER_\w+)", body)
+        if used is None:
+            continue
+        for token in re.findall(r'_T\(\s*"([^"]*)"\s*\)', condition):
+            token_to_marker[token] = markers[used.group(1)]
+
+    # dispatch maps id -> {..., "token": ...}; invert it to re-key.
+    out = {}
+    for lang_id, entry in dispatch.items():
+        token = entry.get("token")
+        if token is not None and token in token_to_marker:
+            out[lang_id] = token_to_marker[token]
+    if not out:
+        raise SystemExit("the fold-marker chain matched no language token at all")
+    return out, markers["FOLDED_MARKER_TEXT"]
+
+
 _DISPATCH_CACHE = []
 
 
@@ -485,8 +537,22 @@ def cached_dispatch():
 def dispatch_fields_for(lang_id):
     mapping, _ = cached_dispatch()
     entry = mapping.get(lang_id, {"extensions": "", "lexer": "", "styleTable": ""})
+    fold, default_marker = cached_fold_markers()
     return {"extensions": entry["extensions"], "lexer": entry["lexer"],
-            "styleTable": entry.get("styleTable") or ""}
+            "styleTable": entry.get("styleTable") or "",
+            # Emitted for every language, default included: a frontend should not
+            # have to know a hidden default to render a folded block.
+            "foldMarker": fold.get(lang_id, default_marker)}
+
+
+_FOLD_CACHE = []
+
+
+def cached_fold_markers():
+    if not _FOLD_CACHE:
+        mapping, _ = cached_dispatch()
+        _FOLD_CACHE.append(parse_fold_markers(mapping))
+    return _FOLD_CACHE[0]
 
 
 _ATTRIBUTE_CACHE = []
@@ -584,9 +650,10 @@ def check_lexer_dispatch(languages_doc):
 
     if dispatch_sources_present():
         mapping, _ = cached_dispatch()
-        for lang, want in sorted(mapping.items()):
+        for lang in sorted(mapping):
+            want = dispatch_fields_for(lang)
             got = by_id.get(lang, {})
-            for field in ("extensions", "lexer", "styleTable"):
+            for field in ("extensions", "lexer", "styleTable", "foldMarker"):
                 if got.get(field) != want[field]:
                     problems.append("%s.%s: JSON says %r, the C++ says %r"
                                     % (lang, field, got.get(field), want[field]))
@@ -860,8 +927,8 @@ def json_only_checks(languages_doc, themes):
         lang_id = entry.get("id") or "<entry #%d, no id>" % index
         if not entry.get("id"):
             problems.append("%s: language entry with empty or missing id" % lang_id)
-        for field in ("name", "extension", "extensions", "lexer",
-                      "commentLine", "commentStart", "commentEnd", "keywords"):
+        for field in ("name", "extension", "extensions", "lexer", "styleTable",
+                      "foldMarker", "commentLine", "commentStart", "commentEnd", "keywords"):
             if field not in entry:
                 problems.append("%s: missing field %r" % (lang_id, field))
                 continue
