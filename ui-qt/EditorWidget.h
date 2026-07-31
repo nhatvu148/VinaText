@@ -77,6 +77,7 @@ public:
 private:
 	void ApplyEditorStyles(const Core::CEditorTheme& theme);
 	void ApplyLanguageStyles(const Core::CEditorTheme& theme);
+	void ApplyFoldMargin(const Core::CEditorTheme& theme);
 	void UpdateLineNumberMargin();
 	void DetectEol(const QByteArray& utf8);
 

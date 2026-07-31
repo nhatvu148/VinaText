@@ -65,6 +65,10 @@ namespace Core
 		// The Lexilla lexer name to pass to CreateLexer. Frequently NOT _Id: the
 		// shipping app lexes .java, .js, .cs and .json with the "cpp" lexer.
 		std::string	_LexerName;
+		// What a collapsed fold shows: " { ... } ", " < ... > " or " --- ". Keyed
+		// by language, NOT by lexer: go, protobuf, autoit, resource and vcxproject
+		// are all lexed as cpp and all fold with " --- ".
+		std::string	_FoldMarker;
 		// Which theme style table colours this language. Usually _Id, but xml is
 		// coloured from html's table - Scintilla's xml lexer emits the SCE_H_*
 		// family, so xml's own SCE_C_* table is never applied to anything.

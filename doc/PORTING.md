@@ -1038,6 +1038,64 @@ ctest --test-dir build -R core.StyleAttributes --output-on-failure
 
 ---
 
+## 6f. Folding, and a third name space that had to be re-keyed
+
+Phase 4's next item, and the third time the same lesson arrived in a new costume.
+
+**What folding needed.** `CEditorCtrl::LoadEditorSettings` sets ten `SCI_SETPROPERTY`
+fold flags, seven fold marker shapes, the margin colours, and the text a collapsed block
+shows. All of it transcribes cleanly into `ui-qt/EditorWidget.cpp` except the last, which is
+data.
+
+**The marker shapes are the shipping default, not a choice.** The original branches four ways
+on `AppSettingMgr.m_FolderMarginStyle`; `src/AppSettings.h:115` ships `STYLE_TREE_BOX`, so
+that is the branch ported. The per-marker RGB literals inside it are **not** transcribed,
+because the original overwrites every one of them two lines later with the theme's
+`editorFolderForeColor` / `editorFolderBackColor`. Copying them would have been faithful to
+the text and wrong about the behaviour.
+
+**And the re-keying.** `SCI_SETDEFAULTFOLDDISPLAYTEXT` is chosen by an if-chain over the
+**VinaText lexer token** (`src/Editor.cpp:193-207`) — §6d's name space (1), the one
+deliberately not carried into the JSON. So the extractor reads that chain and re-keys it onto
+language ids, which is the only name a second frontend has.
+
+| marker | languages |
+|---|---|
+| `" { ... } "` | 12 — bash, c, cpp, cs, css, java, javascript, json, markdown, php, rust, typescript |
+| `" < ... > "` | 2 — html, xml |
+| `" --- "` | the other 28 |
+
+**Keying on the Lexilla lexer name instead would be wrong, and would look right.** `go`,
+`protobuf`, `autoit`, `resource` and `vcxproject` are all lexed as `cpp` and none of them is
+in the chain's list — they fold with `" --- "`. That is now a named assertion in
+`core/tests/TestLanguageLookup.cpp` rather than a comment, and mutation-checked: setting
+`go`'s marker to the C++ one fails two checks.
+
+**Three fields extracted, three different keys.** `lexer` is keyed by what Lexilla calls the
+language, `styleTable` by which colour table the initialiser walks, `foldMarker` by the
+VinaText dispatch token. Nothing in the file names would have told you they differ; each was
+found by reading the code that consumes it.
+
+Reproduce:
+
+```bash
+# the mapping, re-keyed from Editor.cpp's chain onto language ids
+python3 - <<'PY'
+import sys; sys.path.insert(0, 'tools')
+import extract_language_data as x
+d, _ = x.parse_lexer_dispatch()
+fold, default = x.parse_fold_markers(d)
+by = {}
+for k, v in fold.items(): by.setdefault(v, []).append(k)
+for v, ks in sorted(by.items()): print('%-11r %d: %s' % (v, len(ks), sorted(ks)))
+print('%-11r %d (the default)' % (default, len(set(d) - set(fold))))
+PY
+
+ctest --test-dir build -R core.LanguageLookup --output-on-failure
+```
+
+---
+
 ## 7. How to reproduce these numbers
 
 ```bash

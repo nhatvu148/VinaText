@@ -192,6 +192,7 @@ namespace Core
 			info._Extension = ReadString(entry, "extension");
 			info._Extensions = ReadString(entry, "extensions");
 			info._LexerName = ReadString(entry, "lexer");
+			info._FoldMarker = ReadString(entry, "foldMarker");
 			info._StyleTable = ReadString(entry, "styleTable");
 			if (info._StyleTable.empty())
 			{

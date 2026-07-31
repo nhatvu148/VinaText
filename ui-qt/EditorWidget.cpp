@@ -32,6 +32,15 @@ namespace
 	// containers; 8 is the first of those.
 	const int FIND_INDICATOR = 8;
 
+	// Margin numbers, matching src/EditorCommonDef.h's SC_SETMARGINTYPE_*: line
+	// numbers, symbols, folding, left to right.
+	const int MARGIN_LINE_NUMBERS = 0;
+	const int MARGIN_SYMBOLS = 1;
+	const int MARGIN_FOLDING = 2;
+	// VINATEXT_MARGINWIDTH in src/EditorCommonDef.h (defined twice there,
+	// identically, at lines 42 and 43).
+	const int FOLD_MARGIN_WIDTH = 16;
+
 	// Matches SC_DEFAUFT_TAB_WIDTH in src/EditorCommonDef.h (sic).
 	const int DEFAULT_TAB_WIDTH = 4;
 
@@ -48,9 +57,25 @@ CEditorWidget::CEditorWidget(const CEditorData& data, QWidget* pParent)
 	// knows what the file on disk actually was.
 	Send(SCI_SETCODEPAGE, SC_CP_UTF8);
 	Send(SCI_SETTABWIDTH, DEFAULT_TAB_WIDTH);
-	Send(SCI_SETMARGINTYPEN, 0, SC_MARGIN_NUMBER);
-	Send(SCI_SETMARGINWIDTHN, 1, 0);		// no symbol margin in the alpha
-	Send(SCI_SETMARGINWIDTHN, 2, 0);		// no folding margin either
+	Send(SCI_SETMARGINTYPEN, MARGIN_LINE_NUMBERS, SC_MARGIN_NUMBER);
+	Send(SCI_SETMARGINWIDTHN, MARGIN_SYMBOLS, 0);	// bookmarks/breakpoints: Phase 5
+
+	// Folding. The margin is only given width for languages that have a lexer -
+	// CEditorCtrl does the same (src/Editor.cpp:354), and an always-visible empty
+	// fold margin on a plain-text file is just wasted space.
+	Send(SCI_SETMARGINTYPEN, MARGIN_FOLDING, SC_MARGIN_SYMBOL);
+	Send(SCI_SETMARGINMASKN, MARGIN_FOLDING, SC_MASK_FOLDERS);
+	Send(SCI_SETMARGINSENSITIVEN, MARGIN_FOLDING, 1);
+	Send(SCI_SETMARGINWIDTHN, MARGIN_FOLDING, 0);
+	// SC_AUTOMATICFOLD_CLICK makes Scintilla handle fold-margin clicks itself, and
+	// there is deliberately no marginClicked handler here: Editor::NotifyMarginClick
+	// returns as soon as it has folded (Editor.cxx:2675-2695), BEFORE building the
+	// notification at 2697, so any handler would be dead code. Verified by A/B with
+	// a synthetic click - 0 invocations with this flag, 1 without it, the fold
+	// toggling either way. Its built-in handling is also richer than a plain
+	// toggle: shift expands children, ctrl toggles them, shift+ctrl folds all.
+	Send(SCI_SETAUTOMATICFOLD, SC_AUTOMATICFOLD_CLICK | SC_AUTOMATICFOLD_SHOW
+		| SC_AUTOMATICFOLD_CHANGE);
 	Send(SCI_SETCARETLINEVISIBLE, 1);
 	Send(SCI_SETINDICATORCURRENT, FIND_INDICATOR);
 	Send(SCI_INDICSETSTYLE, FIND_INDICATOR, INDIC_ROUNDBOX);
@@ -197,6 +222,7 @@ void CEditorWidget::ApplyTheme(EEditorTheme theme)
 	const Core::CEditorTheme& colours = m_Data.GetTheme(theme);
 	ApplyEditorStyles(colours);
 	ApplyLanguageStyles(colours);
+	ApplyFoldMargin(colours);
 	UpdateLineNumberMargin();
 }
 
@@ -312,6 +338,76 @@ void CEditorWidget::ApplyLanguageStyles(const Core::CEditorTheme& theme)
 		}
 	}
 	Send(SCI_COLOURISE, 0, -1);
+}
+
+// The fold properties and marker shapes CEditorCtrl::LoadEditorSettings sets
+// (src/Editor.cpp:177-191 and 302-325). The marker SHAPES are the STYLE_TREE_BOX
+// branch, which is what AppSettings ships as the default
+// (src/AppSettings.h:115); the per-marker RGB literals in that branch are not
+// transcribed because the theme colours below overwrite every one of them two
+// lines later in the original.
+void CEditorWidget::ApplyFoldMargin(const Core::CEditorTheme& theme)
+{
+	static const char* const FOLD_PROPERTIES[][2] = {
+		{ "fold", "1" },
+		{ "fold.compact", "0" },
+		{ "fold.html", "1" },
+		{ "fold.html.preprocessor", "1" },
+		{ "fold.comment", "1" },
+		{ "fold.at.else", "1" },
+		{ "fold.flags", "1" },
+		{ "fold.preprocessor", "1" },
+		{ "styling.within.preprocessor", "1" },
+		{ "asp.default.language", "1" },
+	};
+	for (const char* const* property : FOLD_PROPERTIES)
+	{
+		Send(SCI_SETPROPERTY, reinterpret_cast<uptr_t>(property[0]),
+			reinterpret_cast<sptr_t>(property[1]));
+	}
+
+	static const struct { int _Marker; int _Shape; } FOLD_MARKERS[] = {
+		{ SC_MARKNUM_FOLDEROPEN,    SC_MARK_BOXMINUS },
+		{ SC_MARKNUM_FOLDER,        SC_MARK_BOXPLUS },
+		{ SC_MARKNUM_FOLDERSUB,     SC_MARK_VLINE },
+		{ SC_MARKNUM_FOLDERTAIL,    SC_MARK_LCORNER },
+		{ SC_MARKNUM_FOLDEREND,     SC_MARK_BOXPLUSCONNECTED },
+		{ SC_MARKNUM_FOLDEROPENMID, SC_MARK_BOXMINUSCONNECTED },
+		{ SC_MARKNUM_FOLDERMIDTAIL, SC_MARK_TCORNER },
+	};
+	Core::SColor fore, back, margin;
+	const bool bHaveFore = theme.ResolveColor("editorFolderForeColor", fore);
+	const bool bHaveBack = theme.ResolveColor("editorFolderBackColor", back);
+	for (const auto& marker : FOLD_MARKERS)
+	{
+		Send(SCI_MARKERDEFINE, marker._Marker, marker._Shape);
+		if (bHaveFore && bHaveBack)
+		{
+			Send(SCI_MARKERSETFORE, marker._Marker, ToScintillaColour(fore));
+			Send(SCI_MARKERSETBACK, marker._Marker, ToScintillaColour(back));
+		}
+	}
+	if (theme.ResolveColor("editorMarginBarColor", margin))
+	{
+		// The non-classic branch: AppSettings ships m_bUseFolderMarginClassic
+		// FALSE (src/AppSettings.h:95), so the margin takes the theme colour
+		// rather than the black/grey pair.
+		Send(SCI_SETFOLDMARGINCOLOUR, 1, ToScintillaColour(margin));
+		Send(SCI_SETFOLDMARGINHICOLOUR, 1, ToScintillaColour(margin));
+	}
+
+	// What a collapsed block shows. Comes from the language, because the chain
+	// this replaces keyed on a name ui-qt/ does not have - see doc/PORTING.md 6f.
+	const std::string strMarker = (m_pLanguage != nullptr) ? m_pLanguage->_FoldMarker : "";
+	if (!strMarker.empty())
+	{
+		Send(SCI_SETDEFAULTFOLDDISPLAYTEXT, 0, reinterpret_cast<sptr_t>(strMarker.c_str()));
+	}
+	Send(SCI_FOLDDISPLAYTEXTSETSTYLE, SC_FOLDDISPLAYTEXT_BOXED);
+
+	// No lexer means no fold levels, so the margin would only ever be blank.
+	Send(SCI_SETMARGINWIDTHN, MARGIN_FOLDING,
+		m_pLanguage != nullptr ? FOLD_MARGIN_WIDTH : 0);
 }
 
 void CEditorWidget::UpdateLineNumberMargin()
