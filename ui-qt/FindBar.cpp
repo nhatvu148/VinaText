@@ -10,9 +10,9 @@
 
 #include <QCheckBox>
 #include <QHBoxLayout>
-#include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
+#include <QShortcut>
 #include <QToolButton>
 
 CFindBar::CFindBar(QWidget* pParent)
@@ -64,6 +64,15 @@ CFindBar::CFindBar(QWidget* pParent)
 	{
 		connect(pBox, &QCheckBox::toggled, this, &CFindBar::PatternChanged);
 	}
+
+	// A shortcut rather than a keyPressEvent override: the key lands in the line
+	// edit, and whether an unhandled Escape propagates up to this widget is a
+	// detail of QLineEdit that Esc-to-close should not be resting on.
+	// WidgetWithChildren scopes it to this bar, so Escape does nothing while the
+	// editor has focus.
+	QShortcut* pEscape = new QShortcut(QKeySequence(Qt::Key_Escape), this);
+	pEscape->setContext(Qt::WidgetWithChildrenShortcut);
+	connect(pEscape, &QShortcut::activated, this, &CFindBar::CloseRequested);
 }
 
 QString CFindBar::GetPattern() const
@@ -104,14 +113,4 @@ void CFindBar::ShowStatus(const QString& strText, bool bIsMiss)
 	// user while they are still typing the word they are looking for.
 	m_pStatus->setStyleSheet(bIsMiss ? QStringLiteral("QLabel { color: #C0392B; }")
 									 : QString());
-}
-
-void CFindBar::keyPressEvent(QKeyEvent* pEvent)
-{
-	if (pEvent->key() == Qt::Key_Escape)
-	{
-		emit CloseRequested();
-		return;
-	}
-	QWidget::keyPressEvent(pEvent);
 }

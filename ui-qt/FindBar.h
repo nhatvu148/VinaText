@@ -42,9 +42,6 @@ signals:
 	void PatternChanged();
 	void CloseRequested();
 
-protected:
-	void keyPressEvent(QKeyEvent* pEvent) override;
-
 private:
 	QLineEdit*	m_pPattern = nullptr;
 	QCheckBox*	m_pMatchCase = nullptr;
