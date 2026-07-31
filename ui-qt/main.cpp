@@ -103,7 +103,7 @@ public:
 			reinterpret_cast<sptr_t>(content.constData()));
 		SendScintilla(m_pEditor, SCI_EMPTYUNDOBUFFER);
 
-		ApplyLanguageFor(QFileInfo(strPath).suffix());
+		ApplyLanguageForFile(QFileInfo(strPath).fileName());
 		setWindowTitle(QStringLiteral("%1 — VinaText Qt spike").arg(QFileInfo(strPath).fileName()));
 		return true;
 	}
@@ -186,29 +186,30 @@ private:
 	// Drives Scintilla from the JSON extracted in PR #3 - the same data the MFC
 	// build now reads. This is the part that proves the extraction was worth
 	// doing: identical bytes, two entirely different frontends.
-	void ApplyLanguageFor(const QString& strExtension)
+	// Takes a file name, not an extension: `Makefile` and `CMakeLists.txt` select a
+	// language with no extension at all, and core/ owns those rules so that both
+	// frontends apply them identically (doc/PORTING.md 6d).
+	void ApplyLanguageForFile(const QString& strFileName)
 	{
-		const Core::SLanguageInfo* pLang = nullptr;
-		for (const Core::SLanguageInfo& info : m_Languages.GetLanguages())
-		{
-			if (QString::fromStdString(info._Extension) == strExtension)
-			{
-				pLang = &info;
-				break;
-			}
-		}
+		const Core::SLanguageInfo* pLang =
+			m_Languages.DetectForFileName(strFileName.toStdString());
 		if (pLang == nullptr)
 		{
-			return;
+			return;					// plain text
 		}
 
+		// NOT pLang->_Id: the shipping app lexes .java, .js, .cs and .json with
+		// Lexilla's C++ lexer, and the theme style tables are written against
+		// whatever lexer it picked. Following the id instead would recolour twelve
+		// languages relative to the Windows build.
+		//
 		// One CreateLexer call, not two - each allocates an ILexer5 and the
 		// document only takes ownership of the one handed to SCI_SETILEXER.
-		void* pLexer = CreateLexer(pLang->_Id.c_str());
+		void* pLexer = CreateLexer(pLang->_LexerName.c_str());
 		if (pLexer == nullptr)
 		{
 			statusBar()->showMessage(
-				tr("Lexilla has no lexer named '%1'").arg(QString::fromStdString(pLang->_Id)));
+				tr("Lexilla has no lexer named '%1'").arg(QString::fromStdString(pLang->_LexerName)));
 			return;
 		}
 		SendScintilla(m_pEditor, SCI_SETILEXER, 0, reinterpret_cast<sptr_t>(pLexer));

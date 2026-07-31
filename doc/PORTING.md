@@ -836,6 +836,125 @@ wc -l src/PathUtil.cpp
 
 ---
 
+## 6d. The first demand-driven pull: which lexer does a file get?
+
+The first thing the Qt shell asked `core/` for under D9 was not on the §6c backlog at all. It
+was *"the user opened `main.cpp` — now what?"*, and answering it needed data that lives in
+neither of the files the backlog names.
+
+**The spike was matching on the wrong field.** `ui-qt/main.cpp` compared the file's suffix
+against `SLanguageInfo::_Extension`, the `extention` (sic) column extracted from
+`EditorColorLight.h`. That column is a display label, not a mapping: it reads `r` for autoit,
+`javascript` for javascript, `mk` for makefile. It happens to be right for `cpp`, `py` and
+`json`, which is exactly why the spike looked like it worked.
+
+Measured against the 112 real extensions, the spike's matching reached:
+
+| | |
+|---:|---|
+| **14** | the right language *and* the lexer the MFC app uses |
+| 13 | a language, but a different lexer — including `.r`, which selected **autoit**, because autoit's display label is `r` and it sorts first |
+| 85 | nothing at all — `.h`, `.js`, `.htm`, `.md`, `.rb`, `.rs`, `.pl` … all plain text |
+
+**A language is written three different ways between a file name and a styled document.**
+
+| # | where | written | example |
+|---|---|---|---|
+| 1 | `EditorCommonDef.h` — `arrLangExtensions[i]` ↔ `arrLexerNames[i]` | a VinaText dispatch token | `json` → `"kix"` |
+| 2 | `EditorLexerDark.cpp` — `LoadLexer`'s if-chain | an `Init_<x>_Editor` function | `"kix"` → `Init_json_Editor` |
+| 3 | that function's two string literals | the **Lexilla** lexer name, and the **languages.json id** | `SetLexer("cpp")`, `ApplyLanguageMetadata(_, "json")` |
+
+Only (3) is any use to a second frontend: `ui-qt/` needs the Lexilla name for `CreateLexer`
+and the id for keywords and a theme style table. The token in (1) is an MFC dispatch detail,
+so it is deliberately **not** carried into the data — it would be a fourth name for a thing
+that already has three.
+
+**What moved.** `languages.json` gained two fields per language, `extensions` and `lexer`,
+generated from the C++ by `tools/extract_language_data.py` and checked back against it by
+`--verify` on every CI run. `core/LanguageData` gained `FindByExtension`, `DetectForFileName`
+and `ExtensionOf`. **`src/` is unchanged** — the MFC app still walks its own arrays, exactly
+as the theme tables worked when they were extracted.
+
+| | |
+|---:|---|
+| 41 | extension rows in `EditorCommonDef.h`, over 42 languages (`makefile` is selected by file name, never by extension) |
+| 112 | file extensions, all distinct — no row shadows another |
+| 28 | distinct Lexilla lexers behind them |
+| 15 | languages whose lexer is **not** their own id — 12 of the 15 are lexed as C++; the other three are `flexlicense`→`python`, `html`→`hypertext`, `inno`→`asm` |
+| 24,389 | file names run through both implementations, **0 disagreements** |
+
+**`.json` is lexed as C++, and the port reproduces that.** `Init_json_Editor` calls
+`SetLexer("cpp")` while colouring with `SCE_JSON_*` constants — two different style families,
+so the theme's `json` table lands on whatever `SCE_C_*` styles happen to share those numbers.
+Lexilla *does* ship a `json` lexer, and the vendored copy has it. Switching to it would change
+what a `.json` file looks like in the shipping Windows app, so it is recorded here and left
+alone; the correct-looking change is a decision, not a port detail. Same for `.iss`, which is
+lexed as `asm` while Lexilla ships `inno`.
+
+**One more, found while transcribing:** `Init_flexlicense_Editor` fills its autocomplete list
+from `GetKeywords("resource")`, not `"flexlicense"` — a copy-paste from `Init_resource_Editor`
+directly below it. `.lic` files offer RC keywords. It affects autocomplete only, nothing in
+the alpha's scope, and is left for whoever touches those initialisers in Phase 4.
+
+**Equivalence is tested, not argued.** `core/tests/TestLanguageLookup.cpp` carries its own
+verbatim copy of `arrLangExtensions`, `arrLexerNames` and `LoadLexer`'s 42 branches, reads no
+JSON, and folds case with `towlower` rather than `core/`'s ASCII table — so the two sides share
+no data and no implementation. Both are run over every extension in every case permutation,
+both file-name special cases and their near misses, and every string of length ≤ 5 over
+`cpH.|1m`. The corpus and the test were mutation-checked: making the comparison
+case-sensitive, dropping the `Makefile` rule, and leaving the dot on the extension each fail
+it.
+
+**Two quirks are preserved deliberately**, because both frontends have to agree about them:
+`CMakeLists.txt` is matched case-**sensitively** and `Makefile` case-**insensitively**, which
+is what `CEditorCtrl::DetectFileLexer` does. So `cmakelists.txt` is plain text and `MAKEFILE`
+is a makefile.
+
+**Not pulled, and worth stating.** `CUserCustomizeData::GetSyntaxHighlightUserData()` replaces
+the whole built-in table when `Packages/data-packages/syntax-highlight-file-extension.dat` is
+non-empty. `ui-qt/` does not read it yet. That is `UserCustomizeData.cpp`, a Wave 2 file, and
+under D9 it waits until the shell needs it rather than being taken along for the ride.
+
+Reproduce:
+
+```bash
+# extension rows in the C++ table
+grep -cE '_T\("[^"]*"\),[[:space:]]*//' src/EditorCommonDef.h          # 41
+
+# what the extraction produced
+python3 -c "
+import json
+L=json.load(open('Packages/data-packages/languages.json'))['languages']
+toks=[t for e in L for t in e['extensions'].split('|') if t]
+print('languages:', len(L), '| with extensions:', sum(1 for e in L if e['extensions']))
+print('extension tokens:', len(toks), '| distinct:', len(set(toks)))
+d=[e for e in L if e['lexer'] and e['lexer'] != e['id']]
+print('lexer != id:', len(d), '| of which cpp:', sum(1 for e in d if e['lexer']=='cpp'))
+print('distinct lexers:', len({e['lexer'] for e in L if e['lexer']}))
+"
+
+# what the spike's old _Extension matching would have reached
+python3 -c "
+import json
+L=json.load(open('Packages/data-packages/languages.json'))['languages']
+by_label={}
+for e in L: by_label.setdefault(e['extension'], e)
+toks=[t for e in L for t in e['extensions'].split('|') if t]
+ok=[t for t in toks if t in by_label and by_label[t]['lexer']==by_label[t]['id']]
+bad=[t for t in toks if t in by_label and by_label[t]['lexer']!=by_label[t]['id']]
+print('right lexer:', len(ok), '| wrong lexer:', len(bad), '| no match:', len(toks)-len(ok)-len(bad))
+"
+
+# the JSON still reproduces the C++
+python3 tools/extract_language_data.py --verify
+
+# the differential test, and the count it prints
+cmake -S . -B build -G Ninja && cmake --build build --parallel
+./build/TestLanguageLookup Packages/data-packages
+```
+
+---
+
 ## 7. How to reproduce these numbers
 
 ```bash

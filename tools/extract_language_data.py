@@ -5,11 +5,16 @@ Extract editor language + theme data out of the C++ static tables into JSON.
 Source of truth (before this change):
     src/EditorColorLight.h    namespace EditorColorLight
     src/EditorColorDark.h     namespace EditorColorDark
+    src/EditorCommonDef.h     namespace EditorLanguageDef   (file extensions)
+    src/EditorLexer{Light,Dark}.cpp                         (Lexilla lexer names)
 
 Both headers duplicate an identical block of per-language metadata (name,
 extension, comment delimiters, keyword blob) and differ only in colour data.
 This script deduplicates the shared half into data/languages.json and emits the
 per-theme colour data into data/theme-light.json and data/theme-dark.json.
+
+It also emits the two fields that decide which lexer a file gets - "extensions"
+and "lexer" - which live in neither colour header. See parse_lexer_dispatch().
 
 It is also the verification tool: --verify re-reads the generated JSON and
 asserts it reproduces the C++ tables exactly. That is the only correctness
@@ -31,6 +36,9 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LIGHT_H = os.path.join(ROOT, "src", "EditorColorLight.h")
 DARK_H = os.path.join(ROOT, "src", "EditorColorDark.h")
+COMMON_DEF_H = os.path.join(ROOT, "src", "EditorCommonDef.h")
+LEXER_SOURCES = [os.path.join(ROOT, "src", "EditorLexerLight.cpp"),
+                 os.path.join(ROOT, "src", "EditorLexerDark.cpp")]
 SCILEXER_H = os.path.join(ROOT, "include", "scintilla", "SciLexer.h")
 # Runtime data lives under Packages/, matching the existing layout the app already
 # uses (PathUtils::GetVinaTextPackagePath -> "Packages\"). Today that tree only
@@ -133,6 +141,274 @@ def parse_header(path):
                 plaintext=plaintext)
 
 
+def parse_lexer_dispatch():
+    """How the MFC app decides which lexer a file gets — three name spaces deep.
+
+    Reading it takes three files, because a language is written three different
+    ways along the path from a filename to a styled document:
+
+      1. src/EditorCommonDef.h    arrLangExtensions[i]  <->  arrLexerNames[i]
+         "json"                   maps to the VinaText lexer token "kix"
+      2. src/EditorLexerDark.cpp  LoadLexer() dispatches that token to an
+         Init_<x>_Editor function                       "kix" -> Init_json_Editor
+      3. that function names two more things:
+              SetLexer("cpp")                  <- the LEXILLA lexer name
+              ApplyLanguageMetadata(_, "json") <- the languages.json id
+
+    Only (3) is of any use to a second frontend: ui-qt/ needs the Lexilla name to
+    call CreateLexer, and the id to find keywords and a theme style table. The
+    VinaText token in (1) is an MFC dispatch detail and is deliberately not
+    emitted — it would be a fourth name for a thing that already has three.
+
+    Returns {language id: {"extensions": "py|pyw", "lexer": "python"}} plus a list
+    of notes about what the C++ says that a reader would not expect.
+    """
+    common = read(COMMON_DEF_H)
+
+    def array_body(name):
+        m = re.search(r"\b%s\s*\[\s*\]\s*=\s*\{(.*?)\}\s*;" % name, common, re.S)
+        if m is None:
+            raise SystemExit("%s: cannot find %s[]" % (COMMON_DEF_H, name))
+        return m.group(1)
+
+    extensions = re.findall(r'_T\(\s*"((?:[^"\\]|\\.)*)"\s*\)', array_body("arrLangExtensions"))
+    tokens = re.findall(r'"((?:[^"\\]|\\.)*)"', array_body("arrLexerNames"))
+    if len(tokens) < len(extensions):
+        raise SystemExit("arrLexerNames has %d entries, fewer than arrLangExtensions' %d - "
+                         "they are indexed in parallel" % (len(tokens), len(extensions)))
+
+    # Both theme files carry the same dispatch; parse each and require agreement.
+    per_source = {}
+    for path in LEXER_SOURCES:
+        src = read(path)
+        chain = re.search(r"::LoadLexer\(.*?\n\{(.*?)\n\}", src, re.S)
+        if chain is None:
+            raise SystemExit("%s: cannot find LoadLexer" % path)
+        # token -> Init function stem
+        dispatch = dict(re.findall(r'czLexer\s*==\s*"([^"]+)"\s*\)\s*\n\s*Init_(\w+)_Editor',
+                                   chain.group(1)))
+        # Init function stem -> (Lexilla lexer name, languages.json id)
+        initialisers = {}
+        for m in re.finditer(r"void\s+\w+::Init_(\w+)_Editor\([^)]*\)\s*\n\{(.*?)\n\}", src, re.S):
+            stem, body = m.group(1), m.group(2)
+            lexers = re.findall(r'SetLexer\(\s*"([^"]*)"\s*\)', body)
+            ids = re.findall(r'ApplyLanguageMetadata\(\s*\w+\s*,\s*"([^"]*)"\s*\)', body)
+            if len(lexers) != 1 or len(ids) > 1:
+                raise SystemExit("%s: Init_%s_Editor has %d SetLexer and %d "
+                                 "ApplyLanguageMetadata calls; expected 1 and 0-1"
+                                 % (os.path.basename(path), stem, len(lexers), len(ids)))
+            initialisers[stem] = (lexers[0], ids[0] if ids else None)
+        per_source[os.path.basename(path)] = (dispatch, initialisers)
+
+    (name_a, a), (name_b, b) = sorted(per_source.items())
+    if a != b:
+        raise SystemExit("%s and %s do not dispatch identically - the two themes have "
+                         "drifted apart" % (name_a, name_b))
+    dispatch, initialisers = a
+
+    notes = []
+    out = {}
+
+    # Every language with an initialiser gets its Lexilla name, whether or not any
+    # file extension reaches it: `makefile` is selected by filename, not extension.
+    for stem, (lexer, lang_id) in sorted(initialisers.items()):
+        if lang_id is None:
+            continue                        # Init_text_Editor - the plain-text fallback
+        if lang_id in out and out[lang_id]["lexer"] != lexer:
+            # Two initialisers, one language id, two different Lexilla lexers. One
+            # field cannot hold both, and silently keeping either would change how
+            # half of that language's files are highlighted.
+            raise SystemExit("language %r is initialised twice with different lexers "
+                             "(%r and %r); languages.json cannot represent that"
+                             % (lang_id, out[lang_id]["lexer"], lexer))
+        out[lang_id] = {"extensions": "", "lexer": lexer}
+
+    for index, ext in enumerate(extensions):
+        token = tokens[index]
+        stem = dispatch.get(token)
+        if stem is None:
+            raise SystemExit("arrLexerNames[%d] = %r reaches no branch of LoadLexer, so "
+                             "files matching %r fall through to plain text"
+                             % (index, token, ext))
+        lang_id = initialisers[stem][1]
+        if lang_id is None:
+            raise SystemExit("extensions %r dispatch to Init_%s_Editor, which sets no "
+                             "language metadata" % (ext, stem))
+        # MERGED, not overwritten. GetLexerNameFromExtension walks every row and
+        # returns on the first token that matches, so two rows reaching one
+        # language means both rows' extensions select it. Overwriting would drop
+        # the first row's extensions, and nothing downstream could tell: --verify
+        # would compare the JSON against the same overwritten mapping and pass.
+        if out[lang_id]["extensions"]:
+            notes.append("%s claims two extension rows, %r and %r - merged, which is "
+                         "what the MFC scan does" % (lang_id, out[lang_id]["extensions"], ext))
+            out[lang_id]["extensions"] += "|" + ext
+        else:
+            out[lang_id]["extensions"] = ext
+        if token != lang_id:
+            notes.append("%s is written %r in arrLexerNames" % (lang_id, token))
+
+    # Worth surfacing, and deliberately NOT corrected here: the JSON records what
+    # the shipping app does, so a second frontend reproduces it rather than
+    # quietly diverging. See doc/PORTING.md §6d.
+    for lang_id, entry in sorted(out.items()):
+        if entry["lexer"] != lang_id and entry["extensions"]:
+            notes.append("%s files are lexed by Lexilla's %r lexer"
+                         % (lang_id, entry["lexer"]))
+    return out, notes
+
+
+_DISPATCH_CACHE = []
+
+
+def cached_dispatch():
+    """parse_lexer_dispatch(), parsed once - it reads three files."""
+    if not _DISPATCH_CACHE:
+        _DISPATCH_CACHE.append(parse_lexer_dispatch())
+    return _DISPATCH_CACHE[0]
+
+
+def dispatch_fields_for(lang_id):
+    mapping, _ = cached_dispatch()
+    entry = mapping.get(lang_id, {"extensions": "", "lexer": ""})
+    return {"extensions": entry["extensions"], "lexer": entry["lexer"]}
+
+
+def dispatch_sources_present():
+    """True while the extension table and the lexer initialisers are still C++.
+
+    They are, and are expected to stay that way until Phase 4 rewrites the lexer
+    initialisers - so unlike the metadata tables, this data has a live source to
+    round-trip against.
+    """
+    return all(os.path.exists(p) for p in [COMMON_DEF_H] + LEXER_SOURCES)
+
+
+def sync_dispatch_fields(languages_path):
+    """Rewrite only "extensions" and "lexer" in languages.json, from the C++.
+
+    Not a full regeneration: the metadata and keyword blobs left the C++ in an
+    earlier change and the JSON is their only source now, so this must not touch
+    them. It edits the two fields that still have a C++ original and leaves every
+    other byte of the document alone.
+    """
+    mapping, notes = cached_dispatch()
+    for note in notes:
+        print("note: lexer dispatch: %s" % note)
+
+    with open(languages_path, encoding="utf-8") as f:
+        doc = json.load(f)
+
+    changed = []
+    for entry in doc.get("languages", []):
+        for field, value in sorted(dispatch_fields_for(entry["id"]).items()):
+            if entry.get(field) != value:
+                changed.append("%s.%s -> %r" % (entry["id"], field, value))
+            entry[field] = value
+
+    unknown = sorted(set(mapping) - {e["id"] for e in doc.get("languages", [])})
+    if unknown:
+        raise SystemExit("the lexer initialisers name languages absent from languages.json: %s"
+                         % unknown)
+
+    with open(languages_path, "w", encoding="utf-8") as f:
+        json.dump(doc, f, indent=2, ensure_ascii=False)
+        f.write("\n")
+    print("synced extensions/lexer from the C++: %d field(s) changed" % len(changed))
+    for line in changed[:10]:
+        print("  " + line)
+    return changed
+
+
+def check_lexer_dispatch(languages_doc):
+    """The two dispatch fields must still reproduce the C++ exactly.
+
+    ui-qt/ picks a lexer from these; ui-mfc/ picks one from arrLangExtensions and
+    the Init_*_Editor functions. Two frontends highlighting the same file
+    differently is precisely the drift this file exists to prevent, and nothing
+    else in CI would notice - the Windows job compiles the MFC app but never runs
+    it, and no job runs the Qt one against a real .cpp.
+    """
+    problems = []
+    by_id = {e["id"]: e for e in languages_doc.get("languages", []) if isinstance(e, dict)}
+
+    if dispatch_sources_present():
+        mapping, _ = cached_dispatch()
+        for lang, want in sorted(mapping.items()):
+            got = by_id.get(lang, {})
+            for field in ("extensions", "lexer"):
+                if got.get(field) != want[field]:
+                    problems.append("%s.%s: JSON says %r, the C++ says %r"
+                                    % (lang, field, got.get(field), want[field]))
+        for lang, entry in sorted(by_id.items()):
+            if lang not in mapping and (entry.get("extensions") or entry.get("lexer")):
+                problems.append("%s carries extensions/lexer but no C++ initialiser sets them"
+                                % lang)
+
+        # Re-counted from the raw header with a different expression than
+        # parse_lexer_dispatch() uses. Counting TOKENS rather than rows is the
+        # point: a row that gets dropped or merged away changes the token count,
+        # while a row count can be matched by a table that lost an extension.
+        raw_array = re.search(r"arrLangExtensions\s*\[\s*\]\s*=\s*\{(.*?)\}\s*;",
+                              read(COMMON_DEF_H), re.S)
+        cpp_tokens = []
+        if raw_array is None:
+            problems.append("cannot find arrLangExtensions[] in EditorCommonDef.h")
+        else:
+            for row in re.findall(r'_T\(\s*"([^"]*)"\s*\)', raw_array.group(1)):
+                cpp_tokens.extend(t for t in row.split("|") if t)
+        json_tokens = [t for e in by_id.values() for t in e.get("extensions", "").split("|") if t]
+        if sorted(cpp_tokens) != sorted(json_tokens):
+            missing = sorted(set(cpp_tokens) - set(json_tokens))
+            extra = sorted(set(json_tokens) - set(cpp_tokens))
+            problems.append("extension tokens differ from the C++: %d in the header, %d in "
+                            "the JSON; missing from the JSON=%s, not in the header=%s"
+                            % (len(cpp_tokens), len(json_tokens), missing, extra))
+        n_mapped = sum(1 for e in by_id.values() if e.get("extensions"))
+    else:
+        print("note: the C++ extension table is gone - languages.json is now its only source")
+
+    # A token claimed twice is not a parse error: the lookup is first-match-wins,
+    # so the later claim is simply unreachable. Say which one loses.
+    seen_token = {}
+    for entry in languages_doc.get("languages", []):
+        for token in entry.get("extensions", "").split("|"):
+            if not token:
+                continue
+            if token in seen_token:
+                problems.append("extension %r is claimed by both %r and %r; only %r can win"
+                                % (token, seen_token[token], entry["id"], seen_token[token]))
+            else:
+                seen_token[token] = entry["id"]
+        if entry.get("extensions") and not entry.get("lexer"):
+            problems.append("%s matches file extensions but names no lexer" % entry["id"])
+
+    # Read by hand out of the C++, independent of every parser above.
+    hand_checked = {
+        "cpp":      ("cpp|cxx|h|hh|hpp|hxx|cc", "cpp"),
+        "python":   ("py|pyw", "python"),
+        "html":     ("htm|html|shtml|htt|cfm|tpl|hta", "hypertext"),
+        # .json really is lexed as C++ by the shipping app - see doc/PORTING.md §6d.
+        "json":     ("json", "cpp"),
+        # Selected by filename, never by extension.
+        "makefile": ("", "makefile"),
+    }
+    for lang, want in sorted(hand_checked.items()):
+        got = by_id.get(lang)
+        if got is None:
+            problems.append("hand-checked language %r missing" % lang)
+            continue
+        actual = (got.get("extensions"), got.get("lexer"))
+        if actual != want:
+            problems.append("hand-checked %r dispatch: %r != %r" % (lang, actual, want))
+
+    if not problems:
+        print("lexer dispatch: %d file extensions over %d languages, matching the C++"
+              % (len(seen_token), n_mapped if dispatch_sources_present() else
+                 sum(1 for e in by_id.values() if e.get("extensions"))))
+    return problems
+
+
 def hexcolor(rgb):
     return "#%02X%02X%02X" % rgb
 
@@ -180,6 +456,7 @@ def build():
     for lang in sorted(light["meta"]):
         entry = {"id": lang}
         entry.update(light["meta"][lang])
+        entry.update(dispatch_fields_for(lang))
         entry["keywords"] = light["keywords"].get(lang, "")
         languages.append(entry)
 
@@ -215,6 +492,7 @@ def verify(languages_doc, themes, light, dark):
     """Re-derive the C++ tables from the JSON and compare, field by field."""
     failures = []
     by_id = {e["id"]: e for e in languages_doc["languages"]}
+
 
     for name, parsed in (("light", light), ("dark", dark)):
         theme = themes[name]
@@ -319,7 +597,8 @@ def json_only_checks(languages_doc, themes):
         lang_id = entry.get("id") or "<entry #%d, no id>" % index
         if not entry.get("id"):
             problems.append("%s: language entry with empty or missing id" % lang_id)
-        for field in ("name", "extension", "commentLine", "commentStart", "commentEnd", "keywords"):
+        for field in ("name", "extension", "extensions", "lexer",
+                      "commentLine", "commentStart", "commentEnd", "keywords"):
             if field not in entry:
                 problems.append("%s: missing field %r" % (lang_id, field))
                 continue
@@ -482,10 +761,6 @@ def independent_checks(languages_doc, themes):
     return problems
 
 
-LEXER_SOURCES = [os.path.join(ROOT, "src", "EditorLexerLight.cpp"),
-                 os.path.join(ROOT, "src", "EditorLexerDark.cpp")]
-
-
 def check_lexer_call_sites(languages_doc):
     """Every language id the MFC lexer initialisers ask for must exist in the JSON.
 
@@ -543,13 +818,19 @@ def main():
               "JSON in %s is now the source of truth.\n"
               "Extraction and C++ round-trip are skipped; verifying the data files "
               "and their call sites instead.\n" % os.path.relpath(DATA_DIR, ROOT))
+        languages_path = os.path.join(DATA_DIR, "languages.json")
         if not verify_only:
-            print("Nothing to regenerate. Edit the JSON directly.\n")
-        on_disk = json.load(open(os.path.join(DATA_DIR, "languages.json"), encoding="utf-8"))
+            # Two fields do still have a C++ original, so there is still something
+            # to generate; everything else in this file must be edited by hand.
+            print("Metadata and keywords: edit the JSON directly.")
+            sync_dispatch_fields(languages_path)
+            print()
+        on_disk = json.load(open(languages_path, encoding="utf-8"))
         on_disk_themes = {n: json.load(open(os.path.join(DATA_DIR, "theme-%s.json" % n),
                                             encoding="utf-8")) for n in ("light", "dark")}
         failures = json_only_checks(on_disk, on_disk_themes)
         failures += check_lexer_call_sites(on_disk)
+        failures += check_lexer_dispatch(on_disk)
         failures += check_deployed_copies()
         n_styles = sum(len(v) for t in on_disk_themes.values() for v in t["languages"].values())
         print("languages: %d   keyword blobs: %d   style mappings: %d   palette entries: %d/%d"
@@ -586,6 +867,7 @@ def main():
     failures = verify(on_disk, on_disk_themes, light, dark)
     failures += independent_checks(on_disk, on_disk_themes)
     failures += check_lexer_call_sites(on_disk)
+    failures += check_lexer_dispatch(on_disk)
 
     n_styles = sum(len(v) for t in on_disk_themes.values() for v in t["languages"].values())
     print("\nlanguages: %d   keyword blobs: %d   style mappings: %d   palette entries: %d/%d"
