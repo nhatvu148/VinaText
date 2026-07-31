@@ -31,6 +31,10 @@ and listed here:
 | `LexerParser.{h,cpp}` | `core/Tokenizer.{h,cpp}` | #25 | §3, §5, §6c |
 | `DiffEngine.cpp` (algorithm only) | `core/LineDiff.{h,cpp}` | #26 | §3, §5, §6c |
 
+Three files left the `core/` list without moving anywhere — `EditorDatabase` (duplicates a
+`core/` type), `SpellChecker` (→ `platform/`) and `UserExtension` (→ `ui-rewrite`). §2's
+`core/` bucket of 26 is therefore **23**. See §6c correction 5.
+
 **`src/*.cpp` is 124 today, not 137** — §2's thirteen dead files account for the rest. Re-run
 §7's commands for a current count; do not read one off these tables. The first draft of this
 very paragraph said "136", by subtracting 1 from the frozen 137 instead of counting, which is
@@ -181,13 +185,13 @@ class tokens · **std** = `std::` occurrences.
 | `PathUtil.cpp` | 1,585 | 202 +106 | 101 | 0 | 51 | THE Phase 2 boss file: 202 CString in .cpp + 106 in .h, plus 101 Win32 path-API tokens. Do last. |
 | `FilePartition.cpp` | 530 | 42 +25 | 15 | 0 | 0 | CArray subclass -> QVector. |
 | `FindReplaceTextWorker.cpp` | 362 | 30 +32 | 18 | 4 | 8 | Find/replace over Scintilla buffers. Threading -> platform/. |
-| `EditorDatabase.cpp` | 92 | 16 +24 | 0 | 0 | 0 | Open-document registry. No Win32; most sites are in the header. |
+| `EditorDatabase.cpp` | 92 | 16 +24 | 0 | 0 | 0 | **Not an open-document registry** — `CLanguageDatabase` is per-language metadata, and `core/`'s `SLanguageInfo` already holds it. **Stays in `ui-mfc/`** (§6c correction 5). |
 | `FileUtil.cpp` | 406 | 19 +14 | 7 | 0 | 41 | Already heavily std::-based (41 std:: lines). |
 | `DiffEngine.cpp` | 324 | 20 +12 | 6 | 0 | 0 | **Algorithm → `core/LineDiff` (#26); HTML renderer stays.** Row understates it: the file is ~half report generator. See §6c correction 4. |
 | `FindPathWorker.cpp` | 241 | 16 +10 | 8 | 0 | 6 | Path search worker. Threading moves to platform/. |
 | `AppSettings.cpp` | 414 | 8 +17 | 6 | 0 | 0 | Config already file-based (issue #44). Maps onto QSettings. |
 | `LexerParser.cpp` | 297 | 13 +9 | 14 | 0 | 0 | **→ `core/Tokenizer` (#25).** Not language parsing — a delimiter tokenizer; 7 of 10 methods had no caller. See §6c correction 3. |
-| `UserExtension.cpp` | 170 | 12 +6 | 2 | 2 | 0 | User-defined tool commands. Decouple from EditorView/EditorDoc first. |
+| `UserExtension.cpp` | 170 | 12 +6 | 2 | 2 | 0 | **→ `ui-rewrite`, not `core/` (§6c correction 5):** `LoadMenuUserExtensions(CMenu*)` is MFC in the public API. |
 | `TemplateCreator.cpp` | 145 | 7 +2 | 2 | 1 | 0 | File-template generation. |
 | `RecentCloseFileManager.cpp` | 61 | 4 +4 | 2 | 0 | 1 | MRU list. |
 | `UserCustomizeData.cpp` | 48 | 5 +2 | 0 | 0 | 5 | std::fstream config reader. |
@@ -196,7 +200,7 @@ class tokens · **std** = `std::` occurrences.
 | `LocalizationDatabase.cpp` | 183 | 2 +2 | 16 | 0 | 1 | String table. |
 | `RAIIUtils.cpp` | 62 | 1 +2 | 0 | 0 | 0 | Split: CCriticalSectionLock/CMemoryGuard/CBenchmarkTest are core; CLockCtrlRedraw/CLockCtrlUpdate/CMultipleSelectionKeeper are editor-widget guards -> ui-qt/. |
 | `LocalizationHandler.cpp` | 85 | 2 | 3 | 3 | 1 | Loads localization files; port to QTranslator or keep as-is. |
-| `SpellChecker.cpp` | 279 | 1 +1 | 11 | 1 | 15 | Dictionary lookup; strip the Editor.h/UI coupling on the way out. |
+| `SpellChecker.cpp` | 279 | 1 +1 | 11 | 1 | 15 | **→ `platform/`, not `core/` (§6c correction 5):** holds `ISpellChecker*` members; Windows COM, needs a different backend per OS. |
 | `TemporarySettings.cpp` | 10 | 0 +2 | 0 | 0 | 0 | 9 lines, trivial. |
 | `Textfile.cpp` | 1,551 | 1 +1 | 130 | 0 | 0 | Encoding detection (uchardet) + file I/O. Split: swap Win32 CreateFile/ReadFile for QFile, keep the codec logic. |
 | `WebHandler.cpp` | 191 | 2 | 0 | 0 | 19 | curl-based HTTP. 19 std:: lines, zero Win32. |
@@ -427,7 +431,7 @@ because nothing calls it. Each split needs a `using Base::name;` for every share
 |---|---:|---:|---|
 | `DiffEngine.cpp` | 32 | 324 | **Algorithm → `core/LineDiff` (#26); HTML renderer stays.** See §6c correction 4. |
 | `FileUtil.cpp` | 33 | 406 | Already heavily std::-based (41 std:: lines). |
-| `EditorDatabase.cpp` | 40 | 92 | Open-document registry. No Win32; most sites are in the header. |
+| `EditorDatabase.cpp` | 40 | 92 | **Stays in `ui-mfc/`** — duplicates `Core::SLanguageInfo`; 197 signature sites. See §6c correction 5. |
 | `FindReplaceTextWorker.cpp` | 62 | 362 | Find/replace over Scintilla buffers. Threading -> platform/. |
 | `FilePartition.cpp` | 67 | 530 | CArray subclass -> QVector. |
 | `PathUtil.cpp` | 308 | 1,585 | THE Phase 2 boss file: 202 CString in .cpp + 106 in .h, plus 101 Win32 path-API tokens. Do last. |
@@ -713,6 +717,102 @@ surfaced either.** Reading the file did.
 
 `FileUtil` and `EditorDatabase` are next by the §4 order — and this time the estimate carries
 an explicit caveat: **11 and 7 including files respectively, contents unread.**
+
+**Correction 5 — the two columns above are both wrong, and so is the §4 wave.** Reading
+`EditorDatabase` and `FileUtil` as promised produced no move at all. It produced a third
+metric, and the third metric reorders everything.
+
+**A type is reached in one of three ways, and each is invisible to the other two.**
+
+| reached as | example | what the `#include` column sees | what the `Owner::` column sees |
+|---|---|---:|---:|
+| namespace-qualified call | `PathUtils::GetName()` | undercounts | correct |
+| type name in a signature | `void f(CLanguageDatabase*)` | undercounts | **0** |
+| macro | `AppSettingMgr.m_Field` | counts the include only | **0** |
+
+So the honest measure is **occurrences of whatever identifier the call site actually writes** —
+namespace, type name, or macro. Measured that way:
+
+| file | reached via | **sites** | files | `#include`s | `Owner::` | `CString` | LOC |
+|---|---|---:|---:|---:|---:|---:|---:|
+| **`AppSettings`** | `AppSettingMgr` **macro** | **783** | **42** | 46 | 0 | 25 | 414 |
+| **`PathUtil`** | `PathUtils::` | 353 | 43 | 20 | 353 | 308 | 1,587 |
+| **`EditorDatabase`** | `CLanguageDatabase` type | **197** | 13 | 7 | **0** | 40 | 92 |
+| `StringHelper` | mixed | 39 | 7 | 6 | 30 | 0 | 478 |
+| `FindReplaceTextWorker` | types | 29 | 4 | 3 | 15 | 62 | 362 |
+| `FileUtil` | types | 26 | 9 | 11 | 2 | 33 | 406 |
+| `SpellChecker` | type | **1** | 1 | 1 | 0 | 2 | 280 |
+| `UserExtension` | type | **1** | 1 | 1 | 0 | 18 | 171 |
+
+(`AppSettings` also exposes `IS_LIGHT_THEME`, a further 53 sites across 17 files. `PathUtil`'s
+includes are 20 rather than §6c's earlier 21 because #26 removed the unused one in
+`DiffEngine.cpp`.)
+
+**Three things follow, none of which the previous ranking permitted.**
+
+**1. `AppSettings` is the most entangled file in the codebase — 783 sites, not 46.** It was
+ranked mid-cost. It is more than twice `PathUtil`, which §6c called "an order of magnitude
+clear of anything else" and scheduled last. That claim was about qualified references, and
+`AppSettings` has none: every one of the 783 is written `AppSettingMgr`, a macro expanding to
+`CAppSettings::GetInstance()`. **`AppSettings` is now the last file to move, and `PathUtil`
+second-last.**
+
+**2. `EditorDatabase` must not move at all.** `CLanguageDatabase` is eight `CString` fields with
+setters and getters — and six of them are already filled from `Core::SLanguageInfo` by
+`EditorLanguageData.cpp`'s `ApplyLanguageMetadata`. **The portable representation already
+exists in `core/`; this class is the boundary conversion, just not named one.** Moving it would
+edit 197 signatures across 13 files to arrive where the code already is. It stays in `ui-mfc/`
+until the lexer init functions are rewritten in Phase 4, which touches those signatures anyway.
+
+**3. Half of §4's "cheapest start" wave is in the wrong bucket.** The wave was `DiffEngine`,
+`LexerParser`, `UserExtension`, `SpellChecker`, chosen because each had one including file. The
+first two were right and are done (#25, #26). The other two are not `core/` candidates:
+
+- **`SpellChecker` → `platform/`.** Its header includes `<spellcheck.h>` and holds
+  `ISpellCheckerFactory*` and `ISpellChecker*` **as members**. That is the Windows COM Spell
+  Checking API, not a dictionary this project owns. §3's note — *"strip the Editor.h/UI
+  coupling on the way out"* — describes the wrong problem; the coupling to remove is COM, and
+  macOS and Linux need a different backend entirely (`NSSpellChecker`, hunspell). It is a
+  reimplementation, not a port.
+- **`UserExtension` → `ui-rewrite`.** `LoadMenuUserExtensions(CMenu* pExtensionsMenu)` puts an
+  MFC menu in the public API, and the `.cpp` includes `Resource.h`, `EditorDoc.h` and
+  `EditorView.h`. §3 already said "decouple from EditorView/EditorDoc first", which is true and
+  is most of the file.
+
+Both have exactly **1** call site, so they still look cheapest by every column in the table —
+including the new one. **Call-site count measures the cost of moving a file; it says nothing
+about whether the file can move.** That needs the header read, which is what §7 has warned
+about since the first draft and what these five corrections keep re-learning.
+
+**Revised order, replacing the one above:** `FileUtil` (26 sites), `FindReplaceTextWorker` (29),
+`StringHelper`'s remaining split (39), then `PathUtil` (353), then `AppSettings` (783) last.
+`EditorDatabase`, `SpellChecker` and `UserExtension` leave the `core/` list.
+
+**"Sites" means occurrences, not lines.** `grep -o ... | wc -l` and `grep -c` are not the same
+measurement and differ on real data here: `PathUtils::` is **353 occurrences on 349 lines**,
+because four lines carry two calls each —
+
+    src/FileExplorerCtrl.cpp:1294   src/FileExplorerCtrl.cpp:5746
+    src/PathResultWindow.cpp:720    src/VinaTextApp.cpp:222
+
+— and `AppSettingMgr` is **783 on 778**. Occurrences is the right unit for this table: the cost
+of moving a type is the number of expressions that must be edited, and two on one line is two
+edits. Every command below uses `-o`; substituting `-c` reproduces 349 and 778 instead.
+
+Reproduce — the point is to count the identifier the CALL SITE writes, which is not always the
+type's name:
+
+```bash
+# 1. namespace-qualified (PathUtil)
+grep -rhoE '\bPathUtils\s*::' $(ls src/*.cpp src/*.h | grep -v '^src/PathUtil\.') | wc -l
+
+# 2. type name in signatures (EditorDatabase) - the Owner:: command returns 0 here
+grep -rhoE '\bCLanguageDatabase\b' $(ls src/*.cpp src/*.h | grep -v '^src/EditorDatabase\.') | wc -l
+
+# 3. macro (AppSettings) - both other commands return 0; find the macro first
+grep -nE '^\s*#define' src/AppSettings.h
+grep -rhoE '\bAppSettingMgr\b' $(ls src/*.cpp src/*.h | grep -v '^src/AppSettings\.') | wc -l
+```
 
 Reproduce, per candidate:
 
