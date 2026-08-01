@@ -6062,5 +6062,19 @@
         "color": "definition"
       }
     ]
+  },
+  "roles": {
+    "braceBadColor": "blue",
+    "braceLightColor": "red",
+    "editorCaretColor": "editorCaretColor",
+    "editorFolderBackColor": "editorFolderBackColor",
+    "editorFolderForeColor": "editorFolderForeColor",
+    "editorIndicatorColor": "editorIndicatorColor",
+    "editorMarginBarColor": "editorMarginBarColor",
+    "editorSpellCheckColor": "editorSpellCheckColor",
+    "editorTagMatchColor": "editorTagMatchColor",
+    "editorTextColor": "editorTextColor",
+    "lineNumberColor": "linenumber",
+    "selectionTextColor": "white"
   }
 }

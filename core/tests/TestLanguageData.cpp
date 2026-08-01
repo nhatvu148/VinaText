@@ -158,6 +158,70 @@ int main(int argc, char** argv)
 				&& probe._Green == 255 && probe._Blue == 255, "dark: text is #FFFFFF");
 		}
 
+		//------------------------------------------------------------------
+		// Colour roles. Eight of the ten take the palette key named after them,
+		// which is why resolving a role by its own name looked correct. The two
+		// that do not are pinned here by value, because they are the whole reason
+		// the indirection exists.
+		//------------------------------------------------------------------
+		// Ten from the IS_LIGHT_THEME preset, two from the brace styling below it.
+		CheckEqual<size_t>(theme.GetRoles().size(), 12, strName + ": role count");
+
+		// The brace colours come from BasicColors (src/AppUtil.h), a table with no
+		// light and dark variant - so unlike every other role these are the same
+		// in both themes. The extractor guards that BasicColors and the palette
+		// still agree; this pins the values a reader can see on screen.
+		Core::SColor braceLight, braceBad;
+		Check(theme.ResolveRole("braceLightColor", braceLight)
+			&& braceLight._Red == 255 && braceLight._Green == 0 && braceLight._Blue == 0,
+			strName + ": a matched brace is red");
+		Check(theme.ResolveRole("braceBadColor", braceBad)
+			&& braceBad._Red == 0 && braceBad._Green == 0 && braceBad._Blue == 255,
+			strName + ": an unmatched brace is blue");
+
+		Core::SColor role;
+		// The one whose key differs BETWEEN the themes. Nothing a frontend can
+		// resolve by name gets this right in both builds.
+		Check(theme.ResolveRole("selectionTextColor", role),
+			strName + ": selectionTextColor resolves");
+		if (strName == "light")
+		{
+			CheckEqual<std::string>(theme.GetRoles().at("selectionTextColor"), "black",
+				"light: selectionTextColor takes the palette key 'black'");
+			Check(role._Red == 0 && role._Green == 0 && role._Blue == 0,
+				"light: selectionTextColor is #000000");
+		}
+		else
+		{
+			CheckEqual<std::string>(theme.GetRoles().at("selectionTextColor"), "white",
+				"dark: selectionTextColor takes the palette key 'white'");
+			Check(role._Red == 255 && role._Green == 255 && role._Blue == 255,
+				"dark: selectionTextColor is #FFFFFF");
+		}
+
+		// The one whose key differs from its own NAME, in both themes.
+		CheckEqual<std::string>(theme.GetRoles().at("lineNumberColor"), "linenumber",
+			strName + ": lineNumberColor takes the palette key 'linenumber'");
+		Core::SColor lineNumber;
+		Check(theme.ResolveRole("lineNumberColor", lineNumber)
+			&& theme.ResolveColor("linenumber", probe)
+			&& lineNumber._Red == probe._Red && lineNumber._Green == probe._Green
+			&& lineNumber._Blue == probe._Blue,
+			strName + ": lineNumberColor resolves to the linenumber entry");
+		Check(!theme.ResolveColor("lineNumberColor", probe),
+			strName + ": there is no palette key called 'lineNumberColor'");
+
+		// Every role must resolve; the loader rejects a dangling key, so reaching
+		// here means it held - assert it rather than assume it.
+		for (std::map<std::string, std::string>::const_iterator it = theme.GetRoles().begin();
+			it != theme.GetRoles().end(); ++it)
+		{
+			Check(theme.ResolveRole(it->first, role),
+				strName + ": role " + it->first + " resolves key " + it->second);
+		}
+		Check(!theme.ResolveRole("noSuchRole", role),
+			strName + ": an unknown role does not resolve");
+
 		// python_2 has a style table but no language metadata - preserved deliberately.
 		Check(theme.FindStyles("python_2") != nullptr,
 			strName + ": python_2 style table is preserved");
@@ -203,13 +267,32 @@ int main(int argc, char** argv)
 		Check(!bad.LoadFromString("{ \"name\": \"x\" }", strError),
 			"theme without a palette is rejected");
 
+		// These carry "roles" so that they still fail for the reason each one is
+		// named after. Without it they would be rejected for the missing object
+		// instead, and would keep passing while testing nothing.
 		Check(!bad.LoadFromString(
-			"{\"name\":\"x\",\"palette\":{\"a\":\"#000000\"},"
+			"{\"name\":\"x\",\"palette\":{\"a\":\"#000000\"},\"roles\":{},"
 			"\"languages\":{\"z\":[{\"style\":\"SCE_X\",\"value\":1,\"color\":\"missing\"}]}}",
 			strError), "style referencing an undefined colour is rejected");
 
-		Check(!bad.LoadFromString("{\"name\":\"x\",\"palette\":{\"a\":\"red\"},\"languages\":{}}",
+		Check(!bad.LoadFromString(
+			"{\"name\":\"x\",\"palette\":{\"a\":\"red\"},\"roles\":{},\"languages\":{}}",
 			strError), "non-hex palette entry is rejected");
+
+		// A theme that loads at all, to show the three rejections above are about
+		// their own defect and not about the shape of the fixture.
+		Check(bad.LoadFromString(
+			"{\"name\":\"x\",\"palette\":{\"a\":\"#010203\"},\"roles\":{\"r\":\"a\"},"
+			"\"languages\":{}}", strError), "a minimal well-formed theme loads");
+
+		Check(!bad.LoadFromString(
+			"{\"name\":\"x\",\"palette\":{\"a\":\"#000000\"},\"languages\":{}}",
+			strError), "theme without a roles object is rejected");
+
+		Check(!bad.LoadFromString(
+			"{\"name\":\"x\",\"palette\":{\"a\":\"#000000\"},"
+			"\"roles\":{\"r\":\"missing\"},\"languages\":{}}",
+			strError), "role referencing an undefined colour is rejected");
 
 		Core::CLanguageTable badLang;
 		Check(!badLang.LoadFromString("not json at all", strError), "garbage input is rejected");

@@ -81,7 +81,20 @@ public:
 		return send(iMessage, wParam, lParam);
 	}
 
+private slots:
+	// Everything CEditorView's SCN_UPDATEUI case drives (src/EditorView.cpp:6179).
+	// Scintilla sends this after any change to the text, the styling, the caret or
+	// the selection, so it runs constantly - the MFC carries a comment saying so.
+	void OnUpdateUi(Scintilla::Update updated);
+
 private:
+	// Highlights the brace under the caret and its partner, or clears both when
+	// there is no match. Transcribes CEditorCtrl::DoBraceMatchHighlight.
+	void UpdateBraceMatch();
+	// The selection background and whether the caret line is drawn at all.
+	// Transcribes CEditorCtrl::UpdateCaretLineVisible.
+	void UpdateSelectionPainting();
+
 	void ApplyEditorStyles(const Core::CEditorTheme& theme);
 	void ApplyLanguageStyles(const Core::CEditorTheme& theme);
 	void ApplyFoldMargin(const Core::CEditorTheme& theme);
@@ -93,6 +106,12 @@ private:
 	// encoding and the byte-order mark are properties of the document, not
 	// assumptions.
 	QByteArray EncodeForSave(const QString& strText) const;
+
+	// The selection background, as the active theme resolves it. Cached because
+	// UpdateSelectionPainting runs on every caret move and re-resolving a role
+	// through two std::map lookups on each one would be work for nothing.
+	Core::SColor				m_SelectionBack;
+	bool						m_bHaveSelectionBack = false;
 
 	const CEditorData&			m_Data;
 	QString						m_strFilePath;

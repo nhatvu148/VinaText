@@ -40,6 +40,7 @@ COMMON_DEF_H = os.path.join(ROOT, "src", "EditorCommonDef.h")
 LEXER_SOURCES = [os.path.join(ROOT, "src", "EditorLexerLight.cpp"),
                  os.path.join(ROOT, "src", "EditorLexerDark.cpp")]
 EDITOR_CPP = os.path.join(ROOT, "src", "Editor.cpp")
+APPUTIL_H = os.path.join(ROOT, "src", "AppUtil.h")
 SCILEXER_H = os.path.join(ROOT, "include", "scintilla", "SciLexer.h")
 # Runtime data lives under Packages/, matching the existing layout the app already
 # uses (PathUtils::GetVinaTextPackagePath -> "Packages\"). Today that tree only
@@ -521,6 +522,164 @@ def parse_indent_guides(dispatch):
     return out, default
 
 
+def parse_theme_roles():
+    """Which palette constant each editor colour role takes, per theme.
+
+    CEditorCtrl::InitilizeSetting (src/Editor.cpp:106-132) fills
+    m_AppThemeColorSet from EditorColorLight:: in the light build and
+    EditorColorDark:: in the dark one. Nine of the ten roles take the constant
+    named after them - _editorCaretColor takes `editorCaretColor` in both - which
+    is why ui-qt/ could resolve them by name and be right.
+
+    The tenth is not, and it is the one nobody had ported: **_selectionTextColor
+    takes `black` in light and `white` in dark**. Two departures from the pattern
+    in one member:
+
+      - the palette key differs BETWEEN the two themes, so there is no single name
+        a frontend can look up; and
+      - the name lies about the role. It is passed to SCI_SETSELBACK
+        (CEditorCtrl::SetSelectionTextColor, src/Editor.cpp:3154), so it is the
+        selection BACKGROUND, not the selection's text colour.
+
+    Its values happen to equal editorTextColor in both themes today - #000000 on
+    light, #FFFFFF on dark. Resolving it as editorTextColor would therefore look
+    correct and be wrong: the C++ reads two unrelated constants, and changing the
+    editor's text colour must not drag the selection with it.
+
+    The role name emitted here is the C++ member name, deliberately - including
+    the misleading one - so that every value in the JSON traces back to an
+    identifier a reader can grep for in src/. The lie is documented at the two
+    places that consume it rather than corrected here, because renaming it would
+    break exactly the round-trip that makes this file trustworthy.
+
+    Returns {"light": {role: palette key}, "dark": {...}}.
+    """
+    src = strip_comments(read(EDITOR_CPP))
+    body = re.search(r"void\s+CEditorCtrl::InitilizeSetting\s*\([^)]*\)\s*\{(.*?)\n\}",
+                     src, re.S)
+    if body is None:
+        raise SystemExit("%s: cannot find CEditorCtrl::InitilizeSetting" % EDITOR_CPP)
+
+    text = body.group(1)
+    at = text.find("IS_LIGHT_THEME")
+    if at < 0:
+        raise SystemExit("%s: InitilizeSetting no longer branches on IS_LIGHT_THEME - "
+                         "this extraction models exactly that shape" % EDITOR_CPP)
+
+    # A brace scan bounded to the two blocks, not _split_top_level_branches: the
+    # rest of InitilizeSetting is full of further ifs, several of them unbraced,
+    # and that helper is built for a chain that fills a whole function body.
+    def block_after(index):
+        open_at = text.find("{", index)
+        if open_at < 0:
+            raise SystemExit("the IS_LIGHT_THEME preset has an unbraced branch")
+        depth = 0
+        for i in range(open_at, len(text)):
+            if text[i] == "{":
+                depth += 1
+            elif text[i] == "}":
+                depth -= 1
+                if depth == 0:
+                    return text[open_at + 1:i], i + 1
+        raise SystemExit("the IS_LIGHT_THEME preset has an unterminated branch")
+
+    light_block, after_light = block_after(at)
+    if text[after_light:].lstrip()[:4] != "else":
+        raise SystemExit("the IS_LIGHT_THEME preset is no longer one if/else")
+    dark_block, _ = block_after(text.index("else", after_light))
+
+    out = {}
+    for theme, block in (("light", light_block), ("dark", dark_block)):
+        namespace = "EditorColor%s" % theme.capitalize()
+        assignments = re.findall(
+            r"m_AppThemeColorSet\s*\.\s*_(\w+)\s*=\s*(\w+)\s*::\s*(\w+)\s*;", block)
+        roles = {}
+        for role, used_namespace, constant in assignments:
+            # The light branch must read the light header. Crossing them would be
+            # a copy-paste that produces a plausible file and the wrong colours -
+            # the same shape of mistake as Init_flexlicense_Editor's keywords.
+            if used_namespace != namespace:
+                raise SystemExit("the %s branch of InitilizeSetting reads %s::%s"
+                                 % (theme, used_namespace, constant))
+            roles[role] = constant
+        if not roles:
+            raise SystemExit("the %s branch of InitilizeSetting assigns no colours" % theme)
+        out[theme] = roles
+
+    if set(out["light"]) != set(out["dark"]):
+        raise SystemExit("the two InitilizeSetting branches set different roles: "
+                         "light-only=%s dark-only=%s"
+                         % (sorted(set(out["light"]) - set(out["dark"])),
+                            sorted(set(out["dark"]) - set(out["light"]))))
+    return out
+
+
+def parse_brace_styles(palette):
+    """The colours the matched and unmatched brace are drawn in.
+
+    `src/Editor.cpp:447-456` styles STYLE_BRACELIGHT red and bold, STYLE_BRACEBAD
+    blue and bold. This is NOT in the IS_LIGHT_THEME preset and it does not come
+    from EditorColor{Light,Dark}.h - it reads `BasicColors`, a third colour table
+    in src/AppUtil.h that has no light and dark variant. So the two colours are
+    the same in both themes, which is why they are emitted as roles taking an
+    ordinary palette key rather than as a per-theme value.
+
+    THAT REUSE NEEDS A GUARD, and it is the point of this function. `BasicColors`
+    and the theme palettes are separate tables that happen to agree:
+    BasicColors::red and the palette's `red` are both #FF0000 today. Resolving one
+    through the other is only sound while that holds, so it is checked here rather
+    than assumed - the same trap as reading the selection colour out of
+    editorTextColor because the numbers match.
+
+    Six of the ten calls in that block are dead and are deliberately not
+    represented here. SCI_INDICSETSTYLE / INDICSETALPHA / INDICSETOUTLINEALPHA
+    take an INDICATOR number; the code passes STYLE_BRACELIGHT (34) and
+    STYLE_BRACEBAD (35), which are STYLE numbers. INDIC_MAX is 35, so those are
+    valid indicator ids and the calls silently configure two indicators nothing
+    ever draws with. Brace highlighting uses the style unless
+    SCI_BRACEHIGHLIGHTINDICATOR turns on the indicator path, and neither frontend
+    calls it (ViewStyle.cxx:250 defaults it off; Editor.cxx:8398 is the only
+    setter). Only SCI_STYLESETFORE and SCI_STYLESETBOLD have any effect.
+
+    `palette` is the theme's {name: "#RRGGBB"}. Returns {role: palette key}.
+    """
+    src = strip_comments(read(EDITOR_CPP))
+    basic = {}
+    for m in re.finditer(
+            r"const\s+COLORREF\s+(\w+)\s*=\s*RGB\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)\s*;",
+            strip_comments(read(APPUTIL_H))):
+        basic[m.group(1)] = hexcolor(tuple(int(g) for g in m.groups()[1:]))
+
+    out = {}
+    for style, role in (("STYLE_BRACELIGHT", "braceLightColor"),
+                        ("STYLE_BRACEBAD", "braceBadColor")):
+        m = re.search(r"SCI_STYLESETFORE\s*,\s*%s\s*,\s*BasicColors::(\w+)" % style, src)
+        if m is None:
+            raise SystemExit("%s: no SCI_STYLESETFORE for %s" % (EDITOR_CPP, style))
+        name = m.group(1)
+        if name not in basic:
+            raise SystemExit("BasicColors::%s is not declared in %s" % (name, APPUTIL_H))
+        if name not in palette:
+            raise SystemExit("%s is styled with BasicColors::%s, which the theme palette "
+                             "does not define" % (style, name))
+        if basic[name] != palette[name]:
+            raise SystemExit(
+                "BasicColors::%s is %s but the theme palette's %r is %s - these are "
+                "separate tables and the brace colours are only resolvable through the "
+                "palette while they agree" % (name, basic[name], name, palette[name]))
+        out[role] = name
+    return out
+
+
+_ROLES_CACHE = []
+
+
+def cached_theme_roles():
+    if not _ROLES_CACHE:
+        _ROLES_CACHE.append(parse_theme_roles())
+    return _ROLES_CACHE[0]
+
+
 def parse_fold_markers(dispatch):
     """What a folded block shows when it is collapsed: " { ... } ", " < ... > " or " --- ".
 
@@ -699,6 +858,81 @@ def sync_dispatch_fields(languages_path):
     return changed
 
 
+def sync_theme_roles(theme_paths):
+    """Rewrite the "roles" object of each theme file, from src/Editor.cpp.
+
+    The colour headers no longer declare the metadata tables, so the palettes in
+    these files are edited by hand - but which palette key each of CEditorCtrl's
+    colour roles takes is still decided in C++, by the IS_LIGHT_THEME preset. That
+    mapping is generated here for the same reason `extensions` and `lexer` are:
+    a frontend that guesses it is right until the day it is not.
+    """
+    roles = cached_theme_roles()
+
+    # Both themes are validated before either is written. Writing inside the loop
+    # left the tree half-synced when the second file failed: the palettes are
+    # hand-maintained now, so dropping a colour one of these roles needs is an
+    # ordinary edit, and it produced one rewritten file and one untouched one -
+    # a state neither the editor nor the next run of this tool describes.
+    pending = []
+    changed = []
+    for name, path in sorted(theme_paths.items()):
+        with open(path, encoding="utf-8") as f:
+            doc = json.load(f)
+        merged = dict(roles[name])
+        merged.update(parse_brace_styles(doc.get("palette", {})))
+        want = {k: merged[k] for k in sorted(merged)}
+        missing = sorted(k for k in want.values() if k not in doc.get("palette", {}))
+        if missing:
+            raise SystemExit("theme-%s.json: InitilizeSetting reads palette keys the "
+                             "file does not define: %s" % (name, missing))
+        if doc.get("roles") != want:
+            changed.append("theme-%s.roles -> %d role(s)" % (name, len(want)))
+        doc["roles"] = want
+        pending.append((path, doc))
+
+    for path, doc in pending:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(doc, f, indent=2, ensure_ascii=False)
+            f.write("\n")
+    print("synced theme colour roles from the C++: %d file(s) changed" % len(changed))
+    for line in changed:
+        print("  " + line)
+    return changed
+
+
+def check_theme_roles(themes):
+    """The roles in the theme files must still reproduce InitilizeSetting exactly.
+
+    Two of them are why this check exists rather than a comment: `lineNumberColor`
+    takes the palette key `linenumber`, and `selectionTextColor` takes `black` on
+    light and `white` on dark. Any frontend that resolved a role by its own name
+    would get the first wrong and could not express the second at all.
+    """
+    problems = []
+    if not os.path.exists(EDITOR_CPP):
+        return problems
+    roles = cached_theme_roles()
+    for name in ("light", "dark"):
+        got = (themes.get(name) or {}).get("roles")
+        if not isinstance(got, dict):
+            problems.append("theme-%s.json has no \"roles\" object" % name)
+            continue
+        want = dict(roles[name])
+        want.update(parse_brace_styles((themes[name].get("palette") or {})))
+        for role in sorted(set(want) | set(got)):
+            if got.get(role) != want.get(role):
+                problems.append("%s role %r: JSON says %r, the C++ says %r"
+                                % (name, role, got.get(role), want.get(role)))
+                continue
+            # A role naming a key the palette does not define resolves to nothing,
+            # and a frontend that ignores the failure paints black on black.
+            if want[role] not in (themes[name].get("palette") or {}):
+                problems.append("%s role %r names palette key %r, which is not defined"
+                                % (name, role, want[role]))
+    return problems
+
+
 def check_lexer_dispatch(languages_doc):
     """The two dispatch fields must still reproduce the C++ exactly.
 
@@ -861,16 +1095,31 @@ def build():
         "languages": languages,
     }
 
+    roles = cached_theme_roles()
     themes = {}
     for name, parsed in (("light", light), ("dark", dark)):
         unknown = sorted({c for entries in parsed["styles"].values()
                           for _, c in entries if c not in parsed["palette"]})
         if unknown:
             raise SystemExit("theme %s references undefined colours: %s" % (name, unknown))
+        hex_palette = {k: hexcolor(v) for k, v in parsed["palette"].items()}
+        merged = dict(roles[name])
+        merged.update(parse_brace_styles(hex_palette))
+        missing = sorted(k for k in merged.values() if k not in parsed["palette"])
+        if missing:
+            raise SystemExit("theme %s: InitilizeSetting reads undefined colours: %s"
+                             % (name, missing))
         themes[name] = {
             "_generatedBy": "tools/extract_language_data.py",
             "_source": "src/EditorColor%s.h" % name.capitalize(),
             "name": name,
+            # Which palette key each of CEditorCtrl's colour roles takes: ten from
+            # src/Editor.cpp's IS_LIGHT_THEME preset, two more from the brace
+            # styling below it. Kept OUT of "palette", which is a faithful mirror
+            # of the header's COLORREF declarations and is count-checked against
+            # them. See parse_theme_roles for the two roles whose key is not their
+            # own name, and parse_brace_styles for the cross-table guard.
+            "roles": {k: merged[k] for k in sorted(merged)},
             "palette": {k: hexcolor(v) for k, v in sorted(parsed["palette"].items())},
             "languages": {
                 lang: [{"style": sym, "value": sce[sym], "color": col}
@@ -1030,6 +1279,21 @@ def json_only_checks(languages_doc, themes):
             continue
         if palette.get(key) != want:
             problems.append("%s palette %r: %s != %s" % (name, key, palette.get(key), want))
+
+    # Shape only - check_theme_roles compares the values against the C++ while
+    # src/Editor.cpp still exists. This is what is left once it does not: a role
+    # pointing at an undefined key resolves to nothing, and the frontend then
+    # paints an unset colour rather than reporting a missing one.
+    for name in ("light", "dark"):
+        theme = themes.get(name) or {}
+        roles = theme.get("roles")
+        if not isinstance(roles, dict) or not roles:
+            problems.append("theme-%s.json: \"roles\" is missing or empty (shape check)" % name)
+            continue
+        for role, key in sorted(roles.items()):
+            if not isinstance(key, str) or key not in (theme.get("palette") or {}):
+                problems.append("theme-%s.json: role %r names palette key %r, which the "
+                                "file does not define (shape check)" % (name, role, key))
     return problems
 
 
@@ -1214,20 +1478,32 @@ def main():
               "Extraction and C++ round-trip are skipped; verifying the data files "
               "and their call sites instead.\n" % os.path.relpath(DATA_DIR, ROOT))
         languages_path = os.path.join(DATA_DIR, "languages.json")
+        theme_paths = {n: os.path.join(DATA_DIR, "theme-%s.json" % n)
+                       for n in ("light", "dark")}
         if not verify_only:
-            # Two fields do still have a C++ original, so there is still something
-            # to generate; everything else in this file must be edited by hand.
+            # Some fields do still have a C++ original, so there is still something
+            # to generate; everything else in these files must be edited by hand.
             print("Metadata and keywords: edit the JSON directly.")
             sync_dispatch_fields(languages_path)
+            sync_theme_roles(theme_paths)
             print()
         on_disk = json.load(open(languages_path, encoding="utf-8"))
-        on_disk_themes = {n: json.load(open(os.path.join(DATA_DIR, "theme-%s.json" % n),
-                                            encoding="utf-8")) for n in ("light", "dark")}
+        on_disk_themes = {n: json.load(open(p, encoding="utf-8"))
+                          for n, p in theme_paths.items()}
         failures = json_only_checks(on_disk, on_disk_themes)
         failures += check_lexer_call_sites(on_disk)
         failures += check_lexer_dispatch(on_disk)
+        failures += check_theme_roles(on_disk_themes)
         failures += check_deployed_copies()
         n_styles = sum(len(v) for t in on_disk_themes.values() for v in t["languages"].values())
+        light_roles = on_disk_themes["light"].get("roles") or {}
+        dark_roles = on_disk_themes["dark"].get("roles") or {}
+        print("theme colour roles: %d per theme, %d not named after the palette key "
+              "they take, %d keyed differently in the two themes"
+              % (len(light_roles),
+                 len({k for k, v in light_roles.items() if k != v}
+                     | {k for k, v in dark_roles.items() if k != v}),
+                 sum(1 for k in light_roles if light_roles[k] != dark_roles.get(k))))
         print("languages: %d   keyword blobs: %d   style mappings: %d   palette entries: %d/%d"
               % (len(on_disk["languages"]),
                  sum(1 for e in on_disk["languages"] if e["keywords"]), n_styles,

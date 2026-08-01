@@ -1103,6 +1103,183 @@ ctest --test-dir build -R core.LanguageLookup --output-on-failure
 
 ---
 
+## 6g. Brace matching, and a name that lies about what it is
+
+Phase 4 again, and this time the trap is not a fifth name space — it is a **fifth
+key inside a space already extracted**, plus a member whose name says the opposite
+of what it does.
+
+**What was ported.** `CEditorView`'s `SCN_UPDATEUI` case does three things
+(`src/EditorView.cpp:6179-6190`); this is the two that are unconditional:
+`CEditorCtrl::UpdateCaretLineVisible` (`src/Editor.cpp:4488`) and
+`CEditorCtrl::DoBraceMatchHighlight` (`:1232`). The XML/HTML tag match on the same
+event is language-gated and is its own change.
+
+**The brace LOGIC is a clean transcription** — `SCI_BRACEMATCH` on the position
+*before* the caret, which is where the caret sits after you type a brace, then
+`SCI_BRACEHIGHLIGHT` and `SCI_SETHIGHLIGHTGUIDE` at that brace's column, or both
+cleared on a miss. At position 0 it asks Scintilla about position −1;
+`SplitVector::ValueAt` returns `T()` for a negative index, `BraceOpposite('\0')` is
+`'\0'`, and `BraceMatch` returns −1, so the miss branch runs. That is load-bearing
+rather than incidental — it is why the original never guards the subtraction.
+
+**But the logic is only half of it, and the first attempt shipped only that half.**
+The colours live 800 lines away in `LoadEditorSettings` (`src/Editor.cpp:447-456`),
+not next to `DoBraceMatchHighlight`. Ported without them the feature is *entirely
+correct and invisible*: `STYLE_BRACELIGHT` inherits `STYLE_DEFAULT`, so the matched
+brace was drawn in `#FFFFFF` on a dark theme — the same colour as ordinary text.
+Caught by running the editor and clicking, not by any check that existed at the time.
+
+**And it colours a second thing, from neither end obviously.** `EditView.cxx:290`
+draws the *highlighted* indent guide with `styles[StyleBraceLight].fore`. So
+`SCI_SETHIGHLIGHTGUIDE` — the other half of `DoBraceMatchHighlight`, the one that
+marks the matched block's whole depth — produced nothing a user could see either,
+because the highlighted guide was white like every other guide. One missing pair of
+`STYLESETFORE` calls made two ported behaviours invisible.
+
+> This is the gap the derivation command in the session prompt warns about. It scans
+> `sed -n '110,420p' src/Editor.cpp`, and **line 447 is outside that window**. A plan
+> built from "port everything this greps" would have skipped it, and so would a plan
+> built from reading `DoBraceMatchHighlight` alone. The self-test now asserts the
+> style, so a correct-but-invisible port fails.
+
+**Six of those ten calls are dead, and are deliberately not ported.**
+`SCI_INDICSETSTYLE`, `SCI_INDICSETALPHA` and `SCI_INDICSETOUTLINEALPHA` take an
+**indicator** number; the original passes `STYLE_BRACELIGHT` (34) and
+`STYLE_BRACEBAD` (35), which are **style** numbers. `INDIC_MAX` is 35, so those are
+valid indicator ids — the calls silently configure two indicators nothing ever draws
+with. Scintilla only takes the indicator path for braces when
+`SCI_BRACEHIGHLIGHTINDICATOR` turns it on; neither frontend calls it
+(`ViewStyle.cxx:250` defaults it off, `Editor.cxx:8398` is the only setter). Only
+`SCI_STYLESETFORE` and `SCI_STYLESETBOLD` do anything. The source comment there —
+*"foreground and alpha maybe overridden by style settings"* — reads like the author
+was unsure which mechanism applied.
+
+**And the brace colours come from a third colour table.** Not the theme headers and
+not the `IS_LIGHT_THEME` preset, but `BasicColors` in `src/AppUtil.h`, which has no
+light and dark variant — so these two roles are the only ones identical in both
+themes. `BasicColors::red` and the palette's `red` are both `#FF0000` *today*, which
+is what makes resolving one through the other possible at all; `parse_brace_styles`
+therefore **checks that equality rather than assuming it** and fails loudly if the
+two tables drift. Same trap as reading the selection colour out of `editorTextColor`
+because the numbers happen to match — caught this time because the first one taught
+it.
+
+**The selection half had two things in it that reading the row would not give you.**
+
+**1. `_selectionTextColor` is a background.** It is passed to `SCI_SETSELBACK`
+(`CEditorCtrl::SetSelectionTextColor`, `src/Editor.cpp:3154`). A frontend author who
+trusted the name would set `SCI_SETSELFORE` and get unreadable selected text.
+
+**2. It is the only editor colour with no single palette key.** The ten members of
+`m_AppThemeColorSet` are filled by an `IS_LIGHT_THEME` preset
+(`src/Editor.cpp:106-132`). Eight take the constant named after them, which is why
+`ui-qt/` could resolve them by name and be right. Two do not:
+
+| role | light | dark |
+|---|---|---|
+| `lineNumberColor` | `linenumber` | `linenumber` |
+| **`selectionTextColor`** | **`black`** | **`white`** |
+
+The second cannot be expressed as one key at all, so `theme.ResolveColor("...")` —
+the shape every other colour used — has no correct argument. `theme-*.json` gains a
+`roles` object (twelve entries — the ten above plus the two brace colours),
+`core/CEditorTheme` gains `ResolveRole`, and the existing colour lookups in
+`ui-qt/EditorWidget.cpp` move onto it: eight of them are no-ops today, and that is
+the point — they were *assumptions* that happened to hold.
+
+`roles` is deliberately **not** merged into `palette`. `palette` is a faithful mirror
+of the header's `COLORREF` declarations and §7's count check asserts exactly that
+(34/34); injecting a derived entry would break the one invariant that makes the
+palette trustworthy.
+
+**The role names are the C++ member names, misleading one included.** Renaming
+`selectionTextColor` to something honest would break the round-trip that lets
+`--verify` re-derive it, so the lie is *documented at both consumers*
+(`core/LanguageData.h`, `ui-qt/EditorWidget.cpp`) instead of corrected in the data.
+
+**What no test can catch here, stated because the alternative is implying otherwise.**
+`selectionTextColor` and `editorTextColor` resolve to the *same two values* —
+`#000000` light, `#FFFFFF` dark. A frontend reading the wrong one paints identical
+pixels. Mutation-checked: swapping the role at the `ui-qt/` call site leaves all 266
+self-test checks green. Seven other mutations each fail it: dropping the `updateUi`
+connection, matching the brace at the caret instead of before it, never hiding the
+caret line, resolving the selection colour by its own name, dropping the brace
+styling, dropping its bold, and swapping the matched and unmatched colours. The correctness of
+*which role* is a review property backed by `core/tests/TestLanguageData.cpp` pinning
+the palette keys, not a runtime one; the self-test compares against `core/`'s own
+resolution so that it becomes a real check the day the two values diverge.
+
+**One thing that looks redundant and is not.** `UpdateCaretLineVisible` re-sets
+`SCI_SETSELBACK` on every caret move where the selection is empty. Nothing else in
+that function changes it — but `SearchForward` and `SearchBackward` paint the
+selection **yellow at alpha 90** to flag a match (`src/Editor.cpp:1904`, `:1936`),
+and this is what restores it once the user clicks away. It is deliberately *not*
+restored on the else branch, so the yellow survives for as long as the match stays
+selected. `ui-qt/`'s find bar does not paint that yellow yet, so today the reset
+restores a colour nothing has changed; it is transcribed anyway, because an
+"optimisation" that dropped it would be found by eye months later.
+
+**And a note on the harness.** Scintilla does not send `SCN_UPDATEUI` from the
+message that moved the caret — it records what changed and flushes from
+`Editor::Paint` and `Editor::Idle` (`Editor.cxx:1893`, `:5296`). A headless test that
+only sends `SCI_GOTOPOS` runs none of this and asserts against whatever the previous
+check left behind. `viewport()->grab()` forces a synchronous `paintEvent` and works
+under `QT_QPA_PLATFORM=offscreen`; that is what makes these checks real rather than
+decorative.
+
+Reproduce:
+
+```bash
+# the role table, and the two departures from name-equals-key
+python3 tools/extract_language_data.py --verify | grep 'theme colour roles'
+python3 - <<'PY'
+import json
+for t in ('light', 'dark'):
+    d = json.load(open('Packages/data-packages/theme-%s.json' % t))
+    r, p = d['roles'], d['palette']
+    print(t, 'roles:', len(r),
+          '| key != role name:', sorted(k for k, v in r.items() if k != v))
+    for role in ('selectionTextColor', 'editorTextColor'):
+        print('   %-19s -> %-10s %s' % (role, r[role], p[r[role]]))
+PY
+
+# the C++ the roles are derived from
+sed -n '106,132p' src/Editor.cpp
+
+# the two ported functions
+sed -n '1232,1249p' src/Editor.cpp      # DoBraceMatchHighlight
+sed -n '4488,4500p' src/Editor.cpp      # UpdateCaretLineVisible
+
+# the brace styling, 800 lines away from the logic and outside the 110-420
+# window the session's derivation command scans - 4 live calls of 10
+sed -n '446,456p' src/Editor.cpp
+# empty: neither frontend CALLS it, so the indicator path stays off. Matching
+# the bare name instead would now hit this port's own explanatory comment.
+grep -rnE '(DoCommand|Send)\(SCI_BRACEHIGHLIGHTINDICATOR' src/ ui-qt/
+
+# BasicColors is a third colour table, and the brace colours are only
+# resolvable through the palette while the two agree
+grep -n 'const COLORREF \(red\|blue\) ' src/AppUtil.h
+python3 -c "
+import json
+for t in ('light', 'dark'):
+    p = json.load(open('Packages/data-packages/theme-%s.json' % t))['palette']
+    print(t, 'red =', p['red'], ' blue =', p['blue'])"
+
+# 266 checks, up from 164
+cmake -S . -B qtbuild -G Ninja -DVINATEXT_BUILD_QT=ON && cmake --build qtbuild --parallel
+python3 tools/make_selftest_fixtures.py qtbuild/fixtures
+QT_QPA_PLATFORM=offscreen ./qtbuild/ui-qt/vinatext-qt --selftest \
+  core/LanguageData.cpp tools/extract_language_data.py \
+  qtbuild/fixtures/crlf-bom.cpp qtbuild/fixtures/utf16.py \
+  qtbuild/fixtures/latin1.md qtbuild/fixtures/no-trailing-newline.py
+
+ctest --test-dir build -R core.LanguageData --output-on-failure
+```
+
+---
+
 ## 7. How to reproduce these numbers
 
 ```bash

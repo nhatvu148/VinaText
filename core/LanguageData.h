@@ -142,15 +142,39 @@ namespace Core
 
 		const std::string& GetName() const { return m_Name; }
 		const std::map<std::string, SColor>& GetPalette() const { return m_Palette; }
+		// Role name -> palette key, from CEditorCtrl::InitilizeSetting's
+		// IS_LIGHT_THEME preset. See ResolveRole.
+		const std::map<std::string, std::string>& GetRoles() const { return m_Roles; }
 
 		// Returns nullptr when the theme has no table for that language.
 		const std::vector<SStyleMapping>* FindStyles(const std::string& strLanguageId) const;
 		// Resolves a palette key. Returns false when the key is not defined.
 		bool ResolveColor(const std::string& strKey, SColor& color) const;
 
+		// Resolves one of the editor's colour ROLES - the indirection the MFC
+		// frontend performs when it fills m_AppThemeColorSet. Prefer this to
+		// ResolveColor for anything CEditorCtrl reads out of that struct, because
+		// a role's palette key is not reliably its own name:
+		//
+		//   lineNumberColor    -> "linenumber"       (both themes)
+		//   selectionTextColor -> "black" on light, "white" on dark
+		//
+		// The second cannot be expressed as a single palette key at all, which is
+		// why resolving these by name happens to work for eight roles and quietly
+		// does not for those two.
+		//
+		// NAMES ARE THE C++ MEMBER NAMES, including one that lies:
+		// `selectionTextColor` is passed to SCI_SETSELBACK, so it is the selection
+		// BACKGROUND. It is kept verbatim so every value traces back to an
+		// identifier that can be grepped for in src/.
+		//
+		// Returns false when the role is unknown or names an undefined key.
+		bool ResolveRole(const std::string& strRole, SColor& color) const;
+
 	private:
 		std::string										m_Name;
 		std::map<std::string, SColor>					m_Palette;
+		std::map<std::string, std::string>				m_Roles;
 		std::map<std::string, std::vector<SStyleMapping>> m_Styles;
 	};
 
