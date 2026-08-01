@@ -1680,6 +1680,136 @@ QT_QPA_PLATFORM=offscreen ./qtbuild/ui-qt/vinatext-qt --selftest \
 
 ---
 
+## 6k. Phase 5's first dock pane — the framework, not the pane
+
+Phase 4 is done. This is the **first slice of Phase 5 and deliberately only that**:
+the `QDockWidget` framework, show/hide, save/restore geometry, and one pane's
+content. The other eight panes and all thirty dialogs wait until this shape has
+been looked at.
+
+**Re-derived, because the brief's number is stale.** `ls src/*Dlg.cpp | wc -l` is
+**30**, not the "~40" in §5 of the brief, and all 30 are in `src/VinaText.vcxproj`
+— unlike the dock panes, where §2 found two that were never compiled. All nine
+surviving panes are built.
+
+### Why MessageWindow first
+
+| pane | LOC | |
+|---|---:|---|
+| `FileExplorerWindow` | 85 | a shell for `FileExplorerCtrl`, 6,217 lines of `ui-rewrite` |
+| `SearchAndReplaceWindow` | 124 | |
+| `OpenTabWindows` | 214 | |
+| **`MessageWindow`** | **582** | ← |
+| `BreakpointWindow` / `BookmarkWindow` | 831 / 832 | need Phase 5's marker work |
+| `PathResultWindow` / `SearchResultWindow` | 1,168 / 1,175 | need find-in-files |
+| `BuildWindow` | 1,885 | needs the compiler layer |
+
+`MessageWindow` is the simplest one that is **useful the moment it exists**.
+`SearchResultWindow` was the other suggestion and would have landed as an empty
+pane, because `ui-qt/` has no find-in-files to fill it. Meanwhile `ui-qt/` reported
+file errors in a `QMessageBox` plus a status-bar message that expires after five
+seconds — there was nowhere to look and see what had happened.
+
+### 582 lines become about 120
+
+The pane's entire public surface is two methods: `AddLogMessage(text, colour)` and
+`ClearAll()`. Everything else in that file is scaffolding that Qt supplies:
+
+| MFC | Qt |
+|---|---|
+| `CDockPaneBase : CDockablePane` | `QDockWidget` |
+| `CMessagePaneDlg : CDialogEx` hosted inside it | *gone* — the dock holds the widget directly |
+| `CRichEditCtrlEX : CRichEditCtrl` | `QPlainTextEdit` + a `QTextCharFormat` |
+| `DoDataExchange`, `OnSize`, `OnMoving`, `OnInitDialog` | *gone* — layouts |
+| a hand-rolled checkable menu item | `QDockWidget::toggleViewAction()` |
+
+**A `QTextCursor` with a character format, not `appendHtml()`.** Log lines carry
+file paths and compiler output, which contain `<` and `&` as data. Going through
+HTML would mean escaping them, and would silently mangle any line that was not.
+
+**Two quirks preserved.** An empty message is ignored. And the original tests
+`str.Find('\n') != -1` — a newline *anywhere*, not at the end — before deciding
+whether to append one, so a multi-line message that does not end in a newline gets
+none and the next message continues its last line. The callers all pass single
+lines; "fixing" it would change where the breaks fall for any caller that does not.
+
+### Geometry: a deliberate divergence in mechanism
+
+`QMainWindow::saveState`/`restoreState` plus `saveGeometry`/`restoreGeometry`,
+stored in `QSettings`. **Not** `AppSettings`: the MFC persists docking through
+`CDockingManager` into the registry, which has no portable counterpart and is not a
+file this port could read. Same behaviour — the pane comes back where it was left —
+by a different mechanism, which is the right trade here and worth naming as one.
+
+`CMessagePane` sets an `objectName`, and that is load-bearing rather than tidy:
+`saveState` keys docks by it, and a mutation removing it fails both persistence
+checks.
+
+### The self-test had to start showing the window
+
+The dock checks failed on first run, and the cause was the harness, not the pane:
+**`RunSelfTest` never showed the window.** A `QDockWidget`'s visibility is only real
+once its parent window is — `setVisible(true)` on a child of a hidden window leaves
+`isVisible()` false and `isHidden()` unchanged. Measured:
+
+```
+PANEPROBE afterHide  hidden=0 visible=0 checked=1 winVisible=0
+```
+
+So the checks were asserting against a state no user could ever be in. `show()` is
+now the first thing `RunSelfTest` does — harmless under
+`QT_QPA_PLATFORM=offscreen`, and what `RenderScreenshots` already did.
+
+That is the third harness defect this phase, after §6h's silent build failures and
+§6i's sweep that never reached its own subject. All three had the same shape: the
+test ran, reported success, and was measuring something other than what it claimed.
+
+### Checks
+
+Content in order and in the right colour; an empty message ignored; a message
+ending in a newline not given a second; `ClearAll`; show and hide through the same
+action the View menu uses, both ways, with the menu item's checked state following;
+and the layout round-tripping through the real `Save`/`RestoreDockState` —
+saved-hidden restores hidden **and** saved-visible restores visible, so the check
+cannot pass on a restore that simply hides everything.
+
+**And the isolation has to happen before the window exists.** `CMainWindow`'s
+constructor restores the layout from `QSettings`, so scoping a `QTemporaryDir`
+inside `RunSelfTest` is already too late: a `--selftest` would inherit whatever an
+earlier interactive session saved, and fail on a pane the user had merely closed.
+Found by the review bot and reproduced — seeding a hidden-pane layout makes the
+next, otherwise untouched self-test fail three checks, and that failure persists
+across runs because the state is on disk. `main.cpp` now points `QSettings` at a
+scratch directory for the whole process whenever a headless mode is set, which also
+means `--selftest` and `--screenshot` can no longer write to a real install's
+settings at all.
+
+Mutations caught: colour ignored, empty message not ignored, newline always
+appended, state never saved, state never restored, `objectName` removed.
+
+**Self-test: 536 → 553 checks.**
+
+Reproduce:
+
+```bash
+# the counts, re-derived
+ls src/*Dlg.cpp | wc -l                                    # 30, not ~40
+for f in src/*Dlg.cpp; do grep -q "$(basename $f)" src/VinaText.vcxproj \
+  || echo "not built: $f"; done                            # silent: all 30 are
+
+# the pane's whole public surface
+sed -n '87,105p' src/MessageWindow.h
+
+# 553 checks, up from 536
+QT_QPA_PLATFORM=offscreen ./qtbuild/ui-qt/vinatext-qt --selftest \
+  core/LanguageData.cpp tools/extract_language_data.py \
+  qtbuild/fixtures/crlf-bom.cpp qtbuild/fixtures/utf16.py \
+  qtbuild/fixtures/latin1.md qtbuild/fixtures/no-trailing-newline.py \
+  qtbuild/fixtures/tags.xml qtbuild/fixtures/urls.md
+```
+
+---
+
 ## 7. How to reproduce these numbers
 
 ```bash

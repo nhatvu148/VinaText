@@ -21,6 +21,8 @@
 
 #include <QApplication>
 #include <QCommandLineParser>
+#include <QSettings>
+#include <QTemporaryDir>
 #include <QMessageBox>
 
 namespace
@@ -65,6 +67,29 @@ int main(int argc, char* argv[])
 	// QT_QPA_PLATFORM=offscreen in CI that is a job that runs until its timeout
 	// with no useful output. Add new headless modes to this line.
 	const bool bHeadless = parser.isSet(selfTestOption) || parser.isSet(screenshotOption);
+
+	// The headless modes must not read or write the settings of a real install.
+	// CMainWindow's constructor restores the dock layout from QSettings, so this
+	// has to happen BEFORE the window exists - isolating it inside RunSelfTest is
+	// already too late, and a --selftest that inherited a layout saved by an
+	// earlier interactive session would fail on a pane the user had merely
+	// closed. Demonstrated: seeding a hidden-pane layout makes a subsequent,
+	// otherwise untouched self-test fail three checks.
+	//
+	// The QTemporaryDir has to outlive the window, hence the scope here: it
+	// removes its tree when it is destroyed.
+	QTemporaryDir settingsDirectory;
+	if (bHeadless)
+	{
+		if (!settingsDirectory.isValid())
+		{
+			qWarning("could not create a scratch settings directory");
+			return 2;
+		}
+		QSettings::setDefaultFormat(QSettings::IniFormat);
+		QSettings::setPath(QSettings::IniFormat, QSettings::UserScope,
+			settingsDirectory.path());
+	}
 
 	CEditorData data;
 	QString strError;

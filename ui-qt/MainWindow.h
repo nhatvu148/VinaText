@@ -19,9 +19,11 @@
 
 #include "EditorData.h"
 
+#include <QColor>
 #include <QMainWindow>
 
 class CEditorWidget;
+class CMessagePane;
 class CFindBar;
 class QLabel;
 class QTabWidget;
@@ -48,8 +50,22 @@ public:
 	// asking a reviewer to build it. Works under QT_QPA_PLATFORM=offscreen.
 	int RenderScreenshots(const QStringList& files, const QString& strDirectory);
 
+	// Appends a line to the message pane. The Qt counterpart of the
+	// LOG_OUTPUT_MESSAGE family, which routes into CMessagePane on Windows;
+	// ui-qt/ had nowhere for these to go before the pane existed.
+	void LogMessage(const QString& strText, const QColor& colour = QColor());
+	CMessagePane* GetMessagePane() const { return m_pMessagePane; }
+
 protected:
 	void closeEvent(QCloseEvent* pEvent) override;
+
+private:
+	// Dock geometry, so the panes come back where they were left. QSettings and
+	// not AppSettings: the MFC persists docking through CDockingManager into the
+	// registry, which has no portable counterpart and is not a file this port
+	// could read anyway. Deliberate divergence in mechanism, same behaviour.
+	void SaveDockState();
+	void RestoreDockState();
 
 private:
 	void BuildMenus();
@@ -81,6 +97,7 @@ private:
 	bool SaveEditor(CEditorWidget* pEditor, const QString& strPath);
 
 	const CEditorData&	m_Data;
+	CMessagePane*			m_pMessagePane = nullptr;
 	QTabWidget*			m_pTabs = nullptr;
 	CFindBar*			m_pFindBar = nullptr;
 	QLabel*				m_pStatusPosition = nullptr;
