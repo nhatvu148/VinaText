@@ -684,6 +684,7 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 	int nBraceMatchesChecked = 0;
 	int nTagMatchFilesChecked = 0;
 	int nUrlFilesChecked = 0;
+	int nAutoCompleteChecked = 0;
 	for (int i = 0; i < GetTabCount(); ++i)
 	{
 		m_pTabs->setCurrentIndex(i);
@@ -1230,6 +1231,65 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 			}
 		}
 
+		// Autocomplete. The setup values first - these are what Scintilla needs in
+		// order to read the list string the widget builds, so a mismatch between
+		// the two would show a single entry containing every separator.
+		Require(pEditor->Send(SCI_AUTOCGETSEPARATOR) == '$',
+			QStringLiteral("%1: autocomplete word separator is '$'").arg(strName));
+		Require(pEditor->Send(SCI_AUTOCGETTYPESEPARATOR) == '?',
+			QStringLiteral("%1: autocomplete type separator is '?'").arg(strName));
+		Require(pEditor->Send(SCI_AUTOCGETMAXWIDTH) == 100,
+			QStringLiteral("%1: autocomplete max width is 100").arg(strName));
+		Require(pEditor->Send(SCI_AUTOCGETIGNORECASE) == 1,
+			QStringLiteral("%1: autocomplete ignores case, as AppSettings ships it")
+				.arg(strName));
+
+		// The list itself. Derived from core/'s own keyword blob rather than a
+		// hard-coded word, so this works on every language in the corpus: take a
+		// real keyword, ask for its own prefix, and it must be offered.
+		{
+			const Core::SLanguageInfo* pLang3 = m_Data.DetectLanguage(strName);
+			if (pLang3 != nullptr && !pLang3->_Keywords.empty())
+			{
+				const QString strKeywords = QString::fromStdString(pLang3->_Keywords);
+				const QStringList keywords = strKeywords.split(QLatin1Char(' '),
+					Qt::SkipEmptyParts);
+				// A keyword of at least three characters, so the prefix is not so
+				// short that it proves nothing.
+				QString strKeyword;
+				for (const QString& candidate : keywords)
+				{
+					if (candidate.size() >= 3)
+					{
+						strKeyword = candidate;
+						break;
+					}
+				}
+				if (!strKeyword.isEmpty())
+				{
+					const QStringList offered =
+						pEditor->GetAutoCompleteList(strKeyword.left(2));
+					Require(offered.contains(strKeyword),
+						QStringLiteral("%1: '%2' is offered for prefix '%3'")
+							.arg(strName, strKeyword, strKeyword.left(2)));
+					++nAutoCompleteChecked;
+				}
+			}
+
+			// A prefix nothing starts with offers nothing. Without this, a list
+			// builder that ignored the prefix entirely would pass the check above.
+			Require(pEditor->GetAutoCompleteList(
+					QStringLiteral("zzqzzq_not_a_prefix")).isEmpty(),
+				QStringLiteral("%1: an unknown prefix offers nothing").arg(strName));
+			// And an empty prefix, which would otherwise offer the whole document.
+			Require(pEditor->GetAutoCompleteList(QString()).isEmpty(),
+				QStringLiteral("%1: an empty prefix offers nothing").arg(strName));
+			// AppSettings ships m_bAutoCompleteIgnoreNumbers TRUE, so a numeric
+			// prefix contributes no document words.
+			Require(pEditor->GetAutoCompleteList(QStringLiteral("1")).isEmpty(),
+				QStringLiteral("%1: a numeric prefix offers nothing").arg(strName));
+		}
+
 		// Status bar.
 		pEditor->Send(SCI_GOTOPOS, 0);
 		UpdateStatusBar();
@@ -1251,6 +1311,8 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 		QStringLiteral("tag matching was exercised on at least one file"));
 	Require(nUrlFilesChecked > 0,
 		QStringLiteral("URL hotspots were exercised on the urls.md fixture"));
+	Require(nAutoCompleteChecked > 0,
+		QStringLiteral("autocomplete was exercised on at least one file"));
 
 	//----------------------------------------------------------------------
 	// Save. The check is byte equality against the file that was opened: an

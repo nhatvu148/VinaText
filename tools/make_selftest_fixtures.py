@@ -34,6 +34,11 @@ def main():
             "// comment\r\n"
             "int main(int argc, char** argv)\r\n"
             "{\r\n"
+            # 1234 is load-bearing: autocomplete skips an all-digit prefix
+            # (m_bAutoCompleteIgnoreNumbers ships TRUE), and without a word in
+            # the corpus that actually STARTS with a digit, the check for that
+            # passes whether the rule is implemented or not.
+            "\tint value = 1234;\r\n"
             "\treturn 0;\r\n"
             "}\r\n").encode("utf-8"),
 
