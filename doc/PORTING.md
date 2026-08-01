@@ -1769,15 +1769,25 @@ test ran, reported success, and was measuring something other than what it claim
 Content in order and in the right colour; an empty message ignored; a message
 ending in a newline not given a second; `ClearAll`; show and hide through the same
 action the View menu uses, both ways, with the menu item's checked state following;
-and the layout round-tripping through the real `Save`/`RestoreDockState` with
-`QSettings` pointed at a `QTemporaryDir` — saved-hidden restores hidden **and**
-saved-visible restores visible, so the check cannot pass on a restore that simply
-hides everything.
+and the layout round-tripping through the real `Save`/`RestoreDockState` —
+saved-hidden restores hidden **and** saved-visible restores visible, so the check
+cannot pass on a restore that simply hides everything.
+
+**And the isolation has to happen before the window exists.** `CMainWindow`'s
+constructor restores the layout from `QSettings`, so scoping a `QTemporaryDir`
+inside `RunSelfTest` is already too late: a `--selftest` would inherit whatever an
+earlier interactive session saved, and fail on a pane the user had merely closed.
+Found by the review bot and reproduced — seeding a hidden-pane layout makes the
+next, otherwise untouched self-test fail three checks, and that failure persists
+across runs because the state is on disk. `main.cpp` now points `QSettings` at a
+scratch directory for the whole process whenever a headless mode is set, which also
+means `--selftest` and `--screenshot` can no longer write to a real install's
+settings at all.
 
 Mutations caught: colour ignored, empty message not ignored, newline always
 appended, state never saved, state never restored, `objectName` removed.
 
-**Self-test: 536 → 554 checks.**
+**Self-test: 536 → 553 checks.**
 
 Reproduce:
 
@@ -1790,7 +1800,7 @@ for f in src/*Dlg.cpp; do grep -q "$(basename $f)" src/VinaText.vcxproj \
 # the pane's whole public surface
 sed -n '87,105p' src/MessageWindow.h
 
-# 554 checks, up from 536
+# 553 checks, up from 536
 QT_QPA_PLATFORM=offscreen ./qtbuild/ui-qt/vinatext-qt --selftest \
   core/LanguageData.cpp tools/extract_language_data.py \
   qtbuild/fixtures/crlf-bom.cpp qtbuild/fixtures/utf16.py \

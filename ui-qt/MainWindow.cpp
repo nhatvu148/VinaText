@@ -1448,19 +1448,13 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 			Require(!pPane->isHidden(), QStringLiteral("pane: the toggle brings it back"));
 			Require(pToggle->isChecked(), QStringLiteral("pane: and rechecks"));
 
-			// Layout persistence, through the real Save/RestoreDockState - with
-			// QSettings pointed at a temporary directory, so running the
-			// self-test cannot rewrite the layout of the user's own install.
-			QTemporaryDir settingsDir;
-			Require(settingsDir.isValid(),
-				QStringLiteral("pane: created a scratch settings directory"));
-			if (settingsDir.isValid())
+			// Layout persistence, through the real Save/RestoreDockState.
+			// QSettings is already pointed at a scratch directory for the whole
+			// process - main.cpp does it before the window is constructed,
+			// because the constructor restores from QSettings and isolating it
+			// here would be too late. That ordering is the whole reason this
+			// block can assert the pane starts visible at all.
 			{
-				const QSettings::Format format = QSettings::defaultFormat();
-				QSettings::setDefaultFormat(QSettings::IniFormat);
-				QSettings::setPath(QSettings::IniFormat, QSettings::UserScope,
-					settingsDir.path());
-
 				pPane->hide();
 				SaveDockState();
 				pPane->show();
@@ -1477,8 +1471,6 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 				RestoreDockState();
 				Require(!pPane->isHidden(),
 					QStringLiteral("pane: a layout saved while visible restores visible"));
-
-				QSettings::setDefaultFormat(format);
 			}
 		}
 	}
