@@ -195,6 +195,19 @@ void CEditorWidget::RenderUrlHotspots()
 	// SC_INDICFLAG_VALUEFORE makes the colour come from the per-range VALUE set
 	// below, so this has to be re-established here rather than only at styling
 	// time: anything else that fills an indicator moves SCI_SETINDICATORCURRENT.
+	//
+	// ALMOST the default text colour, and the exception is the original's, not
+	// this port's. DecorationList::SetCurrentValue is
+	// `currentValue = value ? value : 1` (Decoration.cxx:191-193), so a value of
+	// 0 becomes 1. The light theme's editorTextColor is RGB(0,0,0)
+	// (src/EditorColorLight.h:32), i.e. Scintilla colour 0 - so on light, URLs
+	// are drawn in RGB(0,0,1) rather than pure black.
+	//
+	// Left alone deliberately. CEditorCtrl does the identical
+	// SCI_SETINDICATORVALUE(SCI_STYLEGETFORE(STYLE_DEFAULT)) into the identical
+	// vendored Scintilla (src/Editor.cpp:4426-4428), so Windows has the same one
+	// unit of blue. Special-casing 0 here would make ui-qt/ differ from the
+	// shipping app to fix something no eye can see.
 	Send(SCI_SETINDICATORVALUE, Send(SCI_STYLEGETFORE, STYLE_DEFAULT));
 
 	// Walk the whole document, marking URL segments and clearing the rest. The

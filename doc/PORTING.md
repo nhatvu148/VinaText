@@ -1516,6 +1516,22 @@ Unlike §6g's six dead brace calls this one is transcribed: those addressed the 
 indicator entirely and could never matter, while this one addresses the right
 indicator and would start mattering the day the flag changed.
 
+### One unit of blue, in both frontends
+
+`SCI_SETINDICATORVALUE` is the colour under `SC_INDICFLAG_VALUEFORE`, and
+`DecorationList::SetCurrentValue` is `currentValue = value ? value : 1`
+(`Decoration.cxx:191-193`) — a value of 0 becomes 1. The light theme's
+`editorTextColor` is `RGB(0,0,0)` (`src/EditorColorLight.h:32`), i.e. Scintilla
+colour 0, so on light **URLs are drawn in `RGB(0,0,1)`, not pure black**. Measured:
+light `STYLE_DEFAULT` fore 0 → stored indicator value **1**; dark 16777215 → 16777215.
+
+Found by the review bot, and left alone deliberately. `CEditorCtrl` does the
+identical `SCI_SETINDICATORVALUE(SCI_STYLEGETFORE(STYLE_DEFAULT))` into the identical
+vendored Scintilla (`src/Editor.cpp:4426-4428`), so **Windows has the same one unit
+of blue**. Special-casing 0 would make `ui-qt/` differ from the shipping app to fix
+something no eye can see. The comment at the call site was wrong and is now right;
+the code is unchanged.
+
 ### When it runs
 
 The original is called **once**, from `LoadEditorSettings` (`:409-412`) — not from any
