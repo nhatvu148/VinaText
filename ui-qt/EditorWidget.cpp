@@ -10,6 +10,8 @@
 
 #include "TagMatcher.h"
 
+#include <UrlScanner.h>
+
 // Order matters: Lexilla.h uses Scintilla::ILexer5 without declaring it, so
 // ILexer.h has to come first. Neither header is self-contained.
 #include <Scintilla.h>
@@ -34,11 +36,18 @@ namespace
 	// containers; 8 is the first of those.
 	const int FIND_INDICATOR = 8;
 
-	// src/EditorCommonDef.h:48-49, which numbers them from INDIC_CONTAINER (8).
+	// src/EditorCommonDef.h:48-52, which numbers them from INDIC_CONTAINER (8).
 	// Kept at the same numbers as the MFC so the two frontends stay comparable
 	// when reading a document's indicator state.
 	const int INDIC_TAGMATCH = 10;
 	const int INDIC_TAGATTR = 11;
+	const int INDIC_URL_HOTSPOT = 14;
+
+	// AppSettingMgr.m_bEnableUrlHighlight, which ships TRUE (src/AppSettings.h:69
+	// and AppSettings.cpp:14). Settings are AppSettings, the last file in the
+	// Phase 2 backlog at 783 call sites, so the shipped default is transcribed
+	// here rather than read - the same as every other setting in this file.
+	const bool ENABLE_URL_HIGHLIGHT = true;
 
 	// Margin numbers, matching src/EditorCommonDef.h's SC_SETMARGINTYPE_*: line
 	// numbers, symbols, folding, left to right.
@@ -149,6 +158,79 @@ void CEditorWidget::OnUpdateUi(Scintilla::Update /*updated*/)
 	UpdateSelectionPainting();
 	UpdateBraceMatch();
 	UpdateTagMatch();
+}
+
+void CEditorWidget::RenderUrlHotspots()
+{
+	// Transcribes CEditorCtrl::RenderHotSpotForUrlLinks (src/Editor.cpp:4419).
+	//
+	// WHEN it runs is part of the port: the original is called once, from
+	// LoadEditorSettings (:409-412), not from any notification - so a URL typed
+	// after the file is open is not underlined until the editor is re-styled.
+	// Called from ApplyTheme here, which is the same moment. Hooking
+	// SCN_MODIFIED would be an improvement and a behaviour change; it is not
+	// this change.
+	//
+	// NO UTF-16 ROUND TRIP. The original converts the document to wide
+	// characters, scans, and converts each segment's length back with
+	// WideCharToMultiByte to get a document offset. core/UrlScanner works on the
+	// UTF-8 bytes Scintilla already indexes; see the note in core/UrlScanner.h
+	// for why that finds the same URLs.
+	if (!ENABLE_URL_HIGHLIGHT)
+	{
+		return;
+	}
+
+	const sptr_t nLength = Send(SCI_GETLENGTH);
+	if (nLength <= 0)
+	{
+		return;
+	}
+	QByteArray text(static_cast<int>(nLength) + 1, '\0');
+	Send(SCI_GETTEXT, static_cast<uptr_t>(nLength) + 1,
+		reinterpret_cast<sptr_t>(text.data()));
+	text.truncate(static_cast<int>(nLength));
+
+	Send(SCI_SETINDICATORCURRENT, INDIC_URL_HOTSPOT);
+	// SC_INDICFLAG_VALUEFORE makes the colour come from the per-range VALUE set
+	// below, so this has to be re-established here rather than only at styling
+	// time: anything else that fills an indicator moves SCI_SETINDICATORCURRENT.
+	//
+	// ALMOST the default text colour, and the exception is the original's, not
+	// this port's. DecorationList::SetCurrentValue is
+	// `currentValue = value ? value : 1` (Decoration.cxx:191-193), so a value of
+	// 0 becomes 1. The light theme's editorTextColor is RGB(0,0,0)
+	// (src/EditorColorLight.h:32), i.e. Scintilla colour 0 - so on light, URLs
+	// are drawn in RGB(0,0,1) rather than pure black.
+	//
+	// Left alone deliberately. CEditorCtrl does the identical
+	// SCI_SETINDICATORVALUE(SCI_STYLEGETFORE(STYLE_DEFAULT)) into the identical
+	// vendored Scintilla (src/Editor.cpp:4426-4428), so Windows has the same one
+	// unit of blue. Special-casing 0 here would make ui-qt/ differ from the
+	// shipping app to fix something no eye can see.
+	Send(SCI_SETINDICATORVALUE, Send(SCI_STYLEGETFORE, STYLE_DEFAULT));
+
+	// Walk the whole document, marking URL segments and clearing the rest. The
+	// clearing is what removes a highlight over text that used to be a URL, and
+	// it is why the original reports non-URL segments at all.
+	size_t nStart = 0;
+	size_t nSegment = 0;
+	bool bIsUrl = false;
+	while (Core::CUrlScanner::NextSegment(text.constData(), static_cast<size_t>(nLength),
+		nStart, nSegment, bIsUrl))
+	{
+		if (bIsUrl)
+		{
+			Send(SCI_INDICATORFILLRANGE, static_cast<uptr_t>(nStart),
+				static_cast<sptr_t>(nSegment));
+		}
+		else
+		{
+			Send(SCI_INDICATORCLEARRANGE, static_cast<uptr_t>(nStart),
+				static_cast<sptr_t>(nSegment));
+		}
+		nStart += nSegment;
+	}
 }
 
 void CEditorWidget::UpdateTagMatch()
@@ -450,6 +532,9 @@ void CEditorWidget::ApplyTheme(EEditorTheme theme)
 	ApplyLanguageStyles(colours);
 	ApplyFoldMargin(colours);
 	UpdateLineNumberMargin();
+	// Last, because it reads STYLE_DEFAULT's foreground - which
+	// ApplyEditorStyles has just set - as the colour to draw URLs in.
+	RenderUrlHotspots();
 }
 
 void CEditorWidget::ApplyEditorStyles(const Core::CEditorTheme& theme)
@@ -552,6 +637,24 @@ void CEditorWidget::ApplyEditorStyles(const Core::CEditorTheme& theme)
 			Send(SCI_INDICSETUNDER, nIndicator, 1);
 		}
 	}
+
+	// The URL hotspot indicator (src/Editor.cpp:4421-4425). A plain underline
+	// normally, a filled box while the pointer is over it.
+	Send(SCI_INDICSETSTYLE, INDIC_URL_HOTSPOT, INDIC_PLAIN);
+	Send(SCI_INDICSETHOVERSTYLE, INDIC_URL_HOTSPOT, INDIC_FULLBOX);
+	Send(SCI_INDICSETALPHA, INDIC_URL_HOTSPOT, 70);
+	// SC_INDICFLAG_VALUEFORE makes the drawn colour the per-range VALUE
+	// (Indicator.cxx:33), so the INDICSETFORE the original does two lines earlier
+	// with BasicColors::orange never reaches the screen - URLs are drawn in the
+	// default text colour. Transcribed anyway, unlike the six dead brace calls:
+	// this one addresses the right indicator and would start mattering the day
+	// the flag changed.
+	Core::SColor url;
+	if (theme.ResolveColor("orange", url))
+	{
+		Send(SCI_INDICSETFORE, INDIC_URL_HOTSPOT, ToScintillaColour(url));
+	}
+	Send(SCI_INDICSETFLAGS, INDIC_URL_HOTSPOT, SC_INDICFLAG_VALUEFORE);
 
 	Core::SColor colour;
 	if (theme.ResolveRole("editorCaretColor", colour))

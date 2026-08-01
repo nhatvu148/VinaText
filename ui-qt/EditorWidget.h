@@ -94,6 +94,10 @@ private:
 	// The selection background and whether the caret line is drawn at all.
 	// Transcribes CEditorCtrl::UpdateCaretLineVisible.
 	void UpdateSelectionPainting();
+	// Underlines every URL in the document. Transcribes
+	// CEditorCtrl::RenderHotSpotForUrlLinks, and like the original it runs when
+	// the editor is styled rather than on every keystroke.
+	void RenderUrlHotspots();
 	// Underlines the caret's enclosing XML/HTML tag pair. Only runs for the
 	// languages core/ marks _TagMatch, and only with an empty selection - both
 	// gates are CEditorView's (src/EditorView.cpp:6183-6190).

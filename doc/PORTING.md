@@ -1423,6 +1423,147 @@ ctest --test-dir build -R core.LanguageData --output-on-failure
 
 ---
 
+## 6i. URL hotspots — the first pull that had to replace a Win32 call
+
+`AppSettingMgr.m_bEnableUrlHighlight` ships **TRUE**, so every VinaText user has
+underlined URLs and the Qt alpha had none. The scanner is
+`src/StringHelper.cpp:87-345` — seven `*Url*` helpers driven by
+`AppUtils::IsUrlHyperLink` (`src/AppUtil.cpp:565`), which has exactly **one**
+caller, `CEditorCtrl::RenderHotSpotForUrlLinks` (`src/Editor.cpp:4419`).
+
+Extracted to `core/UrlScanner.{h,cpp}` under D9. `src/` is unchanged and still uses
+its own copy; `core/tests/TestUrlScanner.cpp` keeps the two in step.
+
+### The Win32 call, and what replaced it
+
+```cpp
+bool r = InternetCrackUrl(&text[start], len, 0, &url)
+      && StringHelper::isUrlSchemeSupported(url.nScheme);
+```
+
+`isUrlSchemeSupported` accepts `INTERNET_SCHEME_{FTP,HTTP,HTTPS,MAILTO,FILE}`. There
+is no portable wininet, and adding a URL parser would put a dependency into the one
+layer that has none (D6). So `CUrlScanner::IsSupportedScheme` matches the scheme
+**text** against the same five names and drops the parse.
+
+**The difference is one-directional, and that is the whole argument for it.** wininet
+maps exactly those five spellings onto those five enum values, so anything Windows
+accepts, this accepts. It can only differ by **accepting** a candidate wininet would
+have rejected as malformed — never by rejecting one Windows underlines. For a
+cosmetic underline that is the safe direction, and the candidate has already been
+through `scanToUrlEnd`, which admits only `isUrlTextChar` characters.
+
+It is a divergence all the same, it **cannot be verified off Windows**, and it is why
+that function exists instead of being inlined.
+
+### Bytes, not wide characters
+
+The MFC converts the document to UTF-16, scans, then converts each segment's length
+back with `WideCharToMultiByte` to reach a document offset. `core/` scans the UTF-8
+bytes Scintilla already indexes, which removes the round trip.
+
+That is equivalent, not merely close: every byte of a multi-byte UTF-8 sequence is
+`>= 0x80`, and at `>= 0x80` all four character classifiers say the same thing they
+say about a non-ASCII `wchar_t` — not a URL-text character's opposite, a scheme
+delimiter, never a scheme start. So the two agree on every URL boundary and differ
+only in the units they express it in.
+
+### The number that meant nothing
+
+The differential test's first form was an exhaustive sweep: every string of length
+≤ 5 over an 11-character alphabet, **177,156 comparisons, 0 mismatches**. It looked
+strong. It was worthless for the interesting half of the scanner, and mutation is
+what showed it:
+
+| mutation | free-form sweep | after the fix |
+|---|---|---|
+| trailing `.` no longer stripped | 0 mismatches | 1,925 |
+| bracket count starts at 0 | 0 mismatches | 1,847 |
+| quote parity inverted | 0 mismatches | 36 |
+| fragment state never entered | 0 mismatches | 1,961 |
+| query state never entered | 0 mismatches | 1,986 |
+| quoted query values not recognised | 0 mismatches | 12 |
+
+The cause is arithmetic. The shortest supported scheme spelling is `ftp:` at four
+characters and a URL needs at least one more — **so no string of length ≤ 5 over that
+alphabet is ever a URL.** Every one of those 177,156 comparisons exercised the reject
+paths and nothing else.
+
+The fix is a second sweep prefixed with `ftp:`, whose tail alphabet carries a path
+separator, a query and fragment introducer, a query delimiter, both quotes, both
+brackets, a full stop, a letter and a space: 16,105 strings of which **11,712 are
+actually URLs**. That count is itself asserted, because a sweep that quietly stops
+producing URLs is exactly the failure being fixed.
+
+**A large number of comparisons is not coverage.** Nothing in the first sweep was
+wrong; it just never reached the code under test, and only mutation could say so.
+
+### And a mutation harness that tested the previous binary
+
+Recorded in §6h and it happened again here: two mutations "passed" because deleting
+a call left a variable unused, `-Werror` rejected the build, and the harness had sent
+build output to `/dev/null`. Both failures are the same bug in the same place —
+**a harness that hides the build is not running the mutation.**
+
+### One dead call, transcribed anyway
+
+`SCI_INDICSETFLAGS(INDIC_URL_HOTSPOT, SC_INDICFLAG_VALUEFORE)` makes the drawn colour
+come from the per-range value (`Indicator.cxx:33`), so the
+`SCI_INDICSETFORE(..., BasicColors::orange)` two lines earlier never reaches the
+screen — URLs are drawn in the default text colour.
+
+Unlike §6g's six dead brace calls this one is transcribed: those addressed the wrong
+indicator entirely and could never matter, while this one addresses the right
+indicator and would start mattering the day the flag changed.
+
+### One unit of blue, in both frontends
+
+`SCI_SETINDICATORVALUE` is the colour under `SC_INDICFLAG_VALUEFORE`, and
+`DecorationList::SetCurrentValue` is `currentValue = value ? value : 1`
+(`Decoration.cxx:191-193`) — a value of 0 becomes 1. The light theme's
+`editorTextColor` is `RGB(0,0,0)` (`src/EditorColorLight.h:32`), i.e. Scintilla
+colour 0, so on light **URLs are drawn in `RGB(0,0,1)`, not pure black**. Measured:
+light `STYLE_DEFAULT` fore 0 → stored indicator value **1**; dark 16777215 → 16777215.
+
+Found by the review bot, and left alone deliberately. `CEditorCtrl` does the
+identical `SCI_SETINDICATORVALUE(SCI_STYLEGETFORE(STYLE_DEFAULT))` into the identical
+vendored Scintilla (`src/Editor.cpp:4426-4428`), so **Windows has the same one unit
+of blue**. Special-casing 0 would make `ui-qt/` differ from the shipping app to fix
+something no eye can see. The comment at the call site was wrong and is now right;
+the code is unchanged.
+
+### When it runs
+
+The original is called **once**, from `LoadEditorSettings` (`:409-412`) — not from any
+notification. A URL typed after the file is open is not underlined until the editor
+is re-styled. `ui-qt/` calls it from `ApplyTheme`, the same moment. Hooking
+`SCN_MODIFIED` would be an improvement and a behaviour change; it is not this change.
+
+Reproduce:
+
+```bash
+# the scanner, against a verbatim transcription of the original
+ctest --test-dir build -R core.UrlScanner --output-on-failure
+./build/TestUrlScanner        # prints both sweeps and how many were URLs
+
+# the one caller, and the setting that ships TRUE
+sed -n '4419,4429p' src/Editor.cpp
+grep -n 'm_bEnableUrlHighlight' src/AppSettings.h src/AppSettings.cpp
+
+# the Win32 call that had to be replaced
+sed -n '578,590p' src/AppUtil.cpp
+
+# 474 checks, up from 426
+python3 tools/make_selftest_fixtures.py qtbuild/fixtures
+QT_QPA_PLATFORM=offscreen ./qtbuild/ui-qt/vinatext-qt --selftest \
+  core/LanguageData.cpp tools/extract_language_data.py \
+  qtbuild/fixtures/crlf-bom.cpp qtbuild/fixtures/utf16.py \
+  qtbuild/fixtures/latin1.md qtbuild/fixtures/no-trailing-newline.py \
+  qtbuild/fixtures/tags.xml qtbuild/fixtures/urls.md
+```
+
+---
+
 ## 7. How to reproduce these numbers
 
 ```bash
