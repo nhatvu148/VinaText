@@ -21,13 +21,23 @@ counts, and sets the Phase 2 work order.
 - **The MFC build must keep building and shipping to Windows users.** Do not break it.
 - **New Qt code goes in `ui-qt/`**, gated behind the `VINATEXT_BUILD_QT` CMake option
   (default OFF).
+- **`ui-qt/` is a cross-platform EDITOR, not a cross-platform VinaText** (Brief §4 D10).
+  The compiler, debugger, file explorer, build window and the media/PDF/web viewers are deferred —
+  they stay in `src/` and keep shipping on Windows. Full parity is the eventual goal;
+  Phase 6's "delete `ui-mfc/`" is blocked until it arrives, deliberately.
+- **Tier the rigour** (D10): differential tests and mutation checks for anything in
+  `core/` or anything data-driven where the two frontends could silently disagree; a
+  self-test check and a screenshot for the shallow, visible tail of menu commands and
+  dialogs.
 - **`core/` takes no third-party dependency — not even Qt.** It uses `std::wstring` where
   MFC used `CString`; each frontend converts at its own boundary. (Brief §4 D6, revised.)
 - Port development happens in the **`nhatvu148/VinaText` fork**, not in `vinadevs`.
   `origin` = the fork, `upstream` = `vinadevs/VinaText` — deliberately this way round so a
   stray push cannot reach the organisation repo. **Never push to `upstream`.**
   All port work targets the long-lived **`port/cross-platform`** branch; PRs point at it,
-  never at `master`. One consolidated PR goes upstream at Phase 6 cutover. (Brief §4 D4.)
+  never at `master`. One consolidated PR goes upstream **when the macOS/Linux editor
+  ships** — moved earlier from Phase 6, which D10 blocks indefinitely. Safe because
+  `ui-qt/` is flag-gated OFF, so the merge changes nothing for Windows. (Brief §4 D4, D10.)
 - **Do not rewrite git history** to shrink the repo — forks exist and it breaks clones.
 
 ## Orientation
