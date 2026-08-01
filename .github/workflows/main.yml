@@ -142,10 +142,11 @@ jobs:
       # guard in HighlightMatches), reads the status bar back, and saves every
       # document to a temporary copy that must be BYTE-IDENTICAL to the original.
       #
-      # The four files are chosen for their encodings and line endings, not their
-      # contents: CRLF+BOM, UTF-16, Latin-1 and a plain LF file with no trailing
-      # newline. An editor that cannot round-trip those corrupts the first file a
-      # user opens with it.
+      # Four of the files are chosen for their encodings and line endings, not
+      # their contents: CRLF+BOM, UTF-16, Latin-1 and a plain LF file with no
+      # trailing newline. An editor that cannot round-trip those corrupts the
+      # first file a user opens with it. The fifth, tags.xml, is every awkward
+      # case the XML/HTML tag matcher's own comments call out.
       - name: Build the encoding fixtures
         if: steps.probe.outputs.present == 'yes'
         run: python3 tools/make_selftest_fixtures.py qtbuild/fixtures
@@ -159,7 +160,8 @@ jobs:
           ./qtbuild/ui-qt/vinatext-qt --selftest \
             core/LanguageData.cpp tools/extract_language_data.py \
             qtbuild/fixtures/crlf-bom.cpp qtbuild/fixtures/utf16.py \
-            qtbuild/fixtures/latin1.md qtbuild/fixtures/no-trailing-newline.py
+            qtbuild/fixtures/latin1.md qtbuild/fixtures/no-trailing-newline.py \
+            qtbuild/fixtures/tags.xml
 
       # A port whose whole point is that it now runs somewhere other than Windows
       # should be able to show that without asking anyone to build it.

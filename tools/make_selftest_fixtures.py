@@ -49,6 +49,30 @@ def main():
 
         # No trailing newline: the classic off-by-one in a save path.
         "no-trailing-newline.py": b"def f():\n    return 1",
+
+        # Tag matching. Every line here is a case the algorithm's own comments
+        # call out, so the file is small and every part of it is load-bearing:
+        #
+        #   - <item> nested inside <item>, same name, so a matcher that takes the
+        #     first "</item>" it finds pairs the wrong two;
+        #   - note="a>b", where the '>' is data. Scintilla's lexer styles it as
+        #     SCE_H_DOUBLESTRING and the search has to skip it, or the open tag
+        #     appears to end four characters early;
+        #   - <empty />, self-closing, which matches itself and has no close tag;
+        #   - <![CDATA[ ... ]]> containing text that looks exactly like a tag.
+        "tags.xml": (
+            "<root>\n"
+            "    <item id=\"a\">\n"
+            "        <name>first</name>\n"
+            "    </item>\n"
+            "    <item id=\"b\" note=\"a>b\">\n"
+            "        <item>\n"
+            "            <name>nested</name>\n"
+            "        </item>\n"
+            "    </item>\n"
+            "    <empty />\n"
+            "    <data><![CDATA[<item>not a tag</item>]]></data>\n"
+            "</root>\n").encode("utf-8"),
     }
 
     for name, payload in sorted(files.items()):

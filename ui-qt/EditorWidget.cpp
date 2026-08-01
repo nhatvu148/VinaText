@@ -8,6 +8,8 @@
 
 #include "EditorWidget.h"
 
+#include "TagMatcher.h"
+
 // Order matters: Lexilla.h uses Scintilla::ILexer5 without declaring it, so
 // ILexer.h has to come first. Neither header is self-contained.
 #include <Scintilla.h>
@@ -31,6 +33,12 @@ namespace
 	// The indicator number used to mark find matches. Scintilla reserves 8..31 for
 	// containers; 8 is the first of those.
 	const int FIND_INDICATOR = 8;
+
+	// src/EditorCommonDef.h:48-49, which numbers them from INDIC_CONTAINER (8).
+	// Kept at the same numbers as the MFC so the two frontends stay comparable
+	// when reading a document's indicator state.
+	const int INDIC_TAGMATCH = 10;
+	const int INDIC_TAGATTR = 11;
 
 	// Margin numbers, matching src/EditorCommonDef.h's SC_SETMARGINTYPE_*: line
 	// numbers, symbols, folding, left to right.
@@ -140,6 +148,111 @@ void CEditorWidget::OnUpdateUi(Scintilla::Update /*updated*/)
 {
 	UpdateSelectionPainting();
 	UpdateBraceMatch();
+	UpdateTagMatch();
+}
+
+void CEditorWidget::UpdateTagMatch()
+{
+	// Both gates are CEditorView's (src/EditorView.cpp:6183-6190): the language,
+	// and an empty selection. The second matters because the tag highlight is an
+	// indicator drawn under the text, and running it while the user is selecting
+	// would fight the selection for the same pixels.
+	//
+	// _TagMatch, not a test on the lexer or the style table: php is lexed as
+	// "cpp", so a lexer test would tag-match twelve languages that must not, and
+	// _StyleTable or _FoldMarker would give {html, xml} and silently drop php.
+	// See doc/PORTING.md 6h.
+	if (m_pLanguage == nullptr || !m_pLanguage->_TagMatch)
+	{
+		return;
+	}
+	if (Send(SCI_GETSELECTIONEMPTY) == 0)
+	{
+		return;
+	}
+
+	// Clear both indicators over the whole document first. The original does the
+	// same, unconditionally and before deciding whether there is anything to
+	// draw, so that a tag highlighted a moment ago does not survive the caret
+	// leaving it.
+	const sptr_t nLength = Send(SCI_GETLENGTH);
+	for (int nIndicator : { INDIC_TAGMATCH, INDIC_TAGATTR })
+	{
+		Send(SCI_SETINDICATORCURRENT, static_cast<uptr_t>(nIndicator));
+		Send(SCI_INDICATORCLEARRANGE, 0, nLength);
+	}
+
+	// The search moves the target and the search flags, which find/replace also
+	// owns - so they are saved and restored, exactly as the original does.
+	const sptr_t nOriginalTargetStart = Send(SCI_GETTARGETSTART);
+	const sptr_t nOriginalTargetEnd = Send(SCI_GETTARGETEND);
+	const sptr_t nOriginalSearchFlags = Send(SCI_GETSEARCHFLAGS);
+
+	TagMatch::SDocument document;
+	document._Context = const_cast<CEditorWidget*>(this);
+	document._Send = [](void* pContext, unsigned int nMessage,
+		unsigned long long wParam, long long lParam) -> long long
+	{
+		return static_cast<CEditorWidget*>(pContext)->Send(nMessage,
+			static_cast<uptr_t>(wParam), static_cast<sptr_t>(lParam));
+	};
+
+	TagMatch::STagPositions positions;
+	if (TagMatch::FindEnclosingTag(document, positions))
+	{
+		Send(SCI_SETINDICATORCURRENT, INDIC_TAGMATCH);
+
+		// 2 for "/>" on a self-closing tag, 1 for ">" when there is a close tag
+		// to pair with - the original derives it from whether the close was found.
+		int nOpenTagTailLength = 2;
+		if (positions._TagCloseStart != -1 && positions._TagCloseEnd != -1)
+		{
+			Send(SCI_INDICATORFILLRANGE, static_cast<uptr_t>(positions._TagCloseStart),
+				positions._TagCloseEnd - positions._TagCloseStart);
+			nOpenTagTailLength = 1;
+		}
+
+		// The open tag is underlined in two pieces - its name, and its tail -
+		// deliberately leaving the attributes in between unmarked.
+		Send(SCI_INDICATORFILLRANGE, static_cast<uptr_t>(positions._TagOpenStart),
+			positions._TagNameEnd - positions._TagOpenStart);
+		Send(SCI_INDICATORFILLRANGE,
+			static_cast<uptr_t>(positions._TagOpenEnd - nOpenTagTailLength),
+			nOpenTagTailLength);
+
+		// NOT ported: the attribute highlighting over INDIC_TAGATTR. It is
+		// commented out in the original (src/Editor.cpp:1820-1826) along with
+		// CEditorCtrl::GetAttributesPos, the 90-line state machine that feeds it,
+		// so it draws nothing on Windows today. INDIC_TAGATTR is still styled and
+		// still cleared above, both of which the original also does.
+
+		// A tag pair spanning lines highlights the indent guide between them, the
+		// same way brace matching does - but only when guides are on, because the
+		// guide is what the highlight is drawn on.
+		if (Send(SCI_GETINDENTATIONGUIDES) != 0)
+		{
+			const sptr_t nColumnAtCaret = Send(SCI_GETCOLUMN,
+				static_cast<uptr_t>(positions._TagOpenStart));
+			const sptr_t nColumnOpposite = Send(SCI_GETCOLUMN,
+				static_cast<uptr_t>(positions._TagCloseStart));
+			const sptr_t nLineAtCaret = Send(SCI_LINEFROMPOSITION,
+				static_cast<uptr_t>(positions._TagOpenStart));
+			const sptr_t nLineOpposite = Send(SCI_LINEFROMPOSITION,
+				static_cast<uptr_t>(positions._TagCloseStart));
+
+			if (positions._TagCloseStart != -1 && nLineAtCaret != nLineOpposite)
+			{
+				Send(SCI_BRACEHIGHLIGHT, static_cast<uptr_t>(positions._TagOpenStart),
+					positions._TagCloseEnd - 1);
+				Send(SCI_SETHIGHLIGHTGUIDE, static_cast<uptr_t>(
+					(nColumnAtCaret < nColumnOpposite) ? nColumnAtCaret : nColumnOpposite));
+			}
+		}
+	}
+
+	Send(SCI_SETTARGETSTART, static_cast<uptr_t>(nOriginalTargetStart));
+	Send(SCI_SETTARGETEND, static_cast<uptr_t>(nOriginalTargetEnd));
+	Send(SCI_SETSEARCHFLAGS, static_cast<uptr_t>(nOriginalSearchFlags));
 }
 
 void CEditorWidget::UpdateBraceMatch()
@@ -423,6 +536,21 @@ void CEditorWidget::ApplyEditorStyles(const Core::CEditorTheme& theme)
 		}
 		// Unconditional in the original - no branch, no theme dependence.
 		Send(SCI_STYLESETBOLD, entry._Style, 1);
+	}
+
+	// The tag-match indicators (src/Editor.cpp:462-469). SCI_INDICSETUNDER draws
+	// them beneath the text rather than over it, which is what makes a dashed
+	// underline readable on a styled tag name.
+	Core::SColor tagMatch;
+	if (theme.ResolveRole("editorTagMatchColor", tagMatch))
+	{
+		for (int nIndicator : { INDIC_TAGMATCH, INDIC_TAGATTR })
+		{
+			Send(SCI_INDICSETFORE, nIndicator, ToScintillaColour(tagMatch));
+			Send(SCI_INDICSETSTYLE, nIndicator, INDIC_DASH);
+			Send(SCI_INDICSETALPHA, nIndicator, 50);
+			Send(SCI_INDICSETUNDER, nIndicator, 1);
+		}
 	}
 
 	Core::SColor colour;

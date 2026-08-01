@@ -90,6 +90,53 @@ int main(int argc, char** argv)
 		CheckEqual<std::string>(pCpp->_CommentEnd, "*/", "cpp comment end");
 	}
 
+	//----------------------------------------------------------------------
+	// tagMatch. Exactly three languages, and the point of the field is that no
+	// other key selects that set - so the wrong answers are asserted too, by
+	// naming a language each wrong key would have included or dropped.
+	//----------------------------------------------------------------------
+	{
+		std::vector<std::string> matching;
+		for (size_t i = 0; i < languages.GetLanguages().size(); ++i)
+		{
+			if (languages.GetLanguages()[i]._TagMatch)
+			{
+				matching.push_back(languages.GetLanguages()[i]._Id);
+			}
+		}
+		CheckEqual<size_t>(matching.size(), 3, "exactly three languages tag-match");
+		for (size_t i = 0; i < matching.size(); ++i)
+		{
+			Check(matching[i] == "html" || matching[i] == "php" || matching[i] == "xml",
+				"tag-matching language is html, php or xml, got " + matching[i]);
+		}
+
+		// php is lexed as "cpp". Keying tag matching on the lexer would have
+		// dragged in every other cpp-lexed language; these three are the canaries.
+		const Core::SLanguageInfo* pPhp = languages.FindById("php");
+		Check(pPhp != nullptr && pPhp->_TagMatch, "php tag-matches");
+		Check(pPhp != nullptr && pPhp->_LexerName == "cpp",
+			"php is lexed as cpp, which is why the lexer is the wrong key");
+		const char* aNotTagged[] = { "cpp", "json", "javascript", "typescript", "go" };
+		for (size_t i = 0; i < sizeof(aNotTagged) / sizeof(aNotTagged[0]); ++i)
+		{
+			const Core::SLanguageInfo* pOther = languages.FindById(aNotTagged[i]);
+			Check(pOther != nullptr && pOther->_LexerName == "cpp" && !pOther->_TagMatch,
+				std::string(aNotTagged[i]) + " is lexed as cpp and does NOT tag-match");
+		}
+
+		// html and xml share a style table and a fold marker; php shares neither.
+		// Either would therefore have silently dropped php.
+		const Core::SLanguageInfo* pHtml = languages.FindById("html");
+		const Core::SLanguageInfo* pXml = languages.FindById("xml");
+		Check(pHtml != nullptr && pXml != nullptr && pPhp != nullptr
+			&& pHtml->_StyleTable == pXml->_StyleTable && pPhp->_StyleTable != pHtml->_StyleTable,
+			"styleTable groups html with xml but not php - the wrong key");
+		Check(pHtml != nullptr && pXml != nullptr && pPhp != nullptr
+			&& pHtml->_FoldMarker == pXml->_FoldMarker && pPhp->_FoldMarker != pHtml->_FoldMarker,
+			"foldMarker groups html with xml but not php - also the wrong key");
+	}
+
 	Check(languages.FindById("no_such_language") == nullptr, "unknown language returns nullptr");
 
 	// Known data quirks, asserted so they stay visible rather than becoming folklore.
@@ -223,6 +270,8 @@ int main(int argc, char** argv)
 			strName + ": an unknown role does not resolve");
 
 		// python_2 has a style table but no language metadata - preserved deliberately.
+		// (theme-level checks continue below; the tagMatch checks are on the
+		// language table and live further down.)
 		Check(theme.FindStyles("python_2") != nullptr,
 			strName + ": python_2 style table is preserved");
 

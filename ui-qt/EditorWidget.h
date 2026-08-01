@@ -94,6 +94,11 @@ private:
 	// The selection background and whether the caret line is drawn at all.
 	// Transcribes CEditorCtrl::UpdateCaretLineVisible.
 	void UpdateSelectionPainting();
+	// Underlines the caret's enclosing XML/HTML tag pair. Only runs for the
+	// languages core/ marks _TagMatch, and only with an empty selection - both
+	// gates are CEditorView's (src/EditorView.cpp:6183-6190).
+	// Transcribes CEditorCtrl::DoXMLHTMLTagsHightlight.
+	void UpdateTagMatch();
 
 	void ApplyEditorStyles(const Core::CEditorTheme& theme);
 	void ApplyLanguageStyles(const Core::CEditorTheme& theme);

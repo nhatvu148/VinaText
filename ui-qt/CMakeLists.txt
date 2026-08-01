@@ -20,6 +20,8 @@ qt_add_executable(vinatext-qt
     EditorData.cpp
     EditorData.h
     EditorWidget.cpp
+    TagMatcher.cpp
+    TagMatcher.h
     EditorWidget.h
     FindBar.cpp
     FindBar.h

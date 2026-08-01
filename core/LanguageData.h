@@ -78,6 +78,13 @@ namespace Core
 		// coloured from html's table - Scintilla's xml lexer emits the SCE_H_*
 		// family, so xml's own SCE_C_* table is never applied to anything.
 		std::string	_StyleTable;
+		// Whether the caret's enclosing XML/HTML tag pair is highlighted. True for
+		// exactly html, php and xml, and keyed by NONE of the fields above:
+		// CEditorView gates it on the VINATEXT_SUPPORTED_LANGUAGE enum. php is
+		// lexed as "cpp", so keying on _LexerName would drag in twelve languages;
+		// keying on _StyleTable or _FoldMarker gives {html, xml} and silently
+		// drops php. See doc/PORTING.md 6h.
+		bool		_TagMatch = false;
 		std::string	_CommentLine;
 		std::string	_CommentStart;
 		std::string	_CommentEnd;
