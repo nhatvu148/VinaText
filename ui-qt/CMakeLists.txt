@@ -25,6 +25,8 @@ qt_add_executable(vinatext-qt
     EditorWidget.h
     FindBar.cpp
     FindBar.h
+    MessagePane.cpp
+    MessagePane.h
     MainWindow.cpp
     MainWindow.h)
 

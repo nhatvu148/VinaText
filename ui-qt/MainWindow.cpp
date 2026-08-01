@@ -10,6 +10,7 @@
 
 #include "EditorWidget.h"
 #include "FindBar.h"
+#include "MessagePane.h"
 
 #include <Scintilla.h>
 
@@ -24,6 +25,7 @@
 #include <QLabel>
 #include <QMenuBar>
 #include <QMessageBox>
+#include <QSettings>
 #include <QPair>
 #include <QStringList>
 #include <QShortcut>
@@ -53,6 +55,16 @@ CMainWindow::CMainWindow(const CEditorData& data, QWidget* pParent)
 	pLayout->addWidget(m_pFindBar);
 	setCentralWidget(pCentral);
 
+	// The first of Phase 5's nine dock panes. Created before BuildMenus so the
+	// View menu can take its toggleViewAction, which Qt keeps in step with the
+	// pane's visibility for free - a hand-rolled checkable action would need
+	// synchronising on every close, float and restore.
+	m_pMessagePane = new CMessagePane(this);
+	addDockWidget(Qt::BottomDockWidgetArea, m_pMessagePane);
+	// A starting height, in case nothing was stored. RestoreDockState overrides
+	// it when there is a saved layout, which is the order the user expects.
+	resizeDocks({ m_pMessagePane }, { 120 }, Qt::Vertical);
+
 	BuildMenus();
 	BuildStatusBar();
 
@@ -74,6 +86,9 @@ CMainWindow::CMainWindow(const CEditorData& data, QWidget* pParent)
 	connect(m_pFindBar, &CFindBar::CloseRequested, this, &CMainWindow::OnHideFind);
 
 	resize(1100, 750);
+	// After resize(), so a stored geometry wins over the default rather than
+	// being overwritten by it.
+	RestoreDockState();
 	NewUntitled();
 	UpdateWindowTitle();
 }
@@ -117,6 +132,11 @@ void CMainWindow::BuildMenus()
 		pThemeGroup->addAction(pAction);
 	}
 	pDark->setChecked(true);
+
+	pView->addSeparator();
+	// Qt supplies the show/hide action, already checkable and already bound to
+	// the pane's visibility in both directions.
+	pView->addAction(m_pMessagePane->toggleViewAction());
 
 	pView->addSeparator();
 	QAction* pWrap = pView->addAction(tr("&Word Wrap"), this, [this](bool bOn)
@@ -168,6 +188,60 @@ void CMainWindow::BuildStatusBar()
 	{
 		pLabel->setContentsMargins(8, 0, 8, 0);
 		statusBar()->addPermanentWidget(pLabel);
+	}
+}
+
+//////////////////////////////////////////////////////////////////////////
+// Dock panes
+
+void CMainWindow::LogMessage(const QString& strText, const QColor& colour)
+{
+	if (m_pMessagePane == nullptr)
+	{
+		return;
+	}
+	// An invalid QColor means "whatever the palette says", which is what a plain
+	// informational line wants - the theme's own text colour, not a literal.
+	m_pMessagePane->AddLogMessage(strText,
+		colour.isValid() ? colour : palette().color(QPalette::Text));
+}
+
+// QMainWindow::saveState covers which docks exist, where they are docked, their
+// sizes and whether they are floating; saveGeometry covers the window itself.
+// Both are opaque blobs keyed by objectName, which is why CMessagePane sets one.
+//
+// The version number is Qt's own compatibility guard: restoreState refuses a
+// blob written with a different one, so bumping it is how a future layout change
+// discards stale state instead of half-applying it.
+namespace
+{
+	const int DOCK_STATE_VERSION = 1;
+	const char* const DOCK_STATE_KEY = "MainWindow/dockState";
+	const char* const GEOMETRY_KEY = "MainWindow/geometry";
+}
+
+void CMainWindow::SaveDockState()
+{
+	QSettings settings;
+	settings.setValue(QLatin1String(GEOMETRY_KEY), saveGeometry());
+	settings.setValue(QLatin1String(DOCK_STATE_KEY), saveState(DOCK_STATE_VERSION));
+}
+
+void CMainWindow::RestoreDockState()
+{
+	QSettings settings;
+	// Both calls are no-ops on a missing or unreadable value, so a first run and
+	// a corrupt settings file both land on the built-in layout rather than on
+	// something half-restored.
+	const QByteArray geometry = settings.value(QLatin1String(GEOMETRY_KEY)).toByteArray();
+	if (!geometry.isEmpty())
+	{
+		restoreGeometry(geometry);
+	}
+	const QByteArray state = settings.value(QLatin1String(DOCK_STATE_KEY)).toByteArray();
+	if (!state.isEmpty())
+	{
+		restoreState(state, DOCK_STATE_VERSION);
 	}
 }
 
@@ -253,6 +327,9 @@ bool CMainWindow::OpenFile(const QString& strPath)
 		delete pEditor;
 		QMessageBox::warning(this, tr("VinaText"), strError);
 		statusBar()->showMessage(strError, 5000);
+		// The status message expires after five seconds and the box is gone as
+		// soon as it is dismissed. The pane is where it stays.
+		LogMessage(strError, QColor(Qt::red));
 		return false;
 	}
 
@@ -330,6 +407,9 @@ bool CMainWindow::SaveEditor(CEditorWidget* pEditor, const QString& strPath)
 	{
 		QMessageBox::warning(this, tr("VinaText"), strError);
 		statusBar()->showMessage(strError, 5000);
+		// The status message expires after five seconds and the box is gone as
+		// soon as it is dismissed. The pane is where it stays.
+		LogMessage(strError, QColor(Qt::red));
 		return false;
 	}
 	m_strLastDirectory = QFileInfo(strPath).absolutePath();
@@ -337,6 +417,7 @@ bool CMainWindow::SaveEditor(CEditorWidget* pEditor, const QString& strPath)
 	UpdateStatusBar();
 	UpdateWindowTitle();
 	statusBar()->showMessage(tr("Saved %1").arg(strPath), 3000);
+	LogMessage(tr("Saved %1").arg(strPath));
 	return true;
 }
 
@@ -390,6 +471,9 @@ void CMainWindow::closeEvent(QCloseEvent* pEvent)
 			return;
 		}
 	}
+	// After the confirmations, so a close the user cancels does not persist a
+	// layout they were only passing through.
+	SaveDockState();
 	pEvent->accept();
 }
 
@@ -657,6 +741,15 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 {
 	g_nSelfTestFailures = 0;
 	g_nSelfTestChecks = 0;
+
+	// The window has to be SHOWN, not merely constructed. A QDockWidget's
+	// visibility is only real once its parent window is - setVisible(true) on a
+	// child of a hidden window leaves isVisible() false and isHidden()
+	// unchanged, so the dock show/hide checks below would assert against a state
+	// no user could ever be in. Harmless under QT_QPA_PLATFORM=offscreen, which
+	// is what CI runs, and it is what RenderScreenshots already does.
+	show();
+
 	if (files.isEmpty())
 	{
 		qWarning("selftest: no files given - nothing to check");
@@ -1301,6 +1394,93 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 		Require(!m_pStatusEncoding->text().isEmpty() && !m_pStatusEol->text().isEmpty()
 			&& !m_pStatusLanguage->text().isEmpty(),
 			QStringLiteral("%1: status bar is populated").arg(strName));
+	}
+
+	//----------------------------------------------------------------------
+	// The message pane - Phase 5's first dock pane. Three things have to hold
+	// for the pane to be worth having: it shows what it is told, it can be
+	// hidden and brought back, and its layout survives a restart.
+	//----------------------------------------------------------------------
+	{
+		CMessagePane* pPane = GetMessagePane();
+		Require(pPane != nullptr, QStringLiteral("the message pane exists"));
+		if (pPane != nullptr)
+		{
+			pPane->ClearAll();
+			Require(pPane->GetLineCount() == 0, QStringLiteral("pane: starts empty"));
+
+			// Content, in order, in the colour asked for.
+			LogMessage(QStringLiteral("first"), QColor(Qt::red));
+			LogMessage(QStringLiteral("second"), QColor(Qt::green));
+			Require(pPane->GetLineCount() == 2, QStringLiteral("pane: two messages, got %1")
+				.arg(pPane->GetLineCount()));
+			Require(pPane->GetText() == QStringLiteral("first\nsecond\n"),
+				QStringLiteral("pane: text is both lines in order, got '%1'")
+					.arg(pPane->GetText()));
+			Require(pPane->GetLineColour(0) == QColor(Qt::red)
+				&& pPane->GetLineColour(1) == QColor(Qt::green),
+				QStringLiteral("pane: each line keeps its own colour"));
+
+			// An empty message is ignored, and a message that already ends in a
+			// newline does not get a second one - both as CMessagePaneDlg does.
+			pPane->AddLogMessage(QString(), QColor(Qt::red));
+			Require(pPane->GetLineCount() == 2,
+				QStringLiteral("pane: an empty message is ignored"));
+			pPane->AddLogMessage(QStringLiteral("third\n"), QColor(Qt::blue));
+			Require(pPane->GetText() == QStringLiteral("first\nsecond\nthird\n"),
+				QStringLiteral("pane: a message ending in a newline gets no second one"));
+
+			pPane->ClearAll();
+			Require(pPane->GetLineCount() == 0 && pPane->GetText().isEmpty(),
+				QStringLiteral("pane: ClearAll empties it"));
+
+			// Show and hide, through the same action the View menu uses. A pane
+			// that cannot be brought back is a pane the user loses.
+			QAction* pToggle = pPane->toggleViewAction();
+			Require(pToggle != nullptr, QStringLiteral("pane: has a toggle action"));
+			const bool bWasVisible = !pPane->isHidden();
+			Require(bWasVisible, QStringLiteral("pane: visible to begin with"));
+			pToggle->trigger();
+			Require(pPane->isHidden(), QStringLiteral("pane: the toggle hides it"));
+			Require(!pToggle->isChecked(),
+				QStringLiteral("pane: the menu item unchecks with it"));
+			pToggle->trigger();
+			Require(!pPane->isHidden(), QStringLiteral("pane: the toggle brings it back"));
+			Require(pToggle->isChecked(), QStringLiteral("pane: and rechecks"));
+
+			// Layout persistence, through the real Save/RestoreDockState - with
+			// QSettings pointed at a temporary directory, so running the
+			// self-test cannot rewrite the layout of the user's own install.
+			QTemporaryDir settingsDir;
+			Require(settingsDir.isValid(),
+				QStringLiteral("pane: created a scratch settings directory"));
+			if (settingsDir.isValid())
+			{
+				const QSettings::Format format = QSettings::defaultFormat();
+				QSettings::setDefaultFormat(QSettings::IniFormat);
+				QSettings::setPath(QSettings::IniFormat, QSettings::UserScope,
+					settingsDir.path());
+
+				pPane->hide();
+				SaveDockState();
+				pPane->show();
+				Require(!pPane->isHidden(), QStringLiteral("pane: shown again before restore"));
+				RestoreDockState();
+				Require(pPane->isHidden(),
+					QStringLiteral("pane: a saved layout restores the pane's visibility"));
+
+				// And the other way, so the check cannot pass on a restore that
+				// simply hides everything.
+				pPane->show();
+				SaveDockState();
+				pPane->hide();
+				RestoreDockState();
+				Require(!pPane->isHidden(),
+					QStringLiteral("pane: a layout saved while visible restores visible"));
+
+				QSettings::setDefaultFormat(format);
+			}
+		}
 	}
 
 	Require(nFoldClicksChecked > 0,
