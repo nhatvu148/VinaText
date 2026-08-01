@@ -1564,6 +1564,122 @@ QT_QPA_PLATFORM=offscreen ./qtbuild/ui-qt/vinatext-qt --selftest \
 
 ---
 
+## 6j. Autocomplete, and what the nine missing messages actually were
+
+The last item of Phase 4's editor parity, and the one that closes the derivation
+this phase was steered by:
+
+```bash
+for m in $(sed -n '110,420p' src/Editor.cpp | grep -oE "SCI_[A-Z_]+" | sort -u); do
+  grep -q "$m" ui-qt/EditorWidget.cpp || echo "missing: $m"
+done
+```
+
+It printed **9**. Two of them were filed wrongly, and reading them was the only way
+to find out:
+
+| message | assumed | actually |
+|---|---|---|
+| 4 × `SCI_AUTOC*` | autocomplete | ✅ autocomplete |
+| 3 × RGBA image | bookmark markers, Phase 5 | **the autocomplete list-box icon** — `IDR_AUTO_COMPLETE`, `src/Editor.cpp:371-377` |
+| `SCI_MARKERENABLEHIGHLIGHT` | bookmark markers, Phase 5 | **folding** — `m_bEnableHightLightFolder`, `:341-348`. Missed by §6f |
+| `SCI_SETFOLDFLAGS` | folding, missing | **folding, and correctly absent** |
+
+**`SCI_SETFOLDFLAGS` is the interesting one.** The original calls it only when
+`m_bDrawFoldingLineUnderLineStyle` is TRUE, and AppSettings ships it **FALSE**
+(`src/AppSettings.cpp:19`) — so *not* calling it is the shipped behaviour, and its
+appearance in the "missing" list was the grep counting a message the default build
+never sends. The same shape as §6f's fold-marker branch, where copying the RGB
+literals would have been faithful to the text and wrong about the behaviour.
+
+**`SCI_MARKERENABLEHIGHLIGHT` is the opposite**: `m_bEnableHightLightFolder` ships
+**TRUE**, so the fold marker containing the caret is highlighted on Windows and was
+not here. A real gap left by §6f, fixed in this change — one line, and the
+derivation is what surfaced it.
+
+After this change the command prints **3**: the RGBA image calls, which need an icon
+resource `ui-qt/` does not have. That is a resource question, not logic.
+
+### The list
+
+`CEditorView::GetAutoCompleteList` (`src/EditorView.cpp:5823`) draws from three
+sources. Two are ported:
+
+1. **The language's keywords** — the same blob `core/` already carries, split on a
+   single space exactly as `AppUtils::SplitterCString` does.
+2. **The words already in the document**, found with `EDITOR_REGEX_AUTO_COMPLETE_PATTERN`
+   (`src/MacroDef.h:83`) under `SCFIND_WORDSTART | SCFIND_REGEXP | SCFIND_POSIX`,
+   dropping `SCFIND_MATCHCASE` when ignore-case is on, as the original does.
+
+The third is **not**, and it is not an omission: `m_AutoCompelteDataset` is an
+English vocabulary list that is empty unless the user picks a menu item which loads
+`Packages/translator-packages/english-words.ee-package` and pops a message box
+(`:7927-7945`). A user-invoked extra, and `ui-qt/` has no menu to invoke it from.
+
+**One quirk preserved:** document words are de-duplicated **case-sensitively**
+(`CString::operator==`) even when the search that found them ignored case — so `Foo`
+and `foo` are both offered.
+
+### A latent defect, reproduced rather than fixed
+
+The list is built keywords-first then document-words, and is therefore **not
+sorted**. Scintilla's `AutoComplete::Select` binary-searches it
+(`AutoComplete.cxx`), and the ordering defaults to `Ordering::PreSorted`
+(`:53`) — which the original never changes. A binary search over an unsorted list
+can miss a match that is present.
+
+Measured on one case and it worked: list `continue,container`, typing `cont`
+selected `continue`. That is one data point, not a proof, and the mechanism is
+fragile.
+
+Left alone deliberately. `SCI_AUTOCSETORDER(SC_ORDER_PERFORMSORT)` would fix it in
+one line and would change the order the user sees, which the shipping app does not
+do. Recorded here as a decision for whoever wants it, in the same way §6d recorded
+`.json` being lexed as C++.
+
+### The check that passed for the wrong reason
+
+`m_bAutoCompleteIgnoreNumbers` ships TRUE, so an all-digit prefix contributes no
+document words. The check for that — "a numeric prefix offers nothing" — passed
+with the rule **removed**, because no word anywhere in the fixture corpus starts
+with a digit. It was asserting something no code path could violate.
+
+`1234` was added to the `crlf-bom.cpp` fixture for exactly this, and the mutation
+then fails as intended. Same family as §6i's 177,156 comparisons that never reached
+a URL: **an assertion that cannot fail is not an assertion**, and only mutation says
+which ones those are.
+
+Reproduce:
+
+```bash
+# 9 before this change, 3 after - and the 3 are the icon resource
+for m in $(sed -n '110,420p' src/Editor.cpp | grep -oE "SCI_[A-Z_]+" | sort -u); do
+  grep -q "$m" ui-qt/EditorWidget.cpp || echo "missing: $m"
+done
+
+# the two folding messages, and why only one of them was a gap
+sed -n '341,348p' src/Editor.cpp                       # MARKERENABLEHIGHLIGHT
+grep -n 'm_bEnableHightLightFolder' src/AppSettings.cpp        # TRUE  -> was missing
+sed -n '187,190p' src/Editor.cpp                       # SETFOLDFLAGS
+grep -n 'm_bDrawFoldingLineUnderLineStyle' src/AppSettings.cpp # FALSE -> correctly absent
+
+# the RGBA calls are the autocomplete icon, not a bookmark marker
+sed -n '370,378p' src/Editor.cpp
+
+# the dataset that is deliberately not ported
+sed -n '7927,7945p' src/EditorView.cpp
+
+# 536 checks, up from 474
+python3 tools/make_selftest_fixtures.py qtbuild/fixtures
+QT_QPA_PLATFORM=offscreen ./qtbuild/ui-qt/vinatext-qt --selftest \
+  core/LanguageData.cpp tools/extract_language_data.py \
+  qtbuild/fixtures/crlf-bom.cpp qtbuild/fixtures/utf16.py \
+  qtbuild/fixtures/latin1.md qtbuild/fixtures/no-trailing-newline.py \
+  qtbuild/fixtures/tags.xml qtbuild/fixtures/urls.md
+```
+
+---
+
 ## 7. How to reproduce these numbers
 
 ```bash

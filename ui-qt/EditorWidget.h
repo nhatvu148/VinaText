@@ -10,9 +10,9 @@
 // the file behind it.
 //
 // This is the Qt counterpart of CEditorCtrl (src/Editor.cpp, 5,221 lines) - but
-// only of the alpha's slice of it. No folding, no autocomplete, no bookmarks, no
-// spell check, no print. Those are Phase 4 and later; see doc/QT-PORT-BRIEF.md
-// D9 for what the alpha is fixed to.
+// only of the part Phase 4 has reached. Folding, brace and tag matching, URL
+// hotspots and autocomplete are here; bookmarks, breakpoints, spell check and
+// print are not. See doc/QT-PORT-BRIEF.md D9 and doc/PORTING.md 6d-6j.
 
 #pragma once
 
@@ -22,6 +22,7 @@
 
 #include <QByteArray>
 #include <QString>
+#include <QStringList>
 #include <QStringConverter>
 
 class CEditorWidget final : public ScintillaEditBase
@@ -76,12 +77,20 @@ public:
 	int HighlightMatches(const QString& strPattern, const SFindOptions& options);
 	void ClearHighlight();
 
+	// The autocomplete list for the word being typed: the language's keywords
+	// plus the words already in the document, both filtered by prefix. Public so
+	// the self-test can check the list without synthesising a key press.
+	QStringList GetAutoCompleteList(const QString& strPrefix) const;
+
 	sptr_t Send(unsigned int iMessage, uptr_t wParam = 0, sptr_t lParam = 0) const
 	{
 		return send(iMessage, wParam, lParam);
 	}
 
 private slots:
+	// CEditorView's SCN_CHARADDED case (src/EditorView.cpp:6157-6172), reduced to
+	// the autocomplete half.
+	void OnCharAdded(int nChar);
 	// Everything CEditorView's SCN_UPDATEUI case drives (src/EditorView.cpp:6179).
 	// Scintilla sends this after any change to the text, the styling, the caret or
 	// the selection, so it runs constantly - the MFC carries a comment saying so.

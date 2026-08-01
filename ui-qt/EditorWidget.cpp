@@ -49,6 +49,31 @@ namespace
 	// here rather than read - the same as every other setting in this file.
 	const bool ENABLE_URL_HIGHLIGHT = true;
 
+	// The autocomplete settings, all shipped defaults (src/AppSettings.h:81-84
+	// and AppSettings.cpp:24-27). Same reasoning as ENABLE_URL_HIGHLIGHT.
+	const bool ENABLE_AUTOCOMPLETE = true;
+	const bool AUTOCOMPLETE_IGNORE_CASE = true;
+	const bool AUTOCOMPLETE_IGNORE_NUMBERS = true;
+	// src/EditorCommonDef.h:30-31.
+	const char AUTOCOMPLETE_TYPE_SEPARATOR = '?';
+	const char AUTOCOMPLETE_WORD_SEPARATOR = '$';
+	// AppUtils::IsCStringAllDigits, which GetMatchedWordsOnFile gates on.
+	bool IsAllDigits(const QString& strText)
+	{
+		if (strText.isEmpty())
+		{
+			return false;
+		}
+		for (const QChar& c : strText)
+		{
+			if (c < QLatin1Char('0') || c > QLatin1Char('9'))
+			{
+				return false;
+			}
+		}
+		return true;
+	}
+
 	// Margin numbers, matching src/EditorCommonDef.h's SC_SETMARGINTYPE_*: line
 	// numbers, symbols, folding, left to right.
 	const int MARGIN_LINE_NUMBERS = 0;
@@ -142,6 +167,27 @@ CEditorWidget::CEditorWidget(const CEditorData& data, QWidget* pParent)
 	connect(this, &ScintillaEditBase::linesAdded,
 		this, [this](Scintilla::Position) { UpdateLineNumberMargin(); });
 	connect(this, &ScintillaEditBase::updateUi, this, &CEditorWidget::OnUpdateUi);
+	connect(this, &ScintillaEditBase::charAdded, this, &CEditorWidget::OnCharAdded);
+
+	// Autocomplete options (src/Editor.cpp:361-368). The list is built and shown
+	// by OnCharAdded; these only describe how Scintilla should read and size it.
+	if (AUTOCOMPLETE_IGNORE_CASE)
+	{
+		Send(SCI_AUTOCSETIGNORECASE, 1);
+	}
+	Send(SCI_AUTOCSETSEPARATOR, static_cast<uptr_t>(AUTOCOMPLETE_WORD_SEPARATOR));
+	Send(SCI_AUTOCSETTYPESEPARATOR, static_cast<uptr_t>(AUTOCOMPLETE_TYPE_SEPARATOR));
+	Send(SCI_AUTOCSETMAXWIDTH, 100);
+
+	// The fold-marker highlight, which AppSettings ships TRUE
+	// (src/AppSettings.h:77) and src/Editor.cpp:341-348 applies. Missed by the
+	// folding change - see doc/PORTING.md 6j.
+	//
+	// Its sibling there, SCI_SETFOLDFLAGS, is deliberately still absent: the
+	// original only calls it when m_bDrawFoldingLineUnderLineStyle is TRUE and
+	// AppSettings ships it FALSE (src/AppSettings.cpp:19), so not calling it IS
+	// the shipped behaviour.
+	Send(SCI_MARKERENABLEHIGHLIGHT, 1);
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -158,6 +204,167 @@ void CEditorWidget::OnUpdateUi(Scintilla::Update /*updated*/)
 	UpdateSelectionPainting();
 	UpdateBraceMatch();
 	UpdateTagMatch();
+}
+
+//////////////////////////////////////////////////////////////////////////
+// Autocomplete
+
+QStringList CEditorWidget::GetAutoCompleteList(const QString& strPrefix) const
+{
+	// CEditorView::GetAutoCompleteList (src/EditorView.cpp:5823) draws from three
+	// sources; two of them are here.
+	//
+	// NOT the third: m_AutoCompelteDataset is an English vocabulary list, and it
+	// is empty unless the user picks "add autocomplete english dataset" from a
+	// menu, which loads Packages/translator-packages/english-words.ee-package and
+	// pops a message box (src/EditorView.cpp:7927-7945). It is a user-invoked
+	// extra, not part of the default path, and ui-qt/ has no menu to invoke it
+	// from yet.
+	QStringList words;
+	if (strPrefix.isEmpty())
+	{
+		return words;
+	}
+
+	// AppSettings ships m_bAutoCompleteIgnoreCase TRUE (src/AppSettings.h:84).
+	const Qt::CaseSensitivity sensitivity = AUTOCOMPLETE_IGNORE_CASE
+		? Qt::CaseInsensitive : Qt::CaseSensitive;
+
+	// 1. The language's keywords, which core/ already carries - the same blob
+	//    CLanguageDatabase::GetLanguageKeyWords hands the MFC, split the same way
+	//    (AppUtils::SplitterCString on a single space).
+	if (m_pLanguage != nullptr)
+	{
+		const QString strKeywords = QString::fromStdString(m_pLanguage->_Keywords);
+		const QList<QStringView> keywords = QStringView(strKeywords).split(QLatin1Char(' '),
+			Qt::SkipEmptyParts);
+		for (const QStringView& keyword : keywords)
+		{
+			if (keyword.startsWith(strPrefix, sensitivity))
+			{
+				words.append(keyword.toString());
+			}
+		}
+	}
+
+	// 2. Words already in the document. CEditorView::GetMatchedWordsOnFile runs a
+	//    POSIX regex over the whole buffer, anchored at a word start, and keeps
+	//    each distinct match. The pattern is EDITOR_REGEX_AUTO_COMPLETE_PATTERN
+	//    from src/MacroDef.h:83, verbatim.
+	if (!(AUTOCOMPLETE_IGNORE_NUMBERS && IsAllDigits(strPrefix)))
+	{
+		const QByteArray pattern = ("\\<" + strPrefix
+			+ QStringLiteral("[^ \\t\\n\\r.,;:\"(){}=<>'+!\\[\\]]+")).toUtf8();
+
+		// The MFC drops SCFIND_MATCHCASE when ignore-case is on and keeps the
+		// other three flags either way.
+		int nFlags = SCFIND_WORDSTART | SCFIND_REGEXP | SCFIND_POSIX;
+		if (!AUTOCOMPLETE_IGNORE_CASE)
+		{
+			nFlags |= SCFIND_MATCHCASE;
+		}
+
+		const sptr_t nDocLength = Send(SCI_GETLENGTH);
+		Send(SCI_SETSEARCHFLAGS, static_cast<uptr_t>(nFlags));
+		sptr_t nFrom = 0;
+		while (nFrom < nDocLength)
+		{
+			Send(SCI_SETTARGETSTART, static_cast<uptr_t>(nFrom), 0);
+			Send(SCI_SETTARGETEND, static_cast<uptr_t>(nDocLength), 0);
+			if (Send(SCI_SEARCHINTARGET, static_cast<uptr_t>(pattern.size()),
+					reinterpret_cast<sptr_t>(pattern.constData())) < 0)
+			{
+				break;
+			}
+			const sptr_t nWordStart = Send(SCI_GETTARGETSTART);
+			const sptr_t nWordEnd = Send(SCI_GETTARGETEND);
+			if (nWordEnd <= nWordStart)
+			{
+				break;			// a zero-width match would not advance
+			}
+			// The original skips anything >= 256 bytes rather than truncating it.
+			if (nWordEnd - nWordStart < 256)
+			{
+				QByteArray word(static_cast<int>(nWordEnd - nWordStart) + 1, '\0');
+				Sci_TextRange range{};
+				range.chrg.cpMin = static_cast<Sci_PositionCR>(nWordStart);
+				range.chrg.cpMax = static_cast<Sci_PositionCR>(nWordEnd);
+				range.lpstrText = word.data();
+				Send(SCI_GETTEXTRANGE, 0, reinterpret_cast<sptr_t>(&range));
+				const QString strWord = QString::fromUtf8(word.constData());
+				// Distinct, and CASE-SENSITIVELY so: the original compares with
+				// CString::operator==, which is case-sensitive even when the
+				// SEARCH ignored case. So "Foo" and "foo" both appear.
+				if (!words.contains(strWord))
+				{
+					words.append(strWord);
+				}
+			}
+			nFrom = nWordEnd;
+		}
+	}
+	return words;
+}
+
+void CEditorWidget::OnCharAdded(int nChar)
+{
+	// The gate CEditorView applies (src/EditorView.cpp:6163): a letter or an
+	// underscore, autocomplete enabled, and not the large-file mode ui-qt/ does
+	// not have. isalpha() is the C library's and therefore locale-dependent; this
+	// is the ASCII range it means here, spelled out rather than inherited.
+	if (!ENABLE_AUTOCOMPLETE)
+	{
+		return;
+	}
+	const bool bIsLetter = (nChar >= 'a' && nChar <= 'z') || (nChar >= 'A' && nChar <= 'Z');
+	if (!bIsLetter && nChar != '_')
+	{
+		return;
+	}
+
+	// CEditorCtrl::GetRecentAddedText: the word so far, from its start to the
+	// caret. Empty when the caret is at a word start, which cannot happen for a
+	// letter that was just typed but is checked anyway, as the original does.
+	const sptr_t nCaret = Send(SCI_GETCURRENTPOS);
+	const sptr_t nWordStart = Send(SCI_WORDSTARTPOSITION, static_cast<uptr_t>(nCaret), 1);
+	if (nCaret <= nWordStart)
+	{
+		return;
+	}
+	QByteArray prefix(static_cast<int>(nCaret - nWordStart) + 1, '\0');
+	Sci_TextRange range{};
+	range.chrg.cpMin = static_cast<Sci_PositionCR>(nWordStart);
+	range.chrg.cpMax = static_cast<Sci_PositionCR>(nCaret);
+	range.lpstrText = prefix.data();
+	Send(SCI_GETTEXTRANGE, 0, reinterpret_cast<sptr_t>(&range));
+
+	const QStringList words = GetAutoCompleteList(QString::fromUtf8(prefix.constData()));
+	if (words.isEmpty())
+	{
+		return;
+	}
+
+	// "word?0$word?0$...word?0" - '?' introduces the image index and '$'
+	// separates entries, matching SCI_AUTOCSETTYPESEPARATOR and
+	// SCI_AUTOCSETSEPARATOR below. Image 0 is deliberately not registered here:
+	// the original registers IDR_AUTO_COMPLETE, a Windows .ico loaded through
+	// GuiUtils::LoadIconWithSize, and ui-qt/ has no equivalent resource yet.
+	// Scintilla draws nothing for an unregistered type, so the suffix is kept -
+	// it costs nothing and the day an icon is registered it simply works.
+	QString strList;
+	for (int i = 0; i < words.size(); ++i)
+	{
+		if (i != 0)
+		{
+			strList += QLatin1Char(AUTOCOMPLETE_WORD_SEPARATOR);
+		}
+		strList += words.at(i);
+		strList += QLatin1Char(AUTOCOMPLETE_TYPE_SEPARATOR);
+		strList += QLatin1Char('0');
+	}
+	const QByteArray list = strList.toUtf8();
+	Send(SCI_AUTOCSHOW, static_cast<uptr_t>(nCaret - nWordStart),
+		reinterpret_cast<sptr_t>(list.constData()));
 }
 
 void CEditorWidget::RenderUrlHotspots()
