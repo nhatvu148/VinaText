@@ -5982,6 +5982,8 @@
     ]
   },
   "roles": {
+    "braceBadColor": "blue",
+    "braceLightColor": "red",
     "editorCaretColor": "editorCaretColor",
     "editorFolderBackColor": "editorFolderBackColor",
     "editorFolderForeColor": "editorFolderForeColor",

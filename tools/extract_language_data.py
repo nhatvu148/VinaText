@@ -40,6 +40,7 @@ COMMON_DEF_H = os.path.join(ROOT, "src", "EditorCommonDef.h")
 LEXER_SOURCES = [os.path.join(ROOT, "src", "EditorLexerLight.cpp"),
                  os.path.join(ROOT, "src", "EditorLexerDark.cpp")]
 EDITOR_CPP = os.path.join(ROOT, "src", "Editor.cpp")
+APPUTIL_H = os.path.join(ROOT, "src", "AppUtil.h")
 SCILEXER_H = os.path.join(ROOT, "include", "scintilla", "SciLexer.h")
 # Runtime data lives under Packages/, matching the existing layout the app already
 # uses (PathUtils::GetVinaTextPackagePath -> "Packages\"). Today that tree only
@@ -613,6 +614,63 @@ def parse_theme_roles():
     return out
 
 
+def parse_brace_styles(palette):
+    """The colours the matched and unmatched brace are drawn in.
+
+    `src/Editor.cpp:447-456` styles STYLE_BRACELIGHT red and bold, STYLE_BRACEBAD
+    blue and bold. This is NOT in the IS_LIGHT_THEME preset and it does not come
+    from EditorColor{Light,Dark}.h - it reads `BasicColors`, a third colour table
+    in src/AppUtil.h that has no light and dark variant. So the two colours are
+    the same in both themes, which is why they are emitted as roles taking an
+    ordinary palette key rather than as a per-theme value.
+
+    THAT REUSE NEEDS A GUARD, and it is the point of this function. `BasicColors`
+    and the theme palettes are separate tables that happen to agree:
+    BasicColors::red and the palette's `red` are both #FF0000 today. Resolving one
+    through the other is only sound while that holds, so it is checked here rather
+    than assumed - the same trap as reading the selection colour out of
+    editorTextColor because the numbers match.
+
+    Six of the ten calls in that block are dead and are deliberately not
+    represented here. SCI_INDICSETSTYLE / INDICSETALPHA / INDICSETOUTLINEALPHA
+    take an INDICATOR number; the code passes STYLE_BRACELIGHT (34) and
+    STYLE_BRACEBAD (35), which are STYLE numbers. INDIC_MAX is 35, so those are
+    valid indicator ids and the calls silently configure two indicators nothing
+    ever draws with. Brace highlighting uses the style unless
+    SCI_BRACEHIGHLIGHTINDICATOR turns on the indicator path, and neither frontend
+    calls it (ViewStyle.cxx:250 defaults it off; Editor.cxx:8398 is the only
+    setter). Only SCI_STYLESETFORE and SCI_STYLESETBOLD have any effect.
+
+    `palette` is the theme's {name: "#RRGGBB"}. Returns {role: palette key}.
+    """
+    src = strip_comments(read(EDITOR_CPP))
+    basic = {}
+    for m in re.finditer(
+            r"const\s+COLORREF\s+(\w+)\s*=\s*RGB\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)\s*;",
+            strip_comments(read(APPUTIL_H))):
+        basic[m.group(1)] = hexcolor(tuple(int(g) for g in m.groups()[1:]))
+
+    out = {}
+    for style, role in (("STYLE_BRACELIGHT", "braceLightColor"),
+                        ("STYLE_BRACEBAD", "braceBadColor")):
+        m = re.search(r"SCI_STYLESETFORE\s*,\s*%s\s*,\s*BasicColors::(\w+)" % style, src)
+        if m is None:
+            raise SystemExit("%s: no SCI_STYLESETFORE for %s" % (EDITOR_CPP, style))
+        name = m.group(1)
+        if name not in basic:
+            raise SystemExit("BasicColors::%s is not declared in %s" % (name, APPUTIL_H))
+        if name not in palette:
+            raise SystemExit("%s is styled with BasicColors::%s, which the theme palette "
+                             "does not define" % (style, name))
+        if basic[name] != palette[name]:
+            raise SystemExit(
+                "BasicColors::%s is %s but the theme palette's %r is %s - these are "
+                "separate tables and the brace colours are only resolvable through the "
+                "palette while they agree" % (name, basic[name], name, palette[name]))
+        out[role] = name
+    return out
+
+
 _ROLES_CACHE = []
 
 
@@ -821,7 +879,9 @@ def sync_theme_roles(theme_paths):
     for name, path in sorted(theme_paths.items()):
         with open(path, encoding="utf-8") as f:
             doc = json.load(f)
-        want = {k: roles[name][k] for k in sorted(roles[name])}
+        merged = dict(roles[name])
+        merged.update(parse_brace_styles(doc.get("palette", {})))
+        want = {k: merged[k] for k in sorted(merged)}
         missing = sorted(k for k in want.values() if k not in doc.get("palette", {}))
         if missing:
             raise SystemExit("theme-%s.json: InitilizeSetting reads palette keys the "
@@ -858,7 +918,8 @@ def check_theme_roles(themes):
         if not isinstance(got, dict):
             problems.append("theme-%s.json has no \"roles\" object" % name)
             continue
-        want = roles[name]
+        want = dict(roles[name])
+        want.update(parse_brace_styles((themes[name].get("palette") or {})))
         for role in sorted(set(want) | set(got)):
             if got.get(role) != want.get(role):
                 problems.append("%s role %r: JSON says %r, the C++ says %r"
@@ -1041,7 +1102,10 @@ def build():
                           for _, c in entries if c not in parsed["palette"]})
         if unknown:
             raise SystemExit("theme %s references undefined colours: %s" % (name, unknown))
-        missing = sorted(k for k in roles[name].values() if k not in parsed["palette"])
+        hex_palette = {k: hexcolor(v) for k, v in parsed["palette"].items()}
+        merged = dict(roles[name])
+        merged.update(parse_brace_styles(hex_palette))
+        missing = sorted(k for k in merged.values() if k not in parsed["palette"])
         if missing:
             raise SystemExit("theme %s: InitilizeSetting reads undefined colours: %s"
                              % (name, missing))
@@ -1049,12 +1113,13 @@ def build():
             "_generatedBy": "tools/extract_language_data.py",
             "_source": "src/EditorColor%s.h" % name.capitalize(),
             "name": name,
-            # Which palette key each of CEditorCtrl's colour roles takes, from
-            # src/Editor.cpp's IS_LIGHT_THEME preset. Kept OUT of "palette", which
-            # is a faithful mirror of the header's COLORREF declarations and is
-            # count-checked against them. See parse_theme_roles for the two roles
-            # whose key is not their own name.
-            "roles": {k: roles[name][k] for k in sorted(roles[name])},
+            # Which palette key each of CEditorCtrl's colour roles takes: ten from
+            # src/Editor.cpp's IS_LIGHT_THEME preset, two more from the brace
+            # styling below it. Kept OUT of "palette", which is a faithful mirror
+            # of the header's COLORREF declarations and is count-checked against
+            # them. See parse_theme_roles for the two roles whose key is not their
+            # own name, and parse_brace_styles for the cross-table guard.
+            "roles": {k: merged[k] for k in sorted(merged)},
             "palette": {k: hexcolor(v) for k, v in sorted(parsed["palette"].items())},
             "languages": {
                 lang: [{"style": sym, "value": sce[sym], "color": col}

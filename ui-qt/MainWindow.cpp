@@ -820,6 +820,34 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 				FlushUpdateUi(pEditor);
 				Require(pEditor->Send(SCI_GETHIGHLIGHTGUIDE) == 0,
 					QStringLiteral("%1: no matching brace clears the guide").arg(strName));
+
+				// The styling half. Without it the highlight falls back to
+				// Scintilla's default and is nearly invisible - the logic can be
+				// entirely correct and the feature still not visible on screen,
+				// which is exactly what shipped before this check existed.
+				Core::SColor light, bad;
+				Require(m_Data.GetTheme(m_Theme).ResolveRole("braceLightColor", light)
+					&& m_Data.GetTheme(m_Theme).ResolveRole("braceBadColor", bad),
+					QStringLiteral("%1: core/ resolves both brace roles").arg(strName));
+				const sptr_t nLight = (light._Blue << 16) | (light._Green << 8) | light._Red;
+				const sptr_t nBad = (bad._Blue << 16) | (bad._Green << 8) | bad._Red;
+				Require(pEditor->Send(SCI_STYLEGETFORE, STYLE_BRACELIGHT) == nLight,
+					QStringLiteral("%1: the matched brace is styled %2, got %3")
+						.arg(strName, ColourToString(nLight),
+							ColourToString(pEditor->Send(SCI_STYLEGETFORE, STYLE_BRACELIGHT))));
+				Require(pEditor->Send(SCI_STYLEGETFORE, STYLE_BRACEBAD) == nBad,
+					QStringLiteral("%1: the unmatched brace is styled %2, got %3")
+						.arg(strName, ColourToString(nBad),
+							ColourToString(pEditor->Send(SCI_STYLEGETFORE, STYLE_BRACEBAD))));
+				Require(pEditor->Send(SCI_STYLEGETBOLD, STYLE_BRACELIGHT) == 1
+					&& pEditor->Send(SCI_STYLEGETBOLD, STYLE_BRACEBAD) == 1,
+					QStringLiteral("%1: both brace styles are bold").arg(strName));
+				// SCI_STYLECLEARALL resets these, so they have to be applied after
+				// it. A check that the colour merely differs from black would pass
+				// with the styling in the wrong place; this one would not.
+				Require(nLight != pEditor->Send(SCI_STYLEGETFORE, STYLE_DEFAULT),
+					QStringLiteral("%1: the brace colour survived STYLECLEARALL")
+						.arg(strName));
 				++nBraceMatchesChecked;
 			}
 		}

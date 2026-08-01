@@ -164,7 +164,20 @@ int main(int argc, char** argv)
 		// that do not are pinned here by value, because they are the whole reason
 		// the indirection exists.
 		//------------------------------------------------------------------
-		CheckEqual<size_t>(theme.GetRoles().size(), 10, strName + ": role count");
+		// Ten from the IS_LIGHT_THEME preset, two from the brace styling below it.
+		CheckEqual<size_t>(theme.GetRoles().size(), 12, strName + ": role count");
+
+		// The brace colours come from BasicColors (src/AppUtil.h), a table with no
+		// light and dark variant - so unlike every other role these are the same
+		// in both themes. The extractor guards that BasicColors and the palette
+		// still agree; this pins the values a reader can see on screen.
+		Core::SColor braceLight, braceBad;
+		Check(theme.ResolveRole("braceLightColor", braceLight)
+			&& braceLight._Red == 255 && braceLight._Green == 0 && braceLight._Blue == 0,
+			strName + ": a matched brace is red");
+		Check(theme.ResolveRole("braceBadColor", braceBad)
+			&& braceBad._Red == 0 && braceBad._Green == 0 && braceBad._Blue == 255,
+			strName + ": an unmatched brace is blue");
 
 		Core::SColor role;
 		// The one whose key differs BETWEEN the themes. Nothing a frontend can

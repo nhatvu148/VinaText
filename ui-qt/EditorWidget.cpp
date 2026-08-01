@@ -390,6 +390,35 @@ void CEditorWidget::ApplyEditorStyles(const Core::CEditorTheme& theme)
 		qWarning("theme %s: no selectionTextColor role", theme.GetName().c_str());
 	}
 
+	// How a matched and an unmatched brace are drawn (src/Editor.cpp:447-456).
+	// This is the styling half of brace matching; the logic is UpdateBraceMatch.
+	// Without it the highlight falls back to Scintilla's default and is very
+	// nearly invisible against either theme.
+	//
+	// Four of the ten calls there are ported. The other six are
+	// SCI_INDICSETSTYLE / INDICSETALPHA / INDICSETOUTLINEALPHA, which take an
+	// INDICATOR number - and the original passes STYLE_BRACELIGHT (34) and
+	// STYLE_BRACEBAD (35), which are STYLE numbers. INDIC_MAX is 35, so those are
+	// valid indicator ids and the calls configure two indicators nothing ever
+	// draws with. Scintilla only takes the indicator path for braces when
+	// SCI_BRACEHIGHLIGHTINDICATOR turns it on, and neither frontend calls it. The
+	// source comment there - "foreground and alpha maybe overridden by style
+	// settings" - reads like the author was unsure which mechanism applied.
+	Core::SColor brace;
+	static const struct { const char* _Role; int _Style; } BRACE_STYLES[] = {
+		{ "braceLightColor", STYLE_BRACELIGHT },
+		{ "braceBadColor",   STYLE_BRACEBAD },
+	};
+	for (const auto& entry : BRACE_STYLES)
+	{
+		if (theme.ResolveRole(entry._Role, brace))
+		{
+			Send(SCI_STYLESETFORE, entry._Style, ToScintillaColour(brace));
+		}
+		// Unconditional in the original - no branch, no theme dependence.
+		Send(SCI_STYLESETBOLD, entry._Style, 1);
+	}
+
 	Core::SColor colour;
 	if (theme.ResolveRole("editorCaretColor", colour))
 	{
