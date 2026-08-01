@@ -73,6 +73,21 @@ def main():
             "    <empty />\n"
             "    <data><![CDATA[<item>not a tag</item>]]></data>\n"
             "</root>\n").encode("utf-8"),
+
+        # URL hotspots. Each line is one rule from src/StringHelper.cpp's
+        # scanner: the five supported schemes, a scheme that is not supported, a
+        # scheme that is not at a delimiter, the trailing punctuation that is
+        # stripped, and the two bracket cases that differ. The accented word puts
+        # multi-byte UTF-8 before a URL, which is where a byte offset and a
+        # character offset stop agreeing.
+        "urls.md": (
+            "Visit https://example.com/docs for details.\n"
+            "Mail mailto:someone@example.com about it.\n"
+            "Fetch ftp://files.example.com/pub/x.tar.gz now.\n"
+            "Open file:///etc/hosts here.\n"
+            "Not gopher://old.example.com and not nothttp://x.\n"
+            "Bracketed (see http://example.com/x) but kept http://example.com/a_(b)\n"
+            "Sau khi chào: http://example.com/á xong.\n").encode("utf-8"),
     }
 
     for name, payload in sorted(files.items()):

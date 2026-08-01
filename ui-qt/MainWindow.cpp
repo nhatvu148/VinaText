@@ -25,6 +25,7 @@
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QPair>
+#include <QStringList>
 #include <QShortcut>
 #include <QStatusBar>
 #include <QTabWidget>
@@ -629,6 +630,9 @@ namespace
 		return ranges;
 	}
 
+	// src/EditorCommonDef.h:52, INDIC_CONTAINER + 6.
+	const int URL_INDICATOR = 14;
+
 	int DistinctStyleCount(CEditorWidget* pEditor)
 	{
 		pEditor->Send(SCI_COLOURISE, 0, -1);
@@ -679,6 +683,7 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 	int nFoldClicksChecked = 0;
 	int nBraceMatchesChecked = 0;
 	int nTagMatchFilesChecked = 0;
+	int nUrlFilesChecked = 0;
 	for (int i = 0; i < GetTabCount(); ++i)
 	{
 		m_pTabs->setCurrentIndex(i);
@@ -1137,6 +1142,94 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 			FlushUpdateUi(pEditor);
 		}
 
+		// URL hotspots. The check is the underlined TEXT, not offsets: what the
+		// user sees is which characters are underlined, and comparing strings
+		// says what went wrong when it breaks.
+		{
+			const sptr_t nLength = pEditor->Send(SCI_GETLENGTH);
+			QByteArray text(static_cast<int>(nLength) + 1, '\0');
+			pEditor->Send(SCI_GETTEXT, static_cast<uptr_t>(nLength) + 1,
+				reinterpret_cast<sptr_t>(text.data()));
+			text.truncate(static_cast<int>(nLength));
+
+			QStringList underlined;
+			sptr_t at = 0;
+			while (at < nLength)
+			{
+				if (pEditor->Send(SCI_INDICATORVALUEAT, URL_INDICATOR, at) != 0)
+				{
+					const sptr_t nEnd = pEditor->Send(SCI_INDICATOREND, URL_INDICATOR, at);
+					if (nEnd <= at)
+					{
+						break;
+					}
+					underlined.append(QString::fromUtf8(
+						text.mid(static_cast<int>(at), static_cast<int>(nEnd - at))));
+					at = nEnd;
+				}
+				else
+				{
+					++at;
+				}
+			}
+
+			if (strName == QStringLiteral("urls.md"))
+			{
+				// Exactly what should be underlined, in order. core/'s own
+				// differential test covers the scanner; this covers the wiring -
+				// that the right bytes reach Scintilla's indicator, including
+				// past a multi-byte character where a character offset would be
+				// four bytes short by the last line.
+				const QStringList wanted = {
+					QStringLiteral("https://example.com/docs"),
+					QStringLiteral("mailto:someone@example.com"),
+					QStringLiteral("ftp://files.example.com/pub/x.tar.gz"),
+					QStringLiteral("file:///etc/hosts"),
+					QStringLiteral("http://example.com/x"),
+					QStringLiteral("http://example.com/a_(b)"),
+					QString::fromUtf8("http://example.com/\xc3\xa1"),
+				};
+				Require(underlined == wanted,
+					QStringLiteral("%1: underlined %2, wanted %3").arg(strName,
+						underlined.join(QStringLiteral(" | ")),
+						wanted.join(QStringLiteral(" | "))));
+
+				// Re-styling must CLEAR a highlight over text that is not a URL.
+				// A fresh document has nothing marked, so simply not clearing
+				// would pass every check above - the stale mark has to be put
+				// there deliberately. This is what the scanner reporting non-URL
+				// segments is for.
+				pEditor->Send(SCI_SETINDICATORCURRENT, URL_INDICATOR);
+				pEditor->Send(SCI_SETINDICATORVALUE,
+					pEditor->Send(SCI_STYLEGETFORE, STYLE_DEFAULT));
+				pEditor->Send(SCI_INDICATORFILLRANGE, 0, 5);	// "Visit"
+				Require(pEditor->Send(SCI_INDICATORVALUEAT, URL_INDICATOR, 0) != 0,
+					QStringLiteral("%1: the stale mark was applied").arg(strName));
+				pEditor->ApplyTheme(m_Theme);
+				Require(pEditor->Send(SCI_INDICATORVALUEAT, URL_INDICATOR, 0) == 0,
+					QStringLiteral("%1: re-styling clears a highlight over non-URL text")
+						.arg(strName));
+				++nUrlFilesChecked;
+			}
+			else
+			{
+				// Everywhere else the invariant is that nothing was underlined
+				// that does not start with a supported scheme - source files are
+				// full of "//" and "http" inside strings and comments.
+				for (const QString& strUrl : underlined)
+				{
+					const QString strLower = strUrl.toLower();
+					Require(strLower.startsWith(QStringLiteral("http:"))
+						|| strLower.startsWith(QStringLiteral("https:"))
+						|| strLower.startsWith(QStringLiteral("ftp:"))
+						|| strLower.startsWith(QStringLiteral("file:"))
+						|| strLower.startsWith(QStringLiteral("mailto:")),
+						QStringLiteral("%1: underlined '%2' starts with a supported scheme")
+							.arg(strName, strUrl));
+				}
+			}
+		}
+
 		// Status bar.
 		pEditor->Send(SCI_GOTOPOS, 0);
 		UpdateStatusBar();
@@ -1156,6 +1249,8 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 		QStringLiteral("brace matching was exercised on at least one file"));
 	Require(nTagMatchFilesChecked > 0,
 		QStringLiteral("tag matching was exercised on at least one file"));
+	Require(nUrlFilesChecked > 0,
+		QStringLiteral("URL hotspots were exercised on the urls.md fixture"));
 
 	//----------------------------------------------------------------------
 	// Save. The check is byte equality against the file that was opened: an

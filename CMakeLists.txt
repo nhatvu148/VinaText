@@ -69,7 +69,9 @@ add_library(vinatext_core STATIC
     core/Tokenizer.cpp
     core/Tokenizer.h
     core/LineDiff.cpp
-    core/LineDiff.h)
+    core/LineDiff.h
+    core/UrlScanner.cpp
+    core/UrlScanner.h)
 
 add_library(VinaText::core ALIAS vinatext_core)
 
@@ -97,7 +99,7 @@ if(VINATEXT_BUILD_TESTS)
     # No test framework on purpose: these must build anywhere a C++11 compiler
     # exists, with no package manager and no network. Each returns non-zero on
     # failure, which is all ctest needs.
-    foreach(test_name TestLanguageData TestLanguageLookup TestStyleAttributes TestStringUtil TestChecksum TestTextTransform TestTokenizer TestLineDiff)
+    foreach(test_name TestLanguageData TestLanguageLookup TestStyleAttributes TestStringUtil TestChecksum TestTextTransform TestTokenizer TestLineDiff TestUrlScanner)
         add_executable(${test_name} core/tests/${test_name}.cpp)
         target_link_libraries(${test_name} PRIVATE vinatext_core)
         if(MSVC)
@@ -122,6 +124,10 @@ if(VINATEXT_BUILD_TESTS)
     add_test(NAME core.TextTransform COMMAND TestTextTransform)
     add_test(NAME core.Tokenizer COMMAND TestTokenizer)
     add_test(NAME core.LineDiff COMMAND TestLineDiff)
+    # Differential: URL detection against a transcription of StringHelper's
+    # seven *Url* helpers. Does NOT cover the InternetCrackUrl replacement -
+    # see core/UrlScanner.h.
+    add_test(NAME core.UrlScanner COMMAND TestUrlScanner)
 endif()
 
 #-------------------------------------------------------------------------------
