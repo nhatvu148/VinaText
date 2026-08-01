@@ -24,6 +24,7 @@
 #include <QLabel>
 #include <QMenuBar>
 #include <QMessageBox>
+#include <QPair>
 #include <QShortcut>
 #include <QStatusBar>
 #include <QTabWidget>
@@ -598,6 +599,36 @@ namespace
 			.arg((nColour >> 16) & 0xFF, 2, 16, QLatin1Char('0')).toUpper();
 	}
 
+	// Every [start, end) run the tag-match indicator covers. Walks the document
+	// with SCI_INDICATORVALUEAT / SCI_INDICATOREND rather than asking the matcher
+	// what it painted, so the check sees what a user would see.
+	QList<QPair<int, int>> MarkedRanges(CEditorWidget* pEditor, sptr_t nLength)
+	{
+		const int INDIC_TAGMATCH = 10;		// src/EditorCommonDef.h:48
+		QList<QPair<int, int>> ranges;
+		sptr_t at = 0;
+		while (at < nLength)
+		{
+			if (pEditor->Send(SCI_INDICATORVALUEAT, INDIC_TAGMATCH, at) != 0)
+			{
+				const sptr_t nEnd = pEditor->Send(SCI_INDICATOREND, INDIC_TAGMATCH, at);
+				// A zero-width run would spin here; INDICATOREND returning `at`
+				// is the only way that happens and it means no run at all.
+				if (nEnd <= at)
+				{
+					break;
+				}
+				ranges.append(qMakePair(static_cast<int>(at), static_cast<int>(nEnd)));
+				at = nEnd;
+			}
+			else
+			{
+				++at;
+			}
+		}
+		return ranges;
+	}
+
 	int DistinctStyleCount(CEditorWidget* pEditor)
 	{
 		pEditor->Send(SCI_COLOURISE, 0, -1);
@@ -647,6 +678,7 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 	//----------------------------------------------------------------------
 	int nFoldClicksChecked = 0;
 	int nBraceMatchesChecked = 0;
+	int nTagMatchFilesChecked = 0;
 	for (int i = 0; i < GetTabCount(); ++i)
 	{
 		m_pTabs->setCurrentIndex(i);
@@ -928,6 +960,183 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 				QStringLiteral("%1: the two themes select differently").arg(strName));
 		}
 
+		// XML/HTML tag matching. Checked by INVARIANT rather than against a table
+		// of expected offsets: the matcher is a 250-line transcription, and a
+		// table of numbers copied out of its own output would agree with it by
+		// construction. Everything below is computed from the document text with
+		// no reference to how the matcher works.
+		{
+			const Core::SLanguageInfo* pLang2 = m_Data.DetectLanguage(strName);
+			const bool bShouldMatch = (pLang2 != nullptr) && pLang2->_TagMatch;
+
+			const sptr_t nLength = pEditor->Send(SCI_GETLENGTH);
+			QByteArray text(static_cast<int>(nLength) + 1, '\0');
+			pEditor->Send(SCI_GETTEXT, static_cast<uptr_t>(nLength) + 1,
+				reinterpret_cast<sptr_t>(text.data()));
+			text.truncate(static_cast<int>(nLength));
+
+			int nCaretsWithAMatch = 0;
+			for (int nAngle = 0; nAngle < text.size(); ++nAngle)
+			{
+				if (text.at(nAngle) != '<')
+				{
+					continue;
+				}
+				// Two past the '<', so the caret is inside the name for both
+				// "<name" and "</name".
+				pEditor->Send(SCI_GOTOPOS, static_cast<uptr_t>(nAngle + 2));
+				FlushUpdateUi(pEditor);
+
+				const QList<QPair<int, int>> marked = MarkedRanges(pEditor, nLength);
+				if (marked.isEmpty())
+				{
+					continue;
+				}
+				++nCaretsWithAMatch;
+
+				// 1. Every marked range must start at a '<' or be a bare tail
+				//    (">" or "/>"). Anything else means the highlight landed on
+				//    text rather than on markup.
+				// 2. The name in the open tag and the name in the close tag must
+				//    be the same string.
+				// 3. The pair must ENCLOSE the caret. This is the one that
+				//    catches an off-by-one resolving to a neighbouring tag.
+				QString strOpenName, strCloseName;
+				int nFirstStart = -1, nLastEnd = -1;
+				bool bWellFormed = true;
+				for (const QPair<int, int>& range : marked)
+				{
+					const QByteArray piece = text.mid(range.first, range.second - range.first);
+					if (nFirstStart < 0)
+					{
+						nFirstStart = range.first;
+					}
+					nLastEnd = range.second;
+					if (piece == ">" || piece == "/>")
+					{
+						continue;			// the open tag's tail
+					}
+					if (!piece.startsWith('<'))
+					{
+						bWellFormed = false;
+						continue;
+					}
+					const bool bClose = piece.startsWith("</");
+					QString& strName2 = bClose ? strCloseName : strOpenName;
+					strName2 = QString::fromUtf8(piece.mid(bClose ? 2 : 1))
+						.remove(QLatin1Char('>'));
+				}
+				Require(bWellFormed,
+					QStringLiteral("%1: every tag-match range begins at a '<' or is a tail")
+						.arg(strName));
+				Require(!strOpenName.isEmpty(),
+					QStringLiteral("%1: the tag-match highlight names an open tag").arg(strName));
+				if (!strCloseName.isEmpty())
+				{
+					Require(strOpenName == strCloseName,
+						QStringLiteral("%1: open <%2> pairs with close </%3>")
+							.arg(strName, strOpenName, strCloseName));
+				}
+				Require(nFirstStart <= nAngle && nLastEnd >= nAngle,
+					QStringLiteral("%1: the pair at [%2..%3] encloses the caret's tag at %4")
+						.arg(strName).arg(nFirstStart).arg(nLastEnd).arg(nAngle));
+
+				// 4. At most three runs: the open tag's name, its tail, and the
+				//    close tag - and fewer when two of them abut and Scintilla
+				//    merges them. More than three means highlights from an
+				//    earlier caret position were never cleared.
+				Require(marked.size() <= 3,
+					QStringLiteral("%1: %2 highlighted runs at caret %3, expected at most 3 "
+						"- stale highlights are not being cleared")
+						.arg(strName).arg(marked.size()).arg(nAngle));
+
+				// 5. The open tag must END at a real close angle, with balanced
+				//    quotes in between. This is what catches a search that walked
+				//    into an attribute value: <item note="a>b"> would otherwise
+				//    stop at the '>' inside the string, which still looks like a
+				//    perfectly good tail to every check above.
+				const int nOpenTagStart = nFirstStart;
+				int nOpenTagEnd = -1;
+				for (const QPair<int, int>& range : marked)
+				{
+					const QByteArray piece = text.mid(range.first, range.second - range.first);
+					if (!piece.startsWith("</"))
+					{
+						nOpenTagEnd = range.second;
+					}
+				}
+				if (nOpenTagEnd > nOpenTagStart)
+				{
+					const QByteArray tag = text.mid(nOpenTagStart, nOpenTagEnd - nOpenTagStart);
+					Require(tag.endsWith('>'),
+						QStringLiteral("%1: the open tag at %2 ends at a '>', got %3")
+							.arg(strName).arg(nOpenTagStart).arg(QString::fromUtf8(tag)));
+					Require(tag.count('"') % 2 == 0,
+						QStringLiteral("%1: the open tag at %2 has balanced quotes, got %3 "
+							"- the search stopped inside an attribute value")
+							.arg(strName).arg(nOpenTagStart).arg(QString::fromUtf8(tag)));
+				}
+			}
+
+			if (bShouldMatch)
+			{
+				Require(nCaretsWithAMatch > 0,
+					QStringLiteral("%1: tag matching fired somewhere in the file").arg(strName));
+
+				// The second gate: with a selection up, the highlight is not
+				// RECOMPUTED. Note "not recomputed", not "cleared" - the MFC
+				// gates the whole call (src/EditorView.cpp:6186-6189) and the
+				// clearing lives inside it, so a highlight painted a moment ago
+				// stays on screen while the user selects. This port does the
+				// same, and an earlier version of this check asserted the
+				// highlight vanished, which no build has ever done.
+				//
+				// So the check is that it FREEZES: park the caret in one tag,
+				// select inside a different one, and the highlight must still
+				// describe the first. Dropping the gate makes it follow the
+				// second.
+				const int nFirstAngle = text.indexOf('<');
+				const int nSecondAngle = text.indexOf('<', nFirstAngle + 1);
+				if (nFirstAngle >= 0 && nSecondAngle > nFirstAngle)
+				{
+					pEditor->Send(SCI_GOTOPOS, static_cast<uptr_t>(nFirstAngle + 2));
+					FlushUpdateUi(pEditor);
+					const QList<QPair<int, int>> before = MarkedRanges(pEditor, nLength);
+					Require(!before.isEmpty(),
+						QStringLiteral("%1: the first tag is highlighted to begin with")
+							.arg(strName));
+
+					pEditor->Send(SCI_SETSEL, static_cast<uptr_t>(nSecondAngle + 2),
+						nSecondAngle + 4);
+					FlushUpdateUi(pEditor);
+					Require(MarkedRanges(pEditor, nLength) == before,
+						QStringLiteral("%1: selecting inside another tag leaves the "
+							"highlight where it was").arg(strName));
+
+					// And it follows the caret again once nothing is selected - a
+					// gate that latches off is as wrong as one that never fires.
+					pEditor->Send(SCI_SETSEL, static_cast<uptr_t>(nSecondAngle + 2),
+						nSecondAngle + 2);
+					FlushUpdateUi(pEditor);
+					const QList<QPair<int, int>> after = MarkedRanges(pEditor, nLength);
+					Require(!after.isEmpty() && after != before,
+						QStringLiteral("%1: emptying the selection moves the highlight to "
+							"the caret's own tag").arg(strName));
+				}
+				++nTagMatchFilesChecked;
+			}
+			else
+			{
+				// A language that must NOT tag-match. Without this, marking every
+				// language would pass every check above.
+				Require(nCaretsWithAMatch == 0,
+					QStringLiteral("%1: tag matching stays off for a non-tag language "
+						"(fired %2 times)").arg(strName).arg(nCaretsWithAMatch));
+			}
+			pEditor->Send(SCI_GOTOPOS, 0);
+			FlushUpdateUi(pEditor);
+		}
+
 		// Status bar.
 		pEditor->Send(SCI_GOTOPOS, 0);
 		UpdateStatusBar();
@@ -945,6 +1154,8 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 		QStringLiteral("the fold-margin click was exercised on at least one file"));
 	Require(nBraceMatchesChecked > 0,
 		QStringLiteral("brace matching was exercised on at least one file"));
+	Require(nTagMatchFilesChecked > 0,
+		QStringLiteral("tag matching was exercised on at least one file"));
 
 	//----------------------------------------------------------------------
 	// Save. The check is byte equality against the file that was opened: an

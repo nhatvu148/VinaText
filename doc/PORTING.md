@@ -1280,6 +1280,149 @@ ctest --test-dir build -R core.LanguageData --output-on-failure
 
 ---
 
+## 6h. Tag matching, and the fifth key — where every other key looks right
+
+The third and last item of `SCN_UPDATEUI`: `DoXMLHTMLTagsHightlight`
+(`src/Editor.cpp:1783`) plus `GetXmlHtmlTagsPosition` (`:1535`) and its four
+search helpers — about 400 lines, transcribed into `ui-qt/TagMatcher.{h,cpp}`.
+
+**Which languages get it is a fifth key, and it takes two hops to reach.**
+`CEditorView` gates the call on `LANGUAGE_XML`, `LANGUAGE_HTML` and `LANGUAGE_PHP`
+(`src/EditorView.cpp:6183-6190`) — the `VINATEXT_SUPPORTED_LANGUAGE` enum, which
+none of the four already-extracted fields uses. Getting from there to a language id
+goes enum → VinaText token (`DetectCurrentDocLanguage`'s if-chain) → id
+(`parse_lexer_dispatch`).
+
+> A trap inside the trap: that if-chain tests `m_czLexerFromFile`, which sounds
+> like a Lexilla name and is not. It is `m_strLexerName`, filled by
+> `GetLexerNameFromExtension` from `arrLexerNames` — the VinaText dispatch token.
+> `phpscript` and `hypertext` are tokens; Lexilla has never heard of either.
+
+**Every other available key gives a wrong answer, and two of them look right:**
+
+| keyed on | result | wrong how |
+|---|---|---|
+| `lexer == "cpp"` | autoit, c, cpp, cs, go, java, javascript, json, **php**, protobuf, resource, typescript, vcxproject | **13 languages instead of 3.** php really is lexed as `cpp`, so php is correct and the other twelve are not |
+| `styleTable == "html"` | html, xml | **drops php silently** |
+| `foldMarker == " < ... > "` | html, xml | drops php, by a different route |
+| `tagMatch` (this field) | **html, php, xml** | ✅ |
+
+`html` and `xml` come out right under all four, which is exactly what makes the
+wrong ones dangerous: the bug is one language wide and invisible in the two cases
+anyone would check first.
+
+**Five extracted fields, five different keys.** `lexer` by what Lexilla calls the
+language, `styleTable` by which colour table the initialiser walks, `foldMarker`
+and `indentGuides` by the VinaText dispatch token, `tagMatch` by the
+`VINATEXT_SUPPORTED_LANGUAGE` enum. Nothing about any of their names predicts this.
+
+**Absent means false.** Three of 42 languages carry `tagMatch`, so the other 39 omit
+it rather than saying `false`. Unlike `foldMarker` there is no hidden default to
+discover: a frontend that does not find the key does nothing, which is correct.
+
+### What the transcription preserved
+
+- **`>` inside an attribute value is data.** `<item note="a>b">` is valid XML, and
+  every search skips a `>` whose lexer style is `SCE_H_DOUBLESTRING` or
+  `SCE_H_SINGLESTRING`. Without that the open tag appears to end four characters
+  early.
+- **Nested same-name tags.** `<item><item>…</item></item>` resolves by counting the
+  close tags between a candidate open tag and ours, and searching further out when
+  the count is non-zero.
+- **Self-closing tags** match themselves and report `_TagCloseStart == -1`.
+- **A tag name may not be a prefix of a longer one.** `<TAGNAME2` must not satisfy a
+  search for `<TAGNAME`, so the character after the name has to be `>` or whitespace.
+- **The tag-name scan stops at `"` and `'`**, which is wrong for well-formed XML — a
+  quote cannot appear in a name — but behaves better on the malformed XML people
+  actually edit. The original says so in a comment; it is preserved deliberately.
+- **Target and search flags are saved and restored**, because find/replace owns them.
+
+### Not ported, and why
+
+The attribute highlighting over `INDIC_TAGATTR` is **commented out in the original**
+(`src/Editor.cpp:1820-1826`), along with `CEditorCtrl::GetAttributesPos`, the 90-line
+state machine that feeds it. It draws nothing on Windows today, so it draws nothing
+here. `INDIC_TAGATTR` is still styled and still cleared, both of which the original
+also does.
+
+### Two things the tests got wrong first
+
+**1. A check that asserted behaviour no build has ever had.** The first version
+asserted the highlight *vanishes* while text is selected. It does not: the MFC gates
+the whole call, and the clearing lives *inside* it, so a highlight painted a moment
+ago stays on screen while the user selects. The port is faithful and the test was
+wrong — caught because the baseline failed. The check now asserts what the gate
+actually does: the highlight **freezes**. Park the caret in one tag, select inside a
+different one, and the highlight must still describe the first.
+
+**2. A mutation harness that silently tested the previous binary.** Two mutations
+"passed" — meaning they were not caught — and both had in fact failed to *compile*:
+deleting the calls left a variable unused, which is an error under
+`-Werror`. The harness sent build output to `/dev/null`, so it ran the stale
+executable and reported a clean run. **A mutation that does not build is not a
+mutation that passed.** The harness now fails loudly on a build error, and the two
+mutations were rewritten into compiling forms — after which both are caught, by the
+checks intended to catch them.
+
+That second one generalises: mutation-checking verifies the *test*, and nothing was
+verifying the *mutation*.
+
+### The checks
+
+Invariants computed from the document text, not a table of expected offsets — a
+table copied from the matcher's own output agrees with it by construction. For every
+`<` in the fixture, with the caret two characters past it:
+
+1. every highlighted run starts at `<` or is a bare tail (`>` / `/>`);
+2. the open tag's name and the close tag's name are the same string;
+3. the pair encloses the caret's own tag;
+4. at most three runs — more means stale highlights were never cleared;
+5. the open tag ends at `>` with **balanced quotes** in between, which is what
+   catches a search that walked into an attribute value.
+
+Plus the negative: a language that must not tag-match paints nothing.
+
+Mutations, each caught by the check named: gate on the lexer instead of `tagMatch`
+(1), drop the empty-selection gate (freeze check), disable the attribute-string skip
+(5), never clear the indicators (4 — 10 to 14 runs accumulate). On the extractor:
+edit the JSON, drop PHP from the C++ guard, name an enum no token maps to. On
+`core/`: drop php's `tagMatch`, give cpp one.
+
+Reproduce:
+
+```bash
+# the set, and what each wrong key would have given
+python3 - <<'PY'
+import sys; sys.path.insert(0, 'tools')
+import extract_language_data as x
+d, _ = x.cached_dispatch()
+f, _ = x.cached_fold_markers()
+print('tagMatch          :', sorted(x.cached_tag_match()))
+print('by lexer == cpp   :', sorted(k for k, v in d.items() if v.get('lexer') == 'cpp'))
+print('by styleTable=html:', sorted(k for k, v in d.items() if v.get('styleTable') == 'html'))
+print('by foldMarker < > :', sorted(k for k, v in f.items() if '<' in v))
+PY
+
+# the guard, and the chain it has to be read through
+sed -n '6183,6190p' src/EditorView.cpp
+sed -n '1129,1138p' src/EditorView.cpp
+
+# the attribute highlighting that is commented out in the original
+sed -n '1820,1826p' src/Editor.cpp
+
+# 426 checks, up from 266
+python3 tools/make_selftest_fixtures.py qtbuild/fixtures
+QT_QPA_PLATFORM=offscreen ./qtbuild/ui-qt/vinatext-qt --selftest \
+  core/LanguageData.cpp tools/extract_language_data.py \
+  qtbuild/fixtures/crlf-bom.cpp qtbuild/fixtures/utf16.py \
+  qtbuild/fixtures/latin1.md qtbuild/fixtures/no-trailing-newline.py \
+  qtbuild/fixtures/tags.xml
+
+ctest --test-dir build -R core.LanguageData --output-on-failure
+```
+
+---
+
 ## 7. How to reproduce these numbers
 
 ```bash

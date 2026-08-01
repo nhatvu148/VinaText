@@ -371,7 +371,8 @@
       ],
       "styleTable": "html",
       "foldMarker": " < ... > ",
-      "indentGuides": "lookboth"
+      "indentGuides": "lookboth",
+      "tagMatch": true
     },
     {
       "id": "inno",
@@ -616,7 +617,8 @@
       "lexer": "cpp",
       "styleTable": "php",
       "foldMarker": " { ... } ",
-      "indentGuides": "lookboth"
+      "indentGuides": "lookboth",
+      "tagMatch": true
     },
     {
       "id": "powershell",
@@ -993,7 +995,8 @@
       ],
       "styleTable": "html",
       "foldMarker": " < ... > ",
-      "indentGuides": "lookboth"
+      "indentGuides": "lookboth",
+      "tagMatch": true
     }
   ]
 }

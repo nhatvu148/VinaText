@@ -41,6 +41,7 @@ LEXER_SOURCES = [os.path.join(ROOT, "src", "EditorLexerLight.cpp"),
                  os.path.join(ROOT, "src", "EditorLexerDark.cpp")]
 EDITOR_CPP = os.path.join(ROOT, "src", "Editor.cpp")
 APPUTIL_H = os.path.join(ROOT, "src", "AppUtil.h")
+EDITORVIEW_CPP = os.path.join(ROOT, "src", "EditorView.cpp")
 SCILEXER_H = os.path.join(ROOT, "include", "scintilla", "SciLexer.h")
 # Runtime data lives under Packages/, matching the existing layout the app already
 # uses (PathUtils::GetVinaTextPackagePath -> "Packages\"). Today that tree only
@@ -522,6 +523,89 @@ def parse_indent_guides(dispatch):
     return out, default
 
 
+def parse_tag_match(dispatch):
+    """Which languages get XML/HTML tag matching. A FIFTH key, and a two-hop one.
+
+    CEditorView's SCN_UPDATEUI case calls DoXMLHTMLTagsHightlight only for
+    LANGUAGE_XML, LANGUAGE_HTML and LANGUAGE_PHP (src/EditorView.cpp:6183-6190).
+    That is the VINATEXT_SUPPORTED_LANGUAGE enum - a name space none of the four
+    fields already extracted uses - so getting to a language id takes two hops:
+
+        enum value  <-  DetectCurrentDocLanguage's if-chain  <-  VinaText token
+        VinaText token  <-  parse_lexer_dispatch  <-  language id
+
+    Note the first hop's chain tests `m_czLexerFromFile`, which sounds like a
+    Lexilla name and is not: it is m_strLexerName, filled by
+    GetLexerNameFromExtension from arrLexerNames, i.e. the VinaText dispatch
+    token. `phpscript` and `hypertext` are tokens, not Lexilla lexers.
+
+    EVERY OTHER KEY GIVES THE WRONG ANSWER HERE, and two of them look right:
+
+      - by Lexilla lexer: php is lexed as `cpp`, so a "lexer == cpp" test drags in
+        autoit, c, cpp, cs, go, java, javascript, json, protobuf, resource,
+        typescript and vcxproject - twelve languages that must not tag-match.
+        html and xml would coincidentally work, which is what makes it dangerous.
+      - by styleTable: html and xml share `html`, but php's is `php`. A
+        "styleTable == html" test silently drops php.
+      - by foldMarker: `" < ... > "` is html and xml only - php folds with
+        `" { ... } "`. Same silent drop, different route.
+
+    Returns {language id: True} for the languages that tag-match.
+    """
+    src = strip_comments(read(EDITORVIEW_CPP))
+
+    # Anchored backwards from the call, like parse_indent_guides: a forward scan
+    # from the `case SCN_UPDATEUI` swallows the sibling conditions after it.
+    call = src.find("DoXMLHTMLTagsHightlight")
+    if call < 0:
+        raise SystemExit("%s: cannot find the DoXMLHTMLTagsHightlight call" % EDITORVIEW_CPP)
+    guard = src.rfind("m_CurrentDocLanguage", 0, call)
+    if guard < 0:
+        raise SystemExit("%s: the tag-match call is no longer guarded by "
+                         "m_CurrentDocLanguage - this extraction models exactly "
+                         "that shape" % EDITORVIEW_CPP)
+    start = src.rfind("if", 0, guard)
+    condition = src[start:src.find("{", guard)]
+    enums = set(re.findall(r"VINATEXT_SUPPORTED_LANGUAGE::(\w+)", condition))
+    if not enums:
+        raise SystemExit("the tag-match guard names no VINATEXT_SUPPORTED_LANGUAGE value")
+
+    # Hop 2: the token -> enum chain in DetectCurrentDocLanguage.
+    token_to_enum = {}
+    for m in re.finditer(
+            r'm_czLexerFromFile\s*==\s*"([^"]*)"\s*\)\s*\{\s*'
+            r'm_CurrentDocLanguage\s*=\s*VINATEXT_SUPPORTED_LANGUAGE::(\w+)\s*;', src):
+        token_to_enum[m.group(1)] = m.group(2)
+    if not token_to_enum:
+        raise SystemExit("%s: could not read the token -> language enum chain"
+                         % EDITORVIEW_CPP)
+
+    unreachable = sorted(enums - set(token_to_enum.values()))
+    if unreachable:
+        raise SystemExit("the tag-match guard names %s, which no token maps to - "
+                         "the guard would never fire for them" % unreachable)
+
+    tokens = {t for t, e in token_to_enum.items() if e in enums}
+    out = {}
+    for lang_id, entry in dispatch.items():
+        if entry.get("token") in tokens:
+            out[lang_id] = True
+    if len(out) != len(enums):
+        raise SystemExit("the tag-match guard names %d languages but %d ids matched: %s"
+                         % (len(enums), len(out), sorted(out)))
+    return out
+
+
+_TAGMATCH_CACHE = []
+
+
+def cached_tag_match():
+    if not _TAGMATCH_CACHE:
+        mapping, _ = cached_dispatch()
+        _TAGMATCH_CACHE.append(parse_tag_match(mapping))
+    return _TAGMATCH_CACHE[0]
+
+
 def parse_theme_roles():
     """Which palette constant each editor colour role takes, per theme.
 
@@ -827,6 +911,7 @@ def sync_dispatch_fields(languages_path):
         doc = json.load(f)
 
     attributes = cached_style_attributes()
+    tag_match = cached_tag_match()
     changed = []
     for entry in doc.get("languages", []):
         for field, value in sorted(dispatch_fields_for(entry["id"]).items()):
@@ -843,6 +928,18 @@ def sync_dispatch_fields(languages_path):
             entry["styleAttributes"] = rows
         else:
             entry.pop("styleAttributes", None)
+
+        # Absent means false, as for styleAttributes: 3 of 42 languages tag-match,
+        # and a bool that is present-and-false on the other 39 is noise. Unlike
+        # foldMarker there is no hidden default to discover here - a frontend that
+        # does not find the key does nothing, which is the correct behaviour.
+        bTagMatch = bool(tag_match.get(entry["id"]))
+        if bool(entry.get("tagMatch")) != bTagMatch:
+            changed.append("%s.tagMatch -> %s" % (entry["id"], bTagMatch))
+        if bTagMatch:
+            entry["tagMatch"] = True
+        else:
+            entry.pop("tagMatch", None)
 
     unknown = sorted(set(mapping) - {e["id"] for e in doc.get("languages", [])})
     if unknown:
@@ -947,6 +1044,7 @@ def check_lexer_dispatch(languages_doc):
 
     if dispatch_sources_present():
         mapping, _ = cached_dispatch()
+        tag_match = cached_tag_match()
         for lang in sorted(mapping):
             want = dispatch_fields_for(lang)
             got = by_id.get(lang, {})
@@ -955,6 +1053,11 @@ def check_lexer_dispatch(languages_doc):
                 if got.get(field) != want[field]:
                     problems.append("%s.%s: JSON says %r, the C++ says %r"
                                     % (lang, field, got.get(field), want[field]))
+            # Absent must mean false, so compare the booleans rather than the keys.
+            if bool(got.get("tagMatch")) != bool(tag_match.get(lang)):
+                problems.append("%s.tagMatch: JSON says %r, the C++ says %r"
+                                % (lang, bool(got.get("tagMatch")),
+                                   bool(tag_match.get(lang))))
         for lang, entry in sorted(by_id.items()):
             if lang not in mapping and (entry.get("extensions") or entry.get("lexer")):
                 problems.append("%s carries extensions/lexer but no C++ initialiser sets them"

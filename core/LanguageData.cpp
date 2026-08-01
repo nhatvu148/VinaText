@@ -195,6 +195,11 @@ namespace Core
 			info._FoldMarker = ReadString(entry, "foldMarker");
 			info._IndentGuides = ReadString(entry, "indentGuides");
 			info._StyleTable = ReadString(entry, "styleTable");
+			if (!ReadBool(entry, "tagMatch", info._TagMatch, strError))
+			{
+				strError = "language \"" + info._Id + "\": " + strError;
+				return false;
+			}
 			if (info._StyleTable.empty())
 			{
 				info._StyleTable = info._Id;
