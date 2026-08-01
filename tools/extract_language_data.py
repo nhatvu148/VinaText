@@ -810,6 +810,13 @@ def sync_theme_roles(theme_paths):
     a frontend that guesses it is right until the day it is not.
     """
     roles = cached_theme_roles()
+
+    # Both themes are validated before either is written. Writing inside the loop
+    # left the tree half-synced when the second file failed: the palettes are
+    # hand-maintained now, so dropping a colour one of these roles needs is an
+    # ordinary edit, and it produced one rewritten file and one untouched one -
+    # a state neither the editor nor the next run of this tool describes.
+    pending = []
     changed = []
     for name, path in sorted(theme_paths.items()):
         with open(path, encoding="utf-8") as f:
@@ -822,6 +829,9 @@ def sync_theme_roles(theme_paths):
         if doc.get("roles") != want:
             changed.append("theme-%s.roles -> %d role(s)" % (name, len(want)))
         doc["roles"] = want
+        pending.append((path, doc))
+
+    for path, doc in pending:
         with open(path, "w", encoding="utf-8") as f:
             json.dump(doc, f, indent=2, ensure_ascii=False)
             f.write("\n")
