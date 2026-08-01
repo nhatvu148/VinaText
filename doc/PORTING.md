@@ -1130,6 +1130,13 @@ correct and invisible*: `STYLE_BRACELIGHT` inherits `STYLE_DEFAULT`, so the matc
 brace was drawn in `#FFFFFF` on a dark theme — the same colour as ordinary text.
 Caught by running the editor and clicking, not by any check that existed at the time.
 
+**And it colours a second thing, from neither end obviously.** `EditView.cxx:290`
+draws the *highlighted* indent guide with `styles[StyleBraceLight].fore`. So
+`SCI_SETHIGHLIGHTGUIDE` — the other half of `DoBraceMatchHighlight`, the one that
+marks the matched block's whole depth — produced nothing a user could see either,
+because the highlighted guide was white like every other guide. One missing pair of
+`STYLESETFORE` calls made two ported behaviours invisible.
+
 > This is the gap the derivation command in the session prompt warns about. It scans
 > `sed -n '110,420p' src/Editor.cpp`, and **line 447 is outside that window**. A plan
 > built from "port everything this greps" would have skipped it, and so would a plan

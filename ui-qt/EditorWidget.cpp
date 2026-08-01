@@ -395,6 +395,12 @@ void CEditorWidget::ApplyEditorStyles(const Core::CEditorTheme& theme)
 	// Without it the highlight falls back to Scintilla's default and is very
 	// nearly invisible against either theme.
 	//
+	// It also colours the HIGHLIGHTED INDENT GUIDE, which is not obvious from
+	// either end: EditView.cxx:290 draws that guide with
+	// styles[StyleBraceLight].fore. So SCI_SETHIGHLIGHTGUIDE in UpdateBraceMatch
+	// does nothing a user can see until this runs - before it, the highlighted
+	// guide was white, the same as every other guide.
+	//
 	// Four of the ten calls there are ported. The other six are
 	// SCI_INDICSETSTYLE / INDICSETALPHA / INDICSETOUTLINEALPHA, which take an
 	// INDICATOR number - and the original passes STYLE_BRACELIGHT (34) and
