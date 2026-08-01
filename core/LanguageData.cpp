@@ -399,6 +399,35 @@ namespace Core
 			palette[it->first] = color;
 		}
 
+		// "roles" is generated from src/Editor.cpp rather than hand-written, and a
+		// role naming a key the palette does not define would resolve to nothing
+		// and paint an unset colour - so it is rejected here, exactly as a style
+		// referencing an undefined colour is below.
+		std::map<std::string, std::string> roles;
+		const picojson::object::const_iterator itRoles = obj.find("roles");
+		if (itRoles == obj.end() || !itRoles->second.is<picojson::object>())
+		{
+			strError = "missing \"roles\" object";
+			return false;
+		}
+		const picojson::object& rolesObj = itRoles->second.get<picojson::object>();
+		for (picojson::object::const_iterator it = rolesObj.begin(); it != rolesObj.end(); ++it)
+		{
+			if (!it->second.is<std::string>())
+			{
+				strError = "role \"" + it->first + "\" does not name a palette key";
+				return false;
+			}
+			const std::string& strKey = it->second.get<std::string>();
+			if (palette.find(strKey) == palette.end())
+			{
+				strError = "role \"" + it->first + "\" references undefined colour \""
+					+ strKey + "\"";
+				return false;
+			}
+			roles[it->first] = strKey;
+		}
+
 		std::map<std::string, std::vector<SStyleMapping> > styles;
 		const picojson::object::const_iterator itLanguages = obj.find("languages");
 		if (itLanguages == obj.end() || !itLanguages->second.is<picojson::object>())
@@ -448,6 +477,7 @@ namespace Core
 		}
 
 		m_Palette.swap(palette);
+		m_Roles.swap(roles);
 		m_Styles.swap(styles);
 		return true;
 	}
@@ -468,5 +498,18 @@ namespace Core
 		}
 		color = it->second;
 		return true;
+	}
+
+	bool CEditorTheme::ResolveRole(const std::string& strRole, SColor& color) const
+	{
+		const std::map<std::string, std::string>::const_iterator it = m_Roles.find(strRole);
+		if (it == m_Roles.end())
+		{
+			return false;
+		}
+		// LoadFromString rejects a role whose key is undefined, so this second
+		// lookup cannot fail on a theme that loaded - but it is a lookup, not an
+		// assumption, because a default-constructed theme has neither.
+		return ResolveColor(it->second, color);
 	}
 }

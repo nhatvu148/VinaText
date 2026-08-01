@@ -124,6 +124,81 @@ CEditorWidget::CEditorWidget(const CEditorData& data, QWidget* pParent)
 	// something else re-styles the editor.
 	connect(this, &ScintillaEditBase::linesAdded,
 		this, [this](Scintilla::Position) { UpdateLineNumberMargin(); });
+	connect(this, &ScintillaEditBase::updateUi, this, &CEditorWidget::OnUpdateUi);
+}
+
+//////////////////////////////////////////////////////////////////////////
+// Caret-driven painting
+
+// CEditorView handles SCN_UPDATEUI by calling UpdateCaretLineVisible() and then
+// DoBraceMatchHighlight() (src/EditorView.cpp:6182-6183), in that order. Both are
+// unconditional, so neither is filtered on `updated` here either - the MFC's own
+// comment on that case is that speed matters more than tidiness, and adding a
+// filter the original does not have would be a behaviour change dressed as an
+// optimisation.
+void CEditorWidget::OnUpdateUi(Scintilla::Update /*updated*/)
+{
+	UpdateSelectionPainting();
+	UpdateBraceMatch();
+}
+
+void CEditorWidget::UpdateBraceMatch()
+{
+	// The brace BEFORE the caret, which is where it sits after you type one.
+	// At position 0 this asks about -1; Scintilla reads that as no character,
+	// finds no opposite and returns -1, so the else branch clears the highlight -
+	// the same path the MFC takes for the same reason.
+	const sptr_t nCaret = Send(SCI_GETCURRENTPOS);
+	const sptr_t nBrace = nCaret - 1;
+	const sptr_t nMatch = Send(SCI_BRACEMATCH, static_cast<uptr_t>(nBrace), 0);
+	if (nMatch >= 0)
+	{
+		Send(SCI_BRACEHIGHLIGHT, static_cast<uptr_t>(nBrace), nMatch);
+		// The indent guide at the brace's own column is drawn highlighted, so a
+		// matched block is legible down its whole depth rather than only at its
+		// two ends.
+		Send(SCI_SETHIGHLIGHTGUIDE,
+			static_cast<uptr_t>(Send(SCI_GETCOLUMN, static_cast<uptr_t>(nBrace))));
+	}
+	else
+	{
+		Send(SCI_BRACEHIGHLIGHT, static_cast<uptr_t>(-1), -1);
+		Send(SCI_SETHIGHLIGHTGUIDE, 0);
+	}
+}
+
+void CEditorWidget::UpdateSelectionPainting()
+{
+	// Two things move together here, and only one of them is obvious.
+	//
+	// The caret line band is drawn only when there is nothing selected. With a
+	// selection it would sit under the selection and fight it, so the MFC turns
+	// it off (src/Editor.cpp:4488-4500).
+	//
+	// The selection colour is RE-SET on the empty branch, which looks redundant
+	// and is not: CEditorCtrl::SearchForward and SearchBackward paint the
+	// selection yellow at alpha 90 to flag a match (src/Editor.cpp:1904, :1936),
+	// and this is what puts it back once the user clicks away. It is deliberately
+	// NOT restored on the else branch, so the yellow survives for as long as the
+	// match stays selected.
+	//
+	// ui-qt/'s find bar does not paint that yellow yet, so today this restores a
+	// colour nothing has changed. Transcribed anyway: the day find does grow it,
+	// the reset has to already be here, and an "optimisation" that removed it
+	// would be found by eye long after the fact.
+	if (Send(SCI_GETSELECTIONEMPTY) != 0 && Send(SCI_GETSELECTIONS) == 1)
+	{
+		if (m_bHaveSelectionBack)
+		{
+			Send(SCI_SETSELBACK, 1, ToScintillaColour(m_SelectionBack));
+			Send(SCI_SETSELALPHA, 60);
+		}
+		Send(SCI_SETCARETLINEVISIBLE, 1);
+	}
+	else
+	{
+		Send(SCI_SETCARETLINEVISIBLE, 0);
+	}
 }
 
 QString CEditorWidget::GetDisplayName() const
@@ -269,8 +344,18 @@ void CEditorWidget::ApplyEditorStyles(const Core::CEditorTheme& theme)
 	// Mirrors CEditorCtrl::LoadEditorSettings (src/Editor.cpp:135-175): set
 	// STYLE_DEFAULT, broadcast it with SCI_STYLECLEARALL, then everything else on
 	// top. Doing it in any other order silently discards the later calls.
+	// ResolveRole, not ResolveColor, for everything CEditorCtrl reads out of
+	// m_AppThemeColorSet: the palette key a role takes is not reliably the role's
+	// own name. Eight of the ten happen to coincide, which is why resolving by
+	// name looked right; lineNumberColor takes "linenumber", and
+	// selectionTextColor takes "black" on light and "white" on dark. See
+	// core/LanguageData.h and doc/PORTING.md 6g.
+	//
+	// editorBackground stays on ResolveColor deliberately - it is a palette key
+	// with no role, because the MFC gets the editor's background from the style
+	// table rather than from m_AppThemeColorSet.
 	Core::SColor fore, back;
-	const bool bHaveFore = theme.ResolveColor("editorTextColor", fore);
+	const bool bHaveFore = theme.ResolveRole("editorTextColor", fore);
 	const bool bHaveBack = theme.ResolveColor("editorBackground", back);
 	if (!bHaveFore || !bHaveBack)
 	{
@@ -289,8 +374,24 @@ void CEditorWidget::ApplyEditorStyles(const Core::CEditorTheme& theme)
 	Send(SCI_STYLESETBACK, STYLE_DEFAULT, ToScintillaColour(back));
 	Send(SCI_STYLECLEARALL);
 
+	// The selection background, and the initial application of it. The MFC does
+	// this once at the end of LoadEditorSettings (src/Editor.cpp:419, via
+	// SetSelectionTextColor) and thereafter only from UpdateCaretLineVisible.
+	m_bHaveSelectionBack = theme.ResolveRole("selectionTextColor", m_SelectionBack);
+	if (m_bHaveSelectionBack)
+	{
+		// SELBACK, not SELFORE, despite the name of the role: the C++ member is
+		// called _selectionTextColor and is passed to SCI_SETSELBACK.
+		Send(SCI_SETSELBACK, 1, ToScintillaColour(m_SelectionBack));
+		Send(SCI_SETSELALPHA, 60);
+	}
+	else
+	{
+		qWarning("theme %s: no selectionTextColor role", theme.GetName().c_str());
+	}
+
 	Core::SColor colour;
-	if (theme.ResolveColor("editorCaretColor", colour))
+	if (theme.ResolveRole("editorCaretColor", colour))
 	{
 		Send(SCI_SETCARETFORE, ToScintillaColour(colour));
 		Send(SCI_SETADDITIONALCARETFORE, ToScintillaColour(colour));
@@ -302,14 +403,14 @@ void CEditorWidget::ApplyEditorStyles(const Core::CEditorTheme& theme)
 	Send(SCI_SETCARETLINEBACK, ToScintillaColour(fore));
 	Send(SCI_SETCARETLINEBACKALPHA, 100);
 	Send(SCI_SETCARETWIDTH, 2);
-	if (theme.ResolveColor("editorIndicatorColor", colour))
+	if (theme.ResolveRole("editorIndicatorColor", colour))
 	{
 		Send(SCI_INDICSETFORE, FIND_INDICATOR, ToScintillaColour(colour));
 	}
 
 	Core::SColor margin, lineNumber;
-	if (theme.ResolveColor("editorMarginBarColor", margin)
-		&& theme.ResolveColor("linenumber", lineNumber))
+	if (theme.ResolveRole("editorMarginBarColor", margin)
+		&& theme.ResolveRole("lineNumberColor", lineNumber))
 	{
 		Send(SCI_STYLESETFORE, STYLE_LINENUMBER, ToScintillaColour(lineNumber));
 		Send(SCI_STYLESETBACK, STYLE_LINENUMBER, ToScintillaColour(margin));
@@ -419,8 +520,8 @@ void CEditorWidget::ApplyFoldMargin(const Core::CEditorTheme& theme)
 		{ SC_MARKNUM_FOLDERMIDTAIL, SC_MARK_TCORNER },
 	};
 	Core::SColor fore, back, margin;
-	const bool bHaveFore = theme.ResolveColor("editorFolderForeColor", fore);
-	const bool bHaveBack = theme.ResolveColor("editorFolderBackColor", back);
+	const bool bHaveFore = theme.ResolveRole("editorFolderForeColor", fore);
+	const bool bHaveBack = theme.ResolveRole("editorFolderBackColor", back);
 	for (const auto& marker : FOLD_MARKERS)
 	{
 		Send(SCI_MARKERDEFINE, marker._Marker, marker._Shape);
@@ -430,7 +531,7 @@ void CEditorWidget::ApplyFoldMargin(const Core::CEditorTheme& theme)
 			Send(SCI_MARKERSETBACK, marker._Marker, ToScintillaColour(back));
 		}
 	}
-	if (theme.ResolveColor("editorMarginBarColor", margin))
+	if (theme.ResolveRole("editorMarginBarColor", margin))
 	{
 		// The non-classic branch: AppSettings ships m_bUseFolderMarginClassic
 		// FALSE (src/AppSettings.h:95), so the margin takes the theme colour

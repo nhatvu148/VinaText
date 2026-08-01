@@ -1103,6 +1103,123 @@ ctest --test-dir build -R core.LanguageLookup --output-on-failure
 
 ---
 
+## 6g. Brace matching, and a name that lies about what it is
+
+Phase 4 again, and this time the trap is not a fifth name space — it is a **fifth
+key inside a space already extracted**, plus a member whose name says the opposite
+of what it does.
+
+**What was ported.** `CEditorView`'s `SCN_UPDATEUI` case does three things
+(`src/EditorView.cpp:6179-6190`); this is the two that are unconditional:
+`CEditorCtrl::UpdateCaretLineVisible` (`src/Editor.cpp:4488`) and
+`CEditorCtrl::DoBraceMatchHighlight` (`:1232`). The XML/HTML tag match on the same
+event is language-gated and is its own change.
+
+**The brace half is a clean transcription** — `SCI_BRACEMATCH` on the position
+*before* the caret, which is where the caret sits after you type a brace, then
+`SCI_BRACEHIGHLIGHT` and `SCI_SETHIGHLIGHTGUIDE` at that brace's column, or both
+cleared on a miss. At position 0 it asks Scintilla about position −1;
+`SplitVector::ValueAt` returns `T()` for a negative index, `BraceOpposite('\0')` is
+`'\0'`, and `BraceMatch` returns −1, so the miss branch runs. That is load-bearing
+rather than incidental — it is why the original never guards the subtraction.
+
+**The selection half had two things in it that reading the row would not give you.**
+
+**1. `_selectionTextColor` is a background.** It is passed to `SCI_SETSELBACK`
+(`CEditorCtrl::SetSelectionTextColor`, `src/Editor.cpp:3154`). A frontend author who
+trusted the name would set `SCI_SETSELFORE` and get unreadable selected text.
+
+**2. It is the only editor colour with no single palette key.** The ten members of
+`m_AppThemeColorSet` are filled by an `IS_LIGHT_THEME` preset
+(`src/Editor.cpp:106-132`). Eight take the constant named after them, which is why
+`ui-qt/` could resolve them by name and be right. Two do not:
+
+| role | light | dark |
+|---|---|---|
+| `lineNumberColor` | `linenumber` | `linenumber` |
+| **`selectionTextColor`** | **`black`** | **`white`** |
+
+The second cannot be expressed as one key at all, so `theme.ResolveColor("...")` —
+the shape every other colour used — has no correct argument. `theme-*.json` gains a
+`roles` object, `core/CEditorTheme` gains `ResolveRole`, and the six existing colour
+lookups in `ui-qt/EditorWidget.cpp` move onto it: eight of them are no-ops today,
+and that is the point — they were *assumptions* that happened to hold.
+
+`roles` is deliberately **not** merged into `palette`. `palette` is a faithful mirror
+of the header's `COLORREF` declarations and §7's count check asserts exactly that
+(34/34); injecting a derived entry would break the one invariant that makes the
+palette trustworthy.
+
+**The role names are the C++ member names, misleading one included.** Renaming
+`selectionTextColor` to something honest would break the round-trip that lets
+`--verify` re-derive it, so the lie is *documented at both consumers*
+(`core/LanguageData.h`, `ui-qt/EditorWidget.cpp`) instead of corrected in the data.
+
+**What no test can catch here, stated because the alternative is implying otherwise.**
+`selectionTextColor` and `editorTextColor` resolve to the *same two values* —
+`#000000` light, `#FFFFFF` dark. A frontend reading the wrong one paints identical
+pixels. Mutation-checked: swapping the role at the `ui-qt/` call site leaves all 241
+self-test checks green. Four other mutations — dropping the `updateUi` connection,
+matching the brace at the caret instead of before it, never hiding the caret line,
+and resolving the selection colour by its own name — each fail it. The correctness of
+*which role* is a review property backed by `core/tests/TestLanguageData.cpp` pinning
+the palette keys, not a runtime one; the self-test compares against `core/`'s own
+resolution so that it becomes a real check the day the two values diverge.
+
+**One thing that looks redundant and is not.** `UpdateCaretLineVisible` re-sets
+`SCI_SETSELBACK` on every caret move where the selection is empty. Nothing else in
+that function changes it — but `SearchForward` and `SearchBackward` paint the
+selection **yellow at alpha 90** to flag a match (`src/Editor.cpp:1904`, `:1936`),
+and this is what restores it once the user clicks away. It is deliberately *not*
+restored on the else branch, so the yellow survives for as long as the match stays
+selected. `ui-qt/`'s find bar does not paint that yellow yet, so today the reset
+restores a colour nothing has changed; it is transcribed anyway, because an
+"optimisation" that dropped it would be found by eye months later.
+
+**And a note on the harness.** Scintilla does not send `SCN_UPDATEUI` from the
+message that moved the caret — it records what changed and flushes from
+`Editor::Paint` and `Editor::Idle` (`Editor.cxx:1893`, `:5296`). A headless test that
+only sends `SCI_GOTOPOS` runs none of this and asserts against whatever the previous
+check left behind. `viewport()->grab()` forces a synchronous `paintEvent` and works
+under `QT_QPA_PLATFORM=offscreen`; that is what makes these checks real rather than
+decorative.
+
+Reproduce:
+
+```bash
+# the role table, and the two departures from name-equals-key
+python3 tools/extract_language_data.py --verify | grep 'theme colour roles'
+python3 - <<'PY'
+import json
+for t in ('light', 'dark'):
+    d = json.load(open('Packages/data-packages/theme-%s.json' % t))
+    r, p = d['roles'], d['palette']
+    print(t, 'roles:', len(r),
+          '| key != role name:', sorted(k for k, v in r.items() if k != v))
+    for role in ('selectionTextColor', 'editorTextColor'):
+        print('   %-19s -> %-10s %s' % (role, r[role], p[r[role]]))
+PY
+
+# the C++ the roles are derived from
+sed -n '106,132p' src/Editor.cpp
+
+# the two ported functions
+sed -n '1232,1249p' src/Editor.cpp      # DoBraceMatchHighlight
+sed -n '4488,4500p' src/Editor.cpp      # UpdateCaretLineVisible
+
+# 241 checks, up from 164
+cmake -S . -B qtbuild -G Ninja -DVINATEXT_BUILD_QT=ON && cmake --build qtbuild --parallel
+python3 tools/make_selftest_fixtures.py qtbuild/fixtures
+QT_QPA_PLATFORM=offscreen ./qtbuild/ui-qt/vinatext-qt --selftest \
+  core/LanguageData.cpp tools/extract_language_data.py \
+  qtbuild/fixtures/crlf-bom.cpp qtbuild/fixtures/utf16.py \
+  qtbuild/fixtures/latin1.md qtbuild/fixtures/no-trailing-newline.py
+
+ctest --test-dir build -R core.LanguageData --output-on-failure
+```
+
+---
+
 ## 7. How to reproduce these numbers
 
 ```bash

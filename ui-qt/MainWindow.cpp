@@ -575,6 +575,29 @@ namespace
 		return QString();
 	}
 
+	// Scintilla does not send SCN_UPDATEUI from the message that moved the caret.
+	// It records what changed and flushes the notification from Editor::Paint and
+	// Editor::Idle (Editor.cxx:1893, :5296), so a headless test that only sends
+	// SCI_GOTOPOS has not run the handler at all - and would pass or fail on
+	// whatever the previous check happened to leave behind.
+	//
+	// grab() forces a synchronous paintEvent, which is the paint path, and works
+	// under QT_QPA_PLATFORM=offscreen where nothing is ever shown on a screen.
+	void FlushUpdateUi(CEditorWidget* pEditor)
+	{
+		pEditor->viewport()->grab();
+	}
+
+	// 0x00BBGGRR, as Scintilla returns colours - the inverse of EditorWidget's
+	// ToScintillaColour, kept local to the test so the two do not share a bug.
+	QString ColourToString(sptr_t nColour)
+	{
+		return QStringLiteral("#%1%2%3")
+			.arg(nColour & 0xFF, 2, 16, QLatin1Char('0'))
+			.arg((nColour >> 8) & 0xFF, 2, 16, QLatin1Char('0'))
+			.arg((nColour >> 16) & 0xFF, 2, 16, QLatin1Char('0')).toUpper();
+	}
+
 	int DistinctStyleCount(CEditorWidget* pEditor)
 	{
 		pEditor->Send(SCI_COLOURISE, 0, -1);
@@ -623,6 +646,7 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 	// Lexer, both themes, find, status bar - per tab
 	//----------------------------------------------------------------------
 	int nFoldClicksChecked = 0;
+	int nBraceMatchesChecked = 0;
 	for (int i = 0; i < GetTabCount(); ++i)
 	{
 		m_pTabs->setCurrentIndex(i);
@@ -762,6 +786,120 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 					.arg(strName, QString::fromStdString(pLang->_IndentGuides)));
 		}
 
+		// Brace matching. The highlight itself is paint-time state with no getter,
+		// but the highlight GUIDE that DoBraceMatchHighlight sets alongside it does
+		// have one - and it is set to the brace's own column on a match and to 0
+		// on a miss, so a file with a brace at a non-zero column distinguishes the
+		// two branches. Files with no such brace are counted, not required.
+		{
+			sptr_t nBrace = -1;
+			const sptr_t nLength = pEditor->Send(SCI_GETLENGTH);
+			for (sptr_t p = 0; p < nLength && nBrace < 0; ++p)
+			{
+				if (pEditor->Send(SCI_BRACEMATCH, static_cast<uptr_t>(p), 0) >= 0
+					&& pEditor->Send(SCI_GETCOLUMN, static_cast<uptr_t>(p)) > 0)
+				{
+					nBrace = p;
+				}
+			}
+			if (nBrace >= 0)
+			{
+				const sptr_t nColumn = pEditor->Send(SCI_GETCOLUMN, static_cast<uptr_t>(nBrace));
+				// The caret goes AFTER the brace, which is where it lands when you
+				// type one - CEditorCtrl matches on position - 1 for that reason.
+				pEditor->Send(SCI_GOTOPOS, static_cast<uptr_t>(nBrace + 1));
+				FlushUpdateUi(pEditor);
+				Require(pEditor->Send(SCI_GETHIGHLIGHTGUIDE) == nColumn,
+					QStringLiteral("%1: a matched brace highlights the guide at its column "
+						"(%2, got %3)").arg(strName).arg(nColumn)
+						.arg(pEditor->Send(SCI_GETHIGHLIGHTGUIDE)));
+
+				// Position 0 asks Scintilla about position -1, which matches nothing,
+				// so the highlight must be cleared rather than left behind.
+				pEditor->Send(SCI_GOTOPOS, 0);
+				FlushUpdateUi(pEditor);
+				Require(pEditor->Send(SCI_GETHIGHLIGHTGUIDE) == 0,
+					QStringLiteral("%1: no matching brace clears the guide").arg(strName));
+				++nBraceMatchesChecked;
+			}
+		}
+
+		// Selection painting. The caret-line band is drawn only when nothing is
+		// selected; with a selection it would sit underneath and fight it.
+		{
+			pEditor->Send(SCI_GOTOPOS, 0);
+			FlushUpdateUi(pEditor);
+			Require(pEditor->Send(SCI_GETCARETLINEVISIBLE) == 1,
+				QStringLiteral("%1: the caret line is drawn with no selection").arg(strName));
+
+			pEditor->Send(SCI_SETSEL, 0, 4);
+			FlushUpdateUi(pEditor);
+			Require(pEditor->Send(SCI_GETCARETLINEVISIBLE) == 0,
+				QStringLiteral("%1: the caret line is hidden while text is selected")
+					.arg(strName));
+
+			// Back to an empty selection: a toggle that only works one way is a real
+			// bug and an easy one to ship.
+			pEditor->Send(SCI_SETSEL, 4, 4);
+			FlushUpdateUi(pEditor);
+			Require(pEditor->Send(SCI_GETCARETLINEVISIBLE) == 1,
+				QStringLiteral("%1: the caret line comes back when the selection is emptied")
+					.arg(strName));
+			Require(pEditor->Send(SCI_GETSELALPHA) == 60,
+				QStringLiteral("%1: the selection is restored at alpha 60, got %2")
+					.arg(strName).arg(pEditor->Send(SCI_GETSELALPHA)));
+		}
+
+		// The selection background comes from the selectionTextColor ROLE, which
+		// takes the palette key "black" on light and "white" on dark - so it is
+		// the one editor colour that cannot be resolved by a single palette key.
+		//
+		// KNOWN LIMIT, stated rather than papered over: this cannot distinguish
+		// selectionTextColor from editorTextColor. Both roles resolve to #000000
+		// on light and #FFFFFF on dark in the shipped themes, so a frontend that
+		// read the wrong one would paint identical pixels and pass every check
+		// below. Verified by mutation - swapping the role here leaves the selftest
+		// green. What makes it right is the role name at the call site, which
+		// core/tests/TestLanguageData.cpp pins to the palette keys the C++ names.
+		//
+		// The comparison against core/ is therefore the load-bearing half: it is a
+		// tautology while the two agree and becomes a real check the day a palette
+		// changes, which is exactly when a hard-coded literal would go stale.
+		{
+			for (int t = 0; t < 2; ++t)
+			{
+				const EEditorTheme which = (t == 0) ? EEditorTheme::Light : EEditorTheme::Dark;
+				OnSetTheme(which);
+				Core::SColor wanted;
+				Require(m_Data.GetTheme(which).ResolveRole("selectionTextColor", wanted),
+					QStringLiteral("%1: core/ resolves the selectionTextColor role").arg(strName));
+				const sptr_t nGot = pEditor->Send(SCI_GETELEMENTCOLOUR,
+					SC_ELEMENT_SELECTION_BACK) & 0xFFFFFF;
+				const sptr_t nWanted = (wanted._Blue << 16) | (wanted._Green << 8) | wanted._Red;
+				Require(nGot == nWanted,
+					QStringLiteral("%1: %2 selection background matches core/ (%3, got %4)")
+						.arg(strName, t == 0 ? QStringLiteral("light") : QStringLiteral("dark"),
+							ColourToString(nWanted), ColourToString(nGot)));
+			}
+
+			// And the two literals the C++ names today, so a silent palette edit is
+			// caught rather than merely tracked.
+			OnSetTheme(EEditorTheme::Light);
+			const sptr_t nLightSel = pEditor->Send(SCI_GETELEMENTCOLOUR,
+				SC_ELEMENT_SELECTION_BACK) & 0xFFFFFF;
+			OnSetTheme(EEditorTheme::Dark);
+			const sptr_t nDarkSel = pEditor->Send(SCI_GETELEMENTCOLOUR,
+				SC_ELEMENT_SELECTION_BACK) & 0xFFFFFF;
+			Require(nLightSel == 0x000000,
+				QStringLiteral("%1: light selection background is #000000, got %2")
+					.arg(strName, ColourToString(nLightSel)));
+			Require(nDarkSel == 0xFFFFFF,
+				QStringLiteral("%1: dark selection background is #FFFFFF, got %2")
+					.arg(strName, ColourToString(nDarkSel)));
+			Require(nLightSel != nDarkSel,
+				QStringLiteral("%1: the two themes select differently").arg(strName));
+		}
+
 		// Status bar.
 		pEditor->Send(SCI_GOTOPOS, 0);
 		UpdateStatusBar();
@@ -777,6 +915,8 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 
 	Require(nFoldClicksChecked > 0,
 		QStringLiteral("the fold-margin click was exercised on at least one file"));
+	Require(nBraceMatchesChecked > 0,
+		QStringLiteral("brace matching was exercised on at least one file"));
 
 	//----------------------------------------------------------------------
 	// Save. The check is byte equality against the file that was opened: an
