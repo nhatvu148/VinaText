@@ -584,10 +584,15 @@ def dispatch_fields_for(lang_id):
     mapping, _ = cached_dispatch()
     entry = mapping.get(lang_id, {"extensions": "", "lexer": "", "styleTable": ""})
     fold, default_marker = cached_fold_markers()
-    guides, _ = cached_indent_guides()
+    guides, default_guide = cached_indent_guides()
     return {"extensions": entry["extensions"], "lexer": entry["lexer"],
             "styleTable": entry.get("styleTable") or "",
-            "indentGuides": guides.get(lang_id, "lookboth"),
+            # Both defaults come from the C++ rather than from a literal here.
+            # Neither fallback is reachable while every language has an
+            # initialiser - which check_lexer_call_sites enforces - but a literal
+            # that duplicates a parsed value is the kind of thing that is right
+            # until the day it silently is not.
+            "indentGuides": guides.get(lang_id, default_guide),
             # Emitted for every language, default included: a frontend should not
             # have to know a hidden default to render a folded block.
             "foldMarker": fold.get(lang_id, default_marker)}
