@@ -1076,6 +1076,13 @@ language, `styleTable` by which colour table the initialiser walks, `foldMarker`
 VinaText dispatch token. Nothing in the file names would have told you they differ; each was
 found by reading the code that consumes it.
 
+**The same trap, a second time, and this one is not hypothetical.** The next view setting
+ported — indentation guides — has the identical shape: Python gets `SC_IV_LOOKFORWARD` and
+everything else `SC_IV_LOOKBOTH` (`src/Editor.cpp:209-215`), keyed by token. **`flexlicense`
+is lexed by Lexilla's `python` lexer but its token is `FLEXlm`, so it takes `LOOKBOTH`.**
+Keying on the lexer name would have silently changed how `.lic` files are drawn. `indentGuides`
+is therefore the fourth extracted field, and the fourth with its own key.
+
 Reproduce:
 
 ```bash

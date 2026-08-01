@@ -65,6 +65,11 @@ namespace Core
 		// The Lexilla lexer name to pass to CreateLexer. Frequently NOT _Id: the
 		// shipping app lexes .java, .js, .cs and .json with the "cpp" lexer.
 		std::string	_LexerName;
+		// Indentation-guide mode: "lookforward" or "lookboth". Python gets the
+		// first - guides that stop at a blank line suit a language with no closing
+		// brace. flexlicense is lexed by python and does NOT: the rule keys on the
+		// VinaText token, not the lexer.
+		std::string	_IndentGuides;
 		// What a collapsed fold shows: " { ... } ", " < ... > " or " --- ". Keyed
 		// by language, NOT by lexer: go, protobuf, autoit, resource and vcxproject
 		// are all lexed as cpp and all fold with " --- ".

@@ -475,6 +475,52 @@ def parse_style_attributes(styles_by_language, sce):
     return a
 
 
+def parse_indent_guides(dispatch):
+    """Which indentation-guide mode a language gets: "lookforward" or "lookboth".
+
+    CEditorCtrl::LoadEditorSettings gives Python SC_IV_LOOKFORWARD and everything
+    else SC_IV_LOOKBOTH (src/Editor.cpp:209-215) - guides that stop at a blank
+    line suit a language with no closing brace.
+
+    Keyed by the VinaText TOKEN again, and the trap is not hypothetical here:
+    `flexlicense` is lexed by Lexilla's python lexer but its token is "FLEXlm",
+    so it takes LOOKBOTH. Keying on the Lexilla name would silently change how
+    .lic files are drawn.
+    """
+    src = strip_comments(read(EDITOR_CPP))
+    # Anchored BACKWARDS from the call, not forwards from an `if`: the same
+    # function has an earlier m_strLexerName chain (the fold markers), and a
+    # forward scan swallows it and everything between.
+    call = src.find("SCI_SETINDENTATIONGUIDES")
+    if call < 0:
+        raise SystemExit("%s: cannot find SCI_SETINDENTATIONGUIDES" % EDITOR_CPP)
+    start = src.rfind("if", 0, call)
+    if start < 0:
+        raise SystemExit("%s: SCI_SETINDENTATIONGUIDES has no enclosing if" % EDITOR_CPP)
+    end = src.find("SC_IV_", src.find("else", call))
+    end = src.find("}", src.find("\n", end)) + 1
+
+    branches = _split_top_level_branches(src[start:end])
+    if len(branches) != 2 or branches[1][0] != "else":
+        raise SystemExit("the indentation-guide chain is no longer one if/else - this "
+                         "extraction models exactly that shape")
+
+    def mode_of(block_text):
+        m = re.search(r"SCI_SETINDENTATIONGUIDES\s*,\s*SC_IV_(\w+)", block_text)
+        if m is None:
+            raise SystemExit("an indentation-guide branch sets no SC_IV_ mode")
+        return m.group(1).lower()
+
+    special = mode_of(branches[0][2])
+    default = mode_of(branches[1][2])
+    tokens = set(re.findall(r'_T\(\s*"([^"]*)"\s*\)', branches[0][1]))
+
+    out = {}
+    for lang_id, entry in dispatch.items():
+        out[lang_id] = special if entry.get("token") in tokens else default
+    return out, default
+
+
 def parse_fold_markers(dispatch):
     """What a folded block shows when it is collapsed: " { ... } ", " < ... > " or " --- ".
 
@@ -538,8 +584,15 @@ def dispatch_fields_for(lang_id):
     mapping, _ = cached_dispatch()
     entry = mapping.get(lang_id, {"extensions": "", "lexer": "", "styleTable": ""})
     fold, default_marker = cached_fold_markers()
+    guides, default_guide = cached_indent_guides()
     return {"extensions": entry["extensions"], "lexer": entry["lexer"],
             "styleTable": entry.get("styleTable") or "",
+            # Both defaults come from the C++ rather than from a literal here.
+            # Neither fallback is reachable while every language has an
+            # initialiser - which check_lexer_call_sites enforces - but a literal
+            # that duplicates a parsed value is the kind of thing that is right
+            # until the day it silently is not.
+            "indentGuides": guides.get(lang_id, default_guide),
             # Emitted for every language, default included: a frontend should not
             # have to know a hidden default to render a folded block.
             "foldMarker": fold.get(lang_id, default_marker)}
@@ -553,6 +606,16 @@ def cached_fold_markers():
         mapping, _ = cached_dispatch()
         _FOLD_CACHE.append(parse_fold_markers(mapping))
     return _FOLD_CACHE[0]
+
+
+_GUIDES_CACHE = []
+
+
+def cached_indent_guides():
+    if not _GUIDES_CACHE:
+        mapping, _ = cached_dispatch()
+        _GUIDES_CACHE.append(parse_indent_guides(mapping))
+    return _GUIDES_CACHE[0]
 
 
 _ATTRIBUTE_CACHE = []
@@ -653,7 +716,8 @@ def check_lexer_dispatch(languages_doc):
         for lang in sorted(mapping):
             want = dispatch_fields_for(lang)
             got = by_id.get(lang, {})
-            for field in ("extensions", "lexer", "styleTable", "foldMarker"):
+            for field in ("extensions", "lexer", "styleTable", "foldMarker",
+                          "indentGuides"):
                 if got.get(field) != want[field]:
                     problems.append("%s.%s: JSON says %r, the C++ says %r"
                                     % (lang, field, got.get(field), want[field]))
@@ -928,7 +992,8 @@ def json_only_checks(languages_doc, themes):
         if not entry.get("id"):
             problems.append("%s: language entry with empty or missing id" % lang_id)
         for field in ("name", "extension", "extensions", "lexer", "styleTable",
-                      "foldMarker", "commentLine", "commentStart", "commentEnd", "keywords"):
+                      "foldMarker", "indentGuides", "commentLine", "commentStart",
+                      "commentEnd", "keywords"):
             if field not in entry:
                 problems.append("%s: missing field %r" % (lang_id, field))
                 continue
