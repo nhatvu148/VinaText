@@ -162,7 +162,10 @@ jobs:
           # replace loop that does not advance past a zero-width match spins
           # forever. Without this the job burns its whole timeout and prints
           # nothing useful. perl rather than timeout(1), which macOS lacks.
-          perl -e 'alarm 300; exec @ARGV' -- \
+          # `or die`, because a bare exec that FAILS falls through and perl
+          # exits 0 - so a missing or unbuildable binary would report success
+          # under set -e without ever running a check.
+          perl -e 'alarm 300; exec @ARGV or die "exec failed: $!"' -- \
           ./qtbuild/ui-qt/vinatext-qt --selftest \
             core/LanguageData.cpp tools/extract_language_data.py \
             qtbuild/fixtures/crlf-bom.cpp qtbuild/fixtures/utf16.py \
@@ -192,7 +195,10 @@ jobs:
           QT_QPA_PLATFORM: offscreen
         run: |
           set -uo pipefail
-          run_capped() { perl -e 'alarm 30; exec @ARGV' -- "$@"; echo $?; }
+          # Same `or die` as above. Here a swallowed exec would print 0 and
+          # fail the assertion below rather than pass it, but it would fail
+          # saying "exit=0" instead of naming the real problem.
+          run_capped() { perl -e 'alarm 30; exec @ARGV or die "exec failed: $!"' -- "$@"; echo $?; }
           a=$(run_capped ./qtbuild/ui-qt/vinatext-qt --data /nonexistent \
                 --selftest core/LanguageData.cpp | tail -1)
           b=$(run_capped ./qtbuild/ui-qt/vinatext-qt --data /nonexistent \
