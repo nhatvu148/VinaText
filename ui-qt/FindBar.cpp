@@ -39,6 +39,16 @@ CFindBar::CFindBar(QWidget* pParent)
 
 	m_pStatus = new QLabel(this);
 
+	// A visible way into replace mode that needs no keyboard at all. Added
+	// after the Replace shortcut turned out to be unreachable on macOS: a
+	// feature whose only entry point is one key combination is one platform
+	// quirk away from not existing.
+	m_pToggleReplace = new QToolButton(this);
+	m_pToggleReplace->setText(QStringLiteral("\u25B8"));      // right-pointing triangle
+	m_pToggleReplace->setToolTip(tr("Show replace"));
+	m_pToggleReplace->setCheckable(true);
+	m_pToggleReplace->setAutoRaise(true);
+
 	QToolButton* pClose = new QToolButton(this);
 	pClose->setText(QStringLiteral("✕"));
 	pClose->setToolTip(tr("Close (Esc)"));
@@ -46,6 +56,7 @@ CFindBar::CFindBar(QWidget* pParent)
 	QHBoxLayout* pLayout = new QHBoxLayout();
 	pLayout->setContentsMargins(0, 0, 0, 0);
 	pLayout->setSpacing(4);
+	pLayout->addWidget(m_pToggleReplace);
 	pLayout->addWidget(m_pPattern, 1);
 	pLayout->addWidget(pPrevious);
 	pLayout->addWidget(pNext);
@@ -93,6 +104,12 @@ CFindBar::CFindBar(QWidget* pParent)
 	// field finding. Anything else would make the two fields behave differently
 	// for the same key.
 	connect(m_pReplacement, &QLineEdit::returnPressed, this, &CFindBar::ReplaceRequested);
+	connect(m_pToggleReplace, &QToolButton::toggled, this, [this](bool bOn)
+	{
+		m_pReplaceRow->setVisible(bOn);
+		m_pToggleReplace->setText(bOn ? QStringLiteral("\u25BE") : QStringLiteral("\u25B8"));
+		m_pToggleReplace->setToolTip(bOn ? tr("Hide replace") : tr("Show replace"));
+	});
 
 	connect(pNext, &QToolButton::clicked, this, [this] { emit FindRequested(false); });
 	connect(pPrevious, &QToolButton::clicked, this, [this] { emit FindRequested(true); });
@@ -112,6 +129,18 @@ CFindBar::CFindBar(QWidget* pParent)
 	QShortcut* pEscape = new QShortcut(QKeySequence(Qt::Key_Escape), this);
 	pEscape->setContext(Qt::WidgetWithChildrenShortcut);
 	connect(pEscape, &QShortcut::activated, this, &CFindBar::CloseRequested);
+}
+
+void CFindBar::SetReplaceVisible(bool bVisible)
+{
+	// Through the button, which owns the row visibility - see its toggled
+	// handler. Setting the row directly would leave the button out of step.
+	m_pToggleReplace->setChecked(bVisible);
+}
+
+bool CFindBar::IsReplaceVisible() const
+{
+	return !m_pReplaceRow->isHidden();
 }
 
 QString CFindBar::GetReplacement() const
@@ -145,6 +174,8 @@ void CFindBar::Activate(const QString& strInitial, bool bReplace)
 	{
 		m_pPattern->setText(strInitial);
 	}
+	// Through the button, so its checked state and the row never disagree.
+	m_pToggleReplace->setChecked(bReplace);
 	m_pReplaceRow->setVisible(bReplace);
 	show();
 	// Focus stays on the PATTERN even in replace mode: you cannot replace
