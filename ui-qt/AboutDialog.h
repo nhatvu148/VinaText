@@ -44,6 +44,16 @@ namespace About
 	// The whole attribution block, as plain text. The self-test asserts against
 	// this rather than scraping a widget.
 	QString AttributionText();
+
+	// The same block with the corresponding-source URL as a real anchor, which
+	// is what the dialog shows. D3's wording is "offer a LINK to that Qt
+	// version's corresponding source", and selectable text is a weaker reading
+	// of that than a link the user can follow - especially with the home page
+	// clickable two lines above it.
+	//
+	// Derived from AttributionText() by escaping and substitution rather than
+	// assembled separately, so the two cannot drift apart in content.
+	QString AttributionHtml();
 }
 
 class CAboutDialog final : public QDialog

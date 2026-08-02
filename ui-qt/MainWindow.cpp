@@ -28,6 +28,7 @@
 #include <QMessageBox>
 #include <QSettings>
 #include <QPair>
+#include <QRegularExpression>
 #include <QStringList>
 #include <QShortcut>
 #include <QStatusBar>
@@ -1525,6 +1526,20 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 				.arg(strUrl));
 		Require(strAttribution.contains(strUrl),
 			QStringLiteral("attribution: the source URL is actually offered"));
+
+		// And offered as a LINK, which is D3's actual wording. The dialog shows
+		// the HTML form; without this check a future edit could quietly drop the
+		// anchor and leave only selectable text, which is the weaker reading.
+		const QString strHtml = About::AttributionHtml();
+		Require(strHtml.contains(QStringLiteral("<a href=\"%1\">").arg(strUrl)),
+			QStringLiteral("attribution: the source URL is an anchor, not just text"));
+		// The two forms carry the same content - the HTML is derived from the
+		// text, and this is what stops them drifting if that ever stops being so.
+		QString strStripped = strHtml;
+		strStripped.replace(QStringLiteral("<br>"), QStringLiteral("\n"));
+		strStripped.remove(QRegularExpression(QStringLiteral("</?a[^>]*>")));
+		Require(strStripped == strAttribution.toHtmlEscaped(),
+			QStringLiteral("attribution: the HTML and plain forms say the same thing"));
 
 		// The vendored components. These shipped as "()" for one build because
 		// SCINTILLA_VERSION was set in a sibling CMake directory and arrived

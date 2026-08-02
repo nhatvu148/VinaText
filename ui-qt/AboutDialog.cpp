@@ -77,6 +77,25 @@ namespace About
 				QStringLiteral(VINATEXT_SCINTILLA_VERSION),
 				QStringLiteral(VINATEXT_LEXILLA_VERSION));
 	}
+
+	QString AttributionHtml()
+	{
+		// Escape FIRST, then substitute the anchor, then break the lines. Doing
+		// it in that order means no part of the attribution can be interpreted
+		// as markup - the licence paths and version strings are data.
+		//
+		// UNTESTED AND KNOWN TO BE: no current input contains '<', '>' or '&',
+		// so toHtmlEscaped() is a no-op and removing it fails nothing. Verified
+		// by mutation. It stays because the version strings arrive from CMake
+		// and the URL from whatever Qt reports, neither of which this file
+		// controls - but nobody should mistake it for a covered property.
+		QString strHtml = AttributionText().toHtmlEscaped();
+
+		const QString strUrl = QtSourceUrl().toHtmlEscaped();
+		strHtml.replace(strUrl, QStringLiteral("<a href=\"%1\">%1</a>").arg(strUrl));
+		strHtml.replace(QLatin1Char('\n'), QStringLiteral("<br>"));
+		return strHtml;
+	}
 }
 
 CAboutDialog::CAboutDialog(QWidget* pParent)
@@ -114,12 +133,14 @@ CAboutDialog::CAboutDialog(QWidget* pParent)
 
 	pLayout->addSpacing(8);
 
-	// The attribution. setTextInteractionFlags rather than a plain label so the
-	// URL can be selected and copied - "offer a link to the corresponding
-	// source" is not discharged by text a user cannot get at.
-	QLabel* pAttribution = new QLabel(About::AttributionText(), this);
-	pAttribution->setTextInteractionFlags(Qt::TextSelectableByMouse
-		| Qt::TextSelectableByKeyboard);
+	// The attribution, with the corresponding-source URL as a real link.
+	// TextBrowserInteraction is selection AND link following: the URL should be
+	// both copyable and clickable, since either is a legitimate way for someone
+	// to take up the offer.
+	QLabel* pAttribution = new QLabel(About::AttributionHtml(), this);
+	pAttribution->setTextFormat(Qt::RichText);
+	pAttribution->setTextInteractionFlags(Qt::TextBrowserInteraction);
+	pAttribution->setOpenExternalLinks(true);
 	pAttribution->setWordWrap(true);
 	pLayout->addWidget(pAttribution);
 
