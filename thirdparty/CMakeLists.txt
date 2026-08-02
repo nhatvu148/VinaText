@@ -27,8 +27,9 @@
 set(SCINTILLA_VERSION 5.6.4)
 set(LEXILLA_VERSION   5.5.1)
 
-# PARENT_SCOPE because ui-qt/ is a SIBLING subdirectory and would otherwise see
-# these as empty. It did: the About box's attribution compiled with
+# PARENT_SCOPE because this directory is add_subdirectory'd BY ui-qt
+# (ui-qt/CMakeLists.txt:16), so a plain set() is local to here and the parent
+# that consumes it never sees the value. It did not: the attribution compiled with
 # VINATEXT_SCINTILLA_VERSION="" and would have shipped "Uses Scintilla and
 # Lexilla ()" - a licence attribution naming no version, which is the one thing
 # D3 asks it to state. Caught by grepping build.ninja for the define rather than

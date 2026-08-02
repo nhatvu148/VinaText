@@ -60,11 +60,13 @@ protected:
 	void closeEvent(QCloseEvent* pEvent) override;
 
 private:
+	// The About box, which carries D3's LGPLv3 attribution.
+	void OnAbout();
+
 	// Dock geometry, so the panes come back where they were left. QSettings and
 	// not AppSettings: the MFC persists docking through CDockingManager into the
 	// registry, which has no portable counterpart and is not a file this port
 	// could read anyway. Deliberate divergence in mechanism, same behaviour.
-	void OnAbout();
 	void SaveDockState();
 	void RestoreDockState();
 

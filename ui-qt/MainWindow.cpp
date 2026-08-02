@@ -1559,8 +1559,15 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 		{
 			Require(strAttribution.contains(strFile),
 				QStringLiteral("attribution: references %1").arg(strFile));
-			Require(QFile::exists(QStringLiteral("license/") + strFile),
-				QStringLiteral("attribution: license/%1 exists").arg(strFile));
+			// From the build, not the working directory. A relative path made
+			// --selftest fail with "license file missing" for anyone running
+			// the binary from qtbuild/ui-qt/ - a confusing way to report that
+			// you are standing in the wrong place. Same convention as
+			// VINATEXT_DATA_DIR.
+			const QString strPath = QStringLiteral(VINATEXT_LICENSE_DIR)
+				+ QLatin1Char('/') + strFile;
+			Require(QFile::exists(strPath),
+				QStringLiteral("attribution: %1 exists").arg(strPath));
 		}
 	}
 
