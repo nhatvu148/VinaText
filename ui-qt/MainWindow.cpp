@@ -10,6 +10,7 @@
 
 #include "EditorWidget.h"
 #include "FindBar.h"
+#include "AboutDialog.h"
 #include "MessagePane.h"
 
 #include <Scintilla.h>
@@ -27,6 +28,7 @@
 #include <QMessageBox>
 #include <QSettings>
 #include <QPair>
+#include <QRegularExpression>
 #include <QStringList>
 #include <QShortcut>
 #include <QStatusBar>
@@ -150,6 +152,18 @@ void CMainWindow::BuildMenus()
 		OnToggleLongLineMarker(bOn);
 	});
 	pEdge->setCheckable(true);
+
+	// Help. The About box is not decoration here - D3 requires the LGPLv3
+	// attribution and the corresponding-source offer to be reachable from the
+	// running application, so this menu is part of shipping, not of polish.
+	QMenu* pHelp = menuBar()->addMenu(tr("&Help"));
+	pHelp->addAction(tr("&About VinaText"), this, &CMainWindow::OnAbout);
+}
+
+void CMainWindow::OnAbout()
+{
+	CAboutDialog dialog(this);
+	dialog.exec();
 }
 
 void CMainWindow::OnToggleWordWrap(bool bEnable)
@@ -1472,6 +1486,88 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 				Require(!pPane->isHidden(),
 					QStringLiteral("pane: a layout saved while visible restores visible"));
 			}
+		}
+	}
+
+	//----------------------------------------------------------------------
+	// The LGPLv3 attribution. This is a COMPLIANCE check, not a feature check:
+	// D3 requires the running application to state the exact Qt version it uses
+	// and to offer that version's corresponding source, and under D10 this port
+	// ships binaries to macOS and Linux. Asserted on the strings rather than the
+	// dialog, because a modal box in a headless run has nobody to dismiss it.
+	//----------------------------------------------------------------------
+	{
+		const QString strAttribution = About::AttributionText();
+
+		Require(strAttribution.contains(QStringLiteral("LGPL v3")),
+			QStringLiteral("attribution: names the LGPL v3"));
+
+		// The exact version, and it must be the version actually LINKED - the
+		// point of dynamic linking is that the user may swap it.
+		const QString strQt = About::RuntimeQtVersion();
+		Require(!strQt.isEmpty() && strQt.count(QLatin1Char('.')) >= 2,
+			QStringLiteral("attribution: a full Qt version, got '%1'").arg(strQt));
+		// In its STATEMENT, not merely somewhere in the blob. Checking
+		// contains(strQt) alone passes on a wrong version, because the
+		// corresponding-source URL further down carries the right one - the
+		// assertion would be satisfied by a line other than the one it is about.
+		// Found by mutation: hard-coding "Uses Qt 6.0.0" left it green.
+		Require(strAttribution.contains(
+				QStringLiteral("Uses Qt %1 under").arg(strQt)),
+			QStringLiteral("attribution: the LGPL statement names the Qt actually "
+				"linked (%1)").arg(strQt));
+
+		// The corresponding-source offer, and it must point at THIS version.
+		// A bare archive root would satisfy "contains a URL" and discharge
+		// nothing.
+		const QString strUrl = About::QtSourceUrl();
+		Require(strUrl.contains(strQt),
+			QStringLiteral("attribution: the source URL names this Qt version, got '%1'")
+				.arg(strUrl));
+		Require(strAttribution.contains(strUrl),
+			QStringLiteral("attribution: the source URL is actually offered"));
+
+		// And offered as a LINK, which is D3's actual wording. The dialog shows
+		// the HTML form; without this check a future edit could quietly drop the
+		// anchor and leave only selectable text, which is the weaker reading.
+		const QString strHtml = About::AttributionHtml();
+		Require(strHtml.contains(QStringLiteral("<a href=\"%1\">").arg(strUrl)),
+			QStringLiteral("attribution: the source URL is an anchor, not just text"));
+		// The two forms carry the same content - the HTML is derived from the
+		// text, and this is what stops them drifting if that ever stops being so.
+		QString strStripped = strHtml;
+		strStripped.replace(QStringLiteral("<br>"), QStringLiteral("\n"));
+		strStripped.remove(QRegularExpression(QStringLiteral("</?a[^>]*>")));
+		Require(strStripped == strAttribution.toHtmlEscaped(),
+			QStringLiteral("attribution: the HTML and plain forms say the same thing"));
+
+		// The vendored components. These shipped as "()" for one build because
+		// SCINTILLA_VERSION was set in a sibling CMake directory and arrived
+		// empty - a licence attribution naming no version, which the compiler
+		// was entirely happy with.
+		Require(!strAttribution.contains(QStringLiteral("unknown"))
+			&& !strAttribution.contains(QStringLiteral("Scintilla  ")),
+			QStringLiteral("attribution: no placeholder or empty versions"));
+		Require(strAttribution.contains(QStringLiteral("Scintilla 5."))
+			&& strAttribution.contains(QStringLiteral("Lexilla 5.")),
+			QStringLiteral("attribution: states the Scintilla and Lexilla versions"));
+
+		// And the licence files it points at have to exist, or the offer is
+		// a dangling reference.
+		for (const QString& strFile : { QStringLiteral("License-Qt.txt"),
+				QStringLiteral("License-Scintilla.txt") })
+		{
+			Require(strAttribution.contains(strFile),
+				QStringLiteral("attribution: references %1").arg(strFile));
+			// From the build, not the working directory. A relative path made
+			// --selftest fail with "license file missing" for anyone running
+			// the binary from qtbuild/ui-qt/ - a confusing way to report that
+			// you are standing in the wrong place. Same convention as
+			// VINATEXT_DATA_DIR.
+			const QString strPath = QStringLiteral(VINATEXT_LICENSE_DIR)
+				+ QLatin1Char('/') + strFile;
+			Require(QFile::exists(strPath),
+				QStringLiteral("attribution: %1 exists").arg(strPath));
 		}
 	}
 
