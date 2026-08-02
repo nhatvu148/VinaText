@@ -63,6 +63,79 @@ namespace Core
 		return LoadFromString(strContent, strError);
 	}
 
+	bool CAppSettings::SaveToFile(const std::string& strPath, std::string& strError) const
+	{
+		// Start from whatever is already there. Everything this class does not
+		// understand is carried through untouched - see the header for why that
+		// is not merely polite.
+		picojson::object outer;
+		picojson::object settings;
+
+		std::ifstream in(strPath.c_str(), std::ios::binary);
+		if (in.good())
+		{
+			std::string strExisting((std::istreambuf_iterator<char>(in)),
+				std::istreambuf_iterator<char>());
+			in.close();
+
+			picojson::value root;
+			const std::string strParseError = picojson::parse(root, strExisting);
+			if (!strParseError.empty())
+			{
+				// Refuse rather than overwrite. A file that exists and cannot be
+				// parsed is far more likely to be someone's settings plus a
+				// typo than something safe to replace with ten keys.
+				strError = "refusing to overwrite an unparseable settings file: "
+					+ strParseError;
+				return false;
+			}
+			if (root.is<picojson::object>())
+			{
+				outer = root.get<picojson::object>();
+				const picojson::object::const_iterator it = outer.find(RootName());
+				if (it != outer.end() && it->second.is<picojson::object>())
+				{
+					settings = it->second.get<picojson::object>();
+				}
+			}
+		}
+
+		settings["EnableUrlHighlight"] = picojson::value(m_bEnableUrlHighlight);
+		settings["DrawFoldingLineUnderLineStyle"] =
+			picojson::value(m_bDrawFoldingLineUnderLineStyle);
+		settings["DrawCaretLineFrame"] = picojson::value(m_bDrawCaretLineFrame);
+		settings["EnableHightLightFolder"] = picojson::value(m_bEnableHightLightFolder);
+		settings["EnableAutoComplete"] = picojson::value(m_bEnableAutoComplete);
+		settings["AutoCompleteIgnoreNumbers"] =
+			picojson::value(m_bAutoCompleteIgnoreNumbers);
+		settings["AutoCompleteIgnoreCase"] = picojson::value(m_bAutoCompleteIgnoreCase);
+		settings["UseFolderMarginClassic"] = picojson::value(m_bUseFolderMarginClassic);
+		settings["FolderMarginStyle"] =
+			picojson::value(static_cast<double>(m_nFolderMarginStyle));
+		settings["LongLineColumnLimitation"] =
+			picojson::value(static_cast<double>(m_nLongLineMaximum));
+
+		outer[RootName()] = picojson::value(settings);
+
+		std::ofstream out(strPath.c_str(), std::ios::binary | std::ios::trunc);
+		if (!out.good())
+		{
+			strError = "cannot open " + strPath + " for writing";
+			return false;
+		}
+		// serialize(true) is pretty-printed, matching JSonWriter::SaveFile - so
+		// a file written by either frontend looks the same to the other and to
+		// whoever opens it in an editor.
+		out << picojson::value(outer).serialize(true);
+		if (!out.good())
+		{
+			strError = "failed while writing " + strPath;
+			return false;
+		}
+		out.close();
+		return true;
+	}
+
 	bool CAppSettings::LoadFromString(const std::string& strJson, std::string& strError)
 	{
 		picojson::value root;

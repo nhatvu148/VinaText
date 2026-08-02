@@ -8,6 +8,8 @@
 
 #include "EditorData.h"
 
+#include <QDir>
+#include <QFileInfo>
 #include <QStandardPaths>
 
 #include <string>
@@ -68,4 +70,27 @@ void CEditorData::LoadSettings(const QString& strPath, QString& strWarningOut)
 		strWarningOut = QStringLiteral("%1: %2")
 			.arg(strActual, QString::fromStdString(strError));
 	}
+}
+
+bool CEditorData::ApplySettings(const Core::CAppSettings& settings, QString& strErrorOut)
+{
+	m_Settings = settings;
+
+	// The directory may not exist - on macOS and Linux nothing has ever written
+	// there. core/ cannot create it (no platform dependency), so this does.
+	const QFileInfo info(m_strSettingsPath);
+	if (!info.dir().exists() && !QDir().mkpath(info.dir().absolutePath()))
+	{
+		strErrorOut = QStringLiteral("cannot create %1").arg(info.dir().absolutePath());
+		return false;
+	}
+
+	std::string strError;
+	if (!m_Settings.SaveToFile(m_strSettingsPath.toStdString(), strError))
+	{
+		strErrorOut = QStringLiteral("%1: %2")
+			.arg(m_strSettingsPath, QString::fromStdString(strError));
+		return false;
+	}
+	return true;
 }

@@ -33,7 +33,10 @@ class CMainWindow final : public QMainWindow
 	Q_OBJECT
 
 public:
-	explicit CMainWindow(const CEditorData& data, QWidget* pParent = nullptr);
+	// Non-const because Preferences writes settings back through it. The
+	// editor widgets still take it CONST - they read settings and never
+	// change them, and only the window owns that.
+	explicit CMainWindow(CEditorData& data, QWidget* pParent = nullptr);
 
 	// Returns false and reports to the user if the file cannot be read.
 	bool OpenFile(const QString& strPath);
@@ -62,6 +65,9 @@ protected:
 private:
 	// The About box, which carries D3's LGPLv3 attribution.
 	void OnAbout();
+	void OnPreferences();
+	// Re-applies the current settings to every open editor.
+	void ReapplySettings();
 
 	// Dock geometry, so the panes come back where they were left. QSettings and
 	// not AppSettings: the MFC persists docking through CDockingManager into the
@@ -103,7 +109,7 @@ private:
 
 	bool SaveEditor(CEditorWidget* pEditor, const QString& strPath);
 
-	const CEditorData&	m_Data;
+	CEditorData&		m_Data;
 	CMessagePane*			m_pMessagePane = nullptr;
 	QTabWidget*			m_pTabs = nullptr;
 	CFindBar*			m_pFindBar = nullptr;
