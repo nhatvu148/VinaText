@@ -121,8 +121,22 @@ void CMainWindow::BuildMenus()
 	pSearch->addAction(tr("Find &Previous"), QKeySequence::FindPrevious,
 		this, [this] { OnFind(true); });
 	pSearch->addSeparator();
-	pSearch->addAction(tr("&Replace..."), QKeySequence::Replace,
-		this, &CMainWindow::OnShowReplace);
+	QAction* pReplace = pSearch->addAction(tr("&Replace..."), this,
+		&CMainWindow::OnShowReplace);
+#ifdef Q_OS_MACOS
+	// NOT QKeySequence::Replace on macOS. Qt resolves it to Cmd+H, which the
+	// system reserves for Hide Application - so the key never reaches the app
+	// and the menu item is unreachable by keyboard. Reported from a real macOS
+	// run: "I tried Ctrl+H and nothing happens".
+	//
+	// Cmd+Alt+F is what Xcode, VS Code, Sublime Text and TextEdit all use, so
+	// it is the binding a macOS user will already have in their fingers.
+	pReplace->setShortcut(QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_F));
+#else
+	// Ctrl+H everywhere else, which is the convention there and does not
+	// collide.
+	pReplace->setShortcut(QKeySequence::Replace);
+#endif
 
 	// A theme switch, not a settings UI: two radio items, no page, nothing stored.
 	// Persisting the choice is AppSettings, the last file in the Phase 2 backlog
@@ -1733,6 +1747,72 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 			pScratch->Send(SCI_SETSAVEPOINT);
 			OnCloseTab(m_pTabs->indexOf(pScratch));
 		}
+	}
+
+	//----------------------------------------------------------------------
+	// Menu shortcuts. Added because Replace shipped bound to a key the
+	// operating system eats: QKeySequence::Replace resolves to Cmd+H on macOS,
+	// which is Hide Application, so the menu item was unreachable by keyboard
+	// on the platform D10 ships to. Nothing failed - the action existed, the
+	// menu showed it, and the key simply never arrived.
+	//----------------------------------------------------------------------
+	{
+		// Sequences the platform claims before an application sees them. Only
+		// macOS is listed because only macOS reserves single-modifier
+		// combinations this way; add to this list, do not replace it.
+		const QList<QKeySequence> reserved = {
+#ifdef Q_OS_MACOS
+			QKeySequence(Qt::CTRL | Qt::Key_H),		// Hide Application
+			QKeySequence(Qt::CTRL | Qt::Key_M),		// Minimise
+			QKeySequence(Qt::CTRL | Qt::Key_Q),		// Quit - ours by convention
+#endif
+		};
+
+		QList<QKeySequence> seen;
+		int nWithShortcut = 0;
+		for (QAction* pAction : menuBar()->findChildren<QAction*>())
+		{
+			const QKeySequence key = pAction->shortcut();
+			if (key.isEmpty())
+			{
+				continue;
+			}
+			++nWithShortcut;
+
+			// Quit is legitimately Cmd+Q, so it is exempt from its own entry.
+			const bool bIsQuit = pAction->text().contains(QStringLiteral("Exit"))
+				|| pAction->menuRole() == QAction::QuitRole;
+			for (const QKeySequence& taken : reserved)
+			{
+				if (key == taken && !bIsQuit)
+				{
+					Require(false, QStringLiteral("shortcut: '%1' is bound to %2, which "
+						"the platform reserves - the key never reaches the app")
+						.arg(pAction->text(), key.toString(QKeySequence::NativeText)));
+				}
+			}
+
+			// And no two menu items may share one sequence, which silently makes
+			// one of them dead.
+			Require(!seen.contains(key),
+				QStringLiteral("shortcut: %1 is bound twice, most recently by '%2'")
+					.arg(key.toString(QKeySequence::NativeText), pAction->text()));
+			seen.append(key);
+		}
+		Require(nWithShortcut >= 8,
+			QStringLiteral("shortcut: found %1 bound actions to check").arg(nWithShortcut));
+
+		// And Replace specifically has one, since that is the regression.
+		QAction* pReplaceAction = nullptr;
+		for (QAction* pAction : menuBar()->findChildren<QAction*>())
+		{
+			if (pAction->text().contains(QStringLiteral("Replace")))
+			{
+				pReplaceAction = pAction;
+			}
+		}
+		Require(pReplaceAction != nullptr && !pReplaceAction->shortcut().isEmpty(),
+			QStringLiteral("shortcut: Replace has one"));
 	}
 
 	Require(nFoldClicksChecked > 0,
