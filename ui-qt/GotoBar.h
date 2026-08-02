@@ -43,16 +43,38 @@ class CGotoBar final : public QWidget
 public:
 	explicit CGotoBar(QWidget* pParent = nullptr);
 
+	// Everything the bar shows that is DERIVED FROM THE DOCUMENT: both range
+	// readouts and the offset field, which opens on the caret. One method
+	// because the rule is one rule - whatever the document fills in has to be
+	// refilled when the document changes - and having it in two places is how
+	// the offset came to go stale on a tab switch.
+	//
+	// The line field is deliberately not touched: nothing ever fills it from the
+	// document, so there is nothing there to go out of date and typing in it
+	// survives a tab switch.
+	void SyncToDocument(int nLineCount, int nLength, int nCaretPosition);
+
 	// Takes focus and selects the line field, so typing replaces what is there.
-	// nLineCount and nLength drive the range readouts, which the MFC refreshes
-	// per document in CGotoDlg::InitGotoRangeByDocument.
 	void Activate(int nLineCount, int nLength, int nCaretPosition);
-	void SetDocumentRange(int nLineCount, int nLength);
 
 	// Empty gives 0, matching what the MFC's _ttoi does with an empty edit - and
 	// CEditorWidget::GotoLine documents why that is not the same as doing nothing.
 	int GetLine() const;
 	int GetOffset() const;
+
+	// What a box's text means as a target line or offset.
+	//
+	// Empty is 0, which reaches the top of the document. A number too large for
+	// an int is INT_MAX rather than 0: QString::toInt OVERFLOWS TO ZERO, so
+	// without this "99999999999" would be indistinguishable from an empty box
+	// and would silently jump to the TOP - the opposite end from the one the
+	// user asked for. INT_MAX lets Scintilla clamp it to the end, which is what
+	// a merely-large-but-representable number already does, so the two agree.
+	//
+	// Public and static so the self-test can assert on it without typing into a
+	// widget, and free of any UI state so there is nothing else it could depend
+	// on.
+	static int ParseTarget(const QString& strText);
 
 	// For the self-test, which cannot read a QLineEdit it did not type into.
 	QString GetLineRangeText() const;

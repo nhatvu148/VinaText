@@ -37,6 +37,8 @@
 #include <QTabWidget>
 #include <QTemporaryDir>
 #include <QVBoxLayout>
+
+#include <limits>
 #include <QWidget>
 
 CMainWindow::CMainWindow(CEditorData& data, QWidget* pParent)
@@ -100,8 +102,16 @@ CMainWindow::CMainWindow(CEditorData& data, QWidget* pParent)
 			// called from OnTcnSelchangeTab (src/SearchAndReplaceDlg.cpp:390).
 			if (CEditorWidget* pEditor = GetCurrentEditor())
 			{
-				m_pGotoBar->SetDocumentRange(pEditor->GetLineCount(),
-					static_cast<int>(pEditor->Send(SCI_GETLENGTH)));
+				// SyncToDocument and not just the ranges. The offset box shows
+				// the caret position, so leaving it holding the previous
+				// document's number makes it a readout that lies - and a byte
+				// offset is meaningless outside the document it was measured in.
+				// Found in review; the MFC has the same staleness, but its field
+				// is refreshed only when the tab is re-opened, so the divergence
+				// is deliberate.
+				m_pGotoBar->SyncToDocument(pEditor->GetLineCount(),
+					static_cast<int>(pEditor->Send(SCI_GETLENGTH)),
+					pEditor->GetCaretPosition());
 			}
 		}
 	});
@@ -155,6 +165,21 @@ void CMainWindow::BuildMenus()
 	pFile->addAction(tr("E&xit"), QKeySequence::Quit, this, &QWidget::close);
 
 	QMenu* pSearch = menuBar()->addMenu(tr("&Search"));
+
+	// The sequence Go to Line claims, decided HERE - before Find Next is bound -
+	// because the two want the same key on some platforms and the resolution has
+	// to be a decision rather than whichever happens to be assigned second.
+	//
+	// Ctrl+G is src/VinaText.rc's own accelerator for ID_OPTIONS_GOTOLINE, and
+	// what Notepad++, Visual Studio, VS Code, Sublime and gedit all use. On macOS
+	// Qt maps Qt::CTRL to Command and Cmd+G is firmly Find Next, so goto takes
+	// Cmd+L there - Xcode's and TextMate's jump-to-line.
+#ifdef Q_OS_MACOS
+	const QKeySequence gotoKey(Qt::CTRL | Qt::Key_L);
+#else
+	const QKeySequence gotoKey(Qt::CTRL | Qt::Key_G);
+#endif
+
 	pSearch->addAction(tr("&Find..."), QKeySequence::Find, this, &CMainWindow::OnShowFind);
 	// setShortcutS, plural, and that is a fix rather than a tidy-up. The
 	// single-sequence overload takes only the FIRST of a standard key's
@@ -167,11 +192,24 @@ void CMainWindow::BuildMenus()
 	// Third instance of the same bug: Replace on Cmd+H (unreachable), Exit on
 	// Qt::Key_Exit (a key no Mac has), and now this. The pattern is that a
 	// shortcut which RESOLVES is not the same as a shortcut that ARRIVES.
+	//
+	// Minus whatever goto has claimed, which is Qt's list filtered rather than
+	// an #ifdef: on Linux and Windows Qt lists Ctrl+G for Find Next as well, and
+	// installing it there would take the key away from Go to Line. Filtering by
+	// gotoKey means the two can never both be assigned it, on any platform,
+	// including ones neither of us has thought about. On macOS gotoKey is Cmd+L,
+	// so removeAll does nothing and Find Next keeps both of its bindings.
 	QAction* pFindNext = pSearch->addAction(tr("Find &Next"), this, [this] { OnFind(false); });
-	pFindNext->setShortcuts(QKeySequence::FindNext);
+	QList<QKeySequence> findNextKeys = QKeySequence::keyBindings(QKeySequence::FindNext);
+	findNextKeys.removeAll(gotoKey);
+	pFindNext->setShortcuts(findNextKeys);
+
 	QAction* pFindPrevious = pSearch->addAction(tr("Find &Previous"),
 		this, [this] { OnFind(true); });
-	pFindPrevious->setShortcuts(QKeySequence::FindPrevious);
+	QList<QKeySequence> findPreviousKeys =
+		QKeySequence::keyBindings(QKeySequence::FindPrevious);
+	findPreviousKeys.removeAll(gotoKey);
+	pFindPrevious->setShortcuts(findPreviousKeys);
 	pSearch->addSeparator();
 	QAction* pReplace = pSearch->addAction(tr("&Replace..."), this,
 		&CMainWindow::OnShowReplace);
@@ -193,22 +231,7 @@ void CMainWindow::BuildMenus()
 	pSearch->addSeparator();
 	QAction* pGoto = pSearch->addAction(tr("&Go to Line..."), this,
 		&CMainWindow::OnShowGoto);
-#ifdef Q_OS_MACOS
-	// NOT Ctrl+G on macOS, even though that is what src/VinaText.rc's accelerator
-	// table binds ID_OPTIONS_GOTOLINE to. Qt maps Qt::CTRL to Command, and
-	// QKeySequence::FindNext is ALREADY Cmd+G there - so this would be the second
-	// action bound to one sequence and whichever lost would silently do nothing.
-	// The self-test's duplicate-shortcut check catches exactly this; it was
-	// written after the Replace/Cmd+H regression and this is the first time it
-	// had something to say.
-	//
-	// Cmd+L is what Xcode and TextMate use for jump-to-line on macOS.
-	pGoto->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_L));
-#else
-	// Ctrl+G, which is the MFC's own accelerator and the convention everywhere
-	// that is not macOS.
-	pGoto->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_G));
-#endif
+	pGoto->setShortcut(gotoKey);
 
 	// The three commands the Goto tab carries that are not prompts. They are
 	// buttons in the MFC because the tab was somewhere to put them, but nothing
@@ -2288,24 +2311,69 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 				QStringLiteral("goto: the offset box opens on the caret position, got %1")
 					.arg(m_pGotoBar->GetOffset()));
 
-			// The readout follows the TAB, not just the first document it saw.
+			// Everything document-derived follows the TAB, not just the first
+			// document the bar saw.
 			const int nScratchTab = m_pTabs->indexOf(pScratch);
 			CEditorWidget* pOther = qobject_cast<CEditorWidget*>(m_pTabs->widget(0));
 			if (pOther != nullptr && nScratchTab != 0)
 			{
-				// Asserted, because two documents of the SAME length would let a
-				// readout that never recalculates pass this.
+				// Both asserted, because two documents with the same length - or
+				// the same caret position - would let a bar that never
+				// recalculates pass the checks below.
+				pOther->Send(SCI_GOTOPOS, 13);
 				Require(pOther->GetLineCount() != pScratch->GetLineCount(),
 					QStringLiteral("goto: the two tabs differ in length (%1 vs %2), so the "
 						"readout check can fail").arg(pOther->GetLineCount())
 						.arg(pScratch->GetLineCount()));
+				Require(pOther->GetCaretPosition() != pScratch->GetCaretPosition(),
+					QStringLiteral("goto: the two tabs differ in caret position (%1 vs %2), "
+						"so the offset check can fail").arg(pOther->GetCaretPosition())
+						.arg(pScratch->GetCaretPosition()));
+
 				m_pTabs->setCurrentIndex(0);
 				Require(m_pGotoBar->GetLineRangeText().contains(
 						QString::number(pOther->GetLineCount())),
 					QStringLiteral("goto: switching tabs updates the readout to %1, got '%2'")
 						.arg(pOther->GetLineCount()).arg(m_pGotoBar->GetLineRangeText()));
+				// The offset field too, not only the labels. It shipped showing
+				// the PREVIOUS document's caret offset - a number with no
+				// meaning in the document now in front of the user. Found in
+				// review.
+				Require(m_pGotoBar->GetOffset() == pOther->GetCaretPosition(),
+					QStringLiteral("goto: switching tabs refreshes the offset box to %1, "
+						"got %2").arg(pOther->GetCaretPosition())
+						.arg(m_pGotoBar->GetOffset()));
 				m_pTabs->setCurrentIndex(nScratchTab);
 			}
+
+			//--------------------------------------------------------------
+			// What a box's text means, including the numbers int cannot hold
+			//--------------------------------------------------------------
+			Require(CGotoBar::ParseTarget(QString()) == 0,
+				QStringLiteral("goto: an empty box is 0, which is the top"));
+			Require(CGotoBar::ParseTarget(QStringLiteral("42")) == 42,
+				QStringLiteral("goto: a number is itself"));
+			// QString::toInt OVERFLOWS TO ZERO, so without ParseTarget these two
+			// would be indistinguishable from an empty box and would jump to the
+			// TOP - the opposite end from the one asked for. Found in review.
+			const int nMax = std::numeric_limits<int>::max();
+			Require(CGotoBar::ParseTarget(QStringLiteral("99999999999")) == nMax,
+				QStringLiteral("goto: a number too big for an int means the end, not 0"));
+			Require(CGotoBar::ParseTarget(QStringLiteral("2147483648")) == nMax,
+				QStringLiteral("goto: and that starts exactly one past INT_MAX"));
+
+			// End to end, which is the half that matters: an overflowing line
+			// number must land where a merely-large one lands.
+			pScratch->GotoLine(CGotoBar::ParseTarget(QStringLiteral("999999")));
+			const int nLargeLine = pScratch->GetCaretLine();
+			pScratch->Send(SCI_GOTOPOS, 0);
+			pScratch->GotoLine(CGotoBar::ParseTarget(QStringLiteral("99999999999")));
+			Require(pScratch->GetCaretLine() == nLargeLine,
+				QStringLiteral("goto: an overflowing line number lands where a large one "
+					"does (line %1, expected %2)")
+					.arg(pScratch->GetCaretLine()).arg(nLargeLine));
+			Require(nLargeLine > 1,
+				QStringLiteral("goto: and that is not line 1, so the check can fail"));
 
 			// End to end through the menu action, as the Replace regression
 			// taught: the shortcut being right is only half of it.
@@ -2443,11 +2511,35 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 					.arg(QLatin1String(entry._Name)));
 			if (pFound != nullptr)
 			{
-				const QList<QKeySequence> expected = QKeySequence::keyBindings(entry._Key);
-				Require(pFound->shortcuts() == expected,
-					QStringLiteral("shortcut: '%1' answers to every binding Qt lists (%2), "
-						"got %3").arg(QLatin1String(entry._Name))
-						.arg(expected.size()).arg(pFound->shortcuts().size()));
+				// The rule is not "every binding is installed" - that was the
+				// first version and Linux failed it, correctly. Qt lists Ctrl+G
+				// for Find Next there, and Go to Line deliberately owns Ctrl+G
+				// on every platform but macOS.
+				//
+				// The real invariant is that no binding Qt lists is left doing
+				// NOTHING: each is either installed on this action or claimed by
+				// another one. That is what the shipped defect violated - Cmd+G
+				// was neither.
+				for (const QKeySequence& key : QKeySequence::keyBindings(entry._Key))
+				{
+					if (pFound->shortcuts().contains(key))
+					{
+						continue;
+					}
+					QString strOwner;
+					for (QAction* pOther : menuBar()->findChildren<QAction*>())
+					{
+						if (pOther != pFound && pOther->shortcuts().contains(key))
+						{
+							strOwner = pOther->text();
+						}
+					}
+					Require(!strOwner.isEmpty(),
+						QStringLiteral("shortcut: Qt lists %1 for '%2', which neither has it "
+							"nor any other action - so the key does nothing")
+							.arg(key.toString(QKeySequence::NativeText),
+								QLatin1String(entry._Name)));
+				}
 			}
 		}
 

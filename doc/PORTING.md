@@ -1950,21 +1950,78 @@ the OS) and Exit on `Qt::Key_Exit` (a key no Mac keyboard has). A shortcut that
 
 **And the check could not have caught it**, because it read `shortcut()` — the
 primary — and never `shortcuts()`. Every secondary binding in the app was
-invisible to the check written to police bindings. Both are fixed here:
-`setShortcuts` on Find Next and Find Previous so their full standard bindings are
-installed, and the check now iterates every sequence an action answers to.
+invisible to the check written to police bindings. Both fixed — `setShortcuts` on
+Find Next and Find Previous, and the check now iterates every sequence an action
+answers to. Only *then* does the original claim become true, demonstrated rather
+than asserted: binding goto to Ctrl+G gives
+`shortcut: ⌘G is bound twice, most recently by '&Go to Line...'`.
 
-Only *then* does the original claim become true, and it is now demonstrated
-rather than asserted — binding goto to Ctrl+G gives:
+**And then CI failed on Linux, with that same new check.** Qt lists Ctrl+G for
+Find Next on Linux and Windows too, so installing every binding took the key away
+from Go to Line — where `src/VinaText.rc`'s accelerator and every editor on those
+platforms puts it. Two corrections followed:
+
+- **Ownership is decided once, before either action is bound.** `gotoKey` is
+  Cmd+L on macOS and Ctrl+G elsewhere, and Find Next's bindings are Qt's list
+  **with `gotoKey` filtered out** rather than an `#ifdef` — so the two cannot
+  both be assigned it on any platform, including ones nobody has thought about.
+  On macOS the filter removes nothing.
+- **The check states the real invariant.** "Every binding is installed" was
+  wrong, and Linux was right to fail it. The rule is that **no binding Qt lists
+  is left doing nothing** — each is either installed on that action or claimed
+  by another. That is precisely what the shipped defect violated: Cmd+G was
+  neither.
+
+**One thing the local sweep cannot cover, stated rather than left looking like
+coverage.** On macOS `gotoKey` is Cmd+L, which is not in Find Next's binding
+list, so the filter is **inert** here and no local mutation of it can change a
+result. It is exercised on Linux. Verified by hand by forcing the non-macOS
+branch locally: with the filter the suite passes; without it the duplicate check
+reports `⌘G is bound twice`.
+
+**It still needs a human to press Cmd+L on macOS** — the harness can prove a key
+is bound and cannot prove it arrives, which is exactly how the first two
+instances got through.
+
+### Two review findings, both real, both about a field that lies
+
+Both premises reproduced, and both were worth fixing for reasons a little
+different from the ones given.
+
+**`QString::toInt` overflows to zero.** Typing `99999999999` — or anything past
+`2147483647` — gave `0`, which this port has deliberately made mean *the top of
+the document*. So a user asking for a line far past the end silently landed at
+the **opposite end**, indistinguishable from an empty box. Measured:
 
 ```
-selftest: FAIL shortcut: ⌘G is bound twice, most recently by '&Go to Line...'
+""            -> 0 (ok=0)
+"999999"      -> 999999 (ok=1)
+"99999999999" -> 0 (ok=0)
+"2147483648"  -> 0 (ok=0)
 ```
 
-`Cmd+L` is used instead, which is Xcode's and TextMate's jump-to-line.
-**It still needs a human to press it on macOS** — the harness can prove a key is
-bound and cannot prove it arrives, which is exactly how the first two instances
-got through.
+The suggested fix was capping the validator. Capping refuses keystrokes
+silently, and would be the second time this port let a widget's range rewrite
+what the user typed. `CGotoBar::ParseTarget` instead returns `INT_MAX` for a
+non-empty run of digits that will not convert, so Scintilla clamps it to the end
+— which is **already** what a merely-large-but-representable number does. The
+two now agree. Empty still means 0, so the `< 0` guard behaviour above is
+untouched.
+
+**The offset box went stale on a tab switch.** Only the labels were refreshed, so
+the field kept showing the *previous* document's caret offset. The MFC has the
+same staleness — `CGotoDlg::ClearAll` is reachable only from
+`CMainFrame::OnCleanUpAllWindows`, not from a document switch — so this is a
+deliberate divergence, and the reason is that this port gave the field a
+**readout** role: it opens on the caret position. A readout showing another
+document's number is a field that lies, and a byte offset means nothing outside
+the document it was measured in.
+
+The fix is a rule rather than a patch. `SyncToDocument` fills **everything
+derived from the document** — both ranges and the offset — and is called from
+both `Activate` and the tab-change handler; having it in two places is how the
+two drifted apart. The line field is deliberately untouched, because nothing ever
+fills it from the document, so typing in it survives a tab switch.
 
 ### The harness broke again, in a new way
 
@@ -2011,11 +2068,12 @@ current document's line count and follows a tab switch; the offset box opens on
 the caret; the menu action opens the bar; the close path hides it.
 
 **14 mutations, 14 caught** — including the one that was missed on the first
-sweep, and the two covering the shortcut work above. The centring check mirrors the implementation's own arithmetic, so it is a
+sweep, and the two covering the review fixes. The filter case is not among them,
+for the reason given above. The centring check mirrors the implementation's own arithmetic, so it is a
 change-detector for that formula rather than an independent oracle; the
 asymmetry check is the independent part.
 
-**Self-test: 610 → 650 checks on defaults, 614 → 654 configured.**
+**Self-test: 610 → 656 checks on defaults, 614 → 660 configured.**
 
 Reproduce:
 
@@ -2042,7 +2100,7 @@ awk '/ACCELERATORS/,/^END/' src/VinaText.rc | grep ID_OPTIONS_GOTOLINE
 # 292 lines become 208 across two files
 wc -l src/GotoDlg.cpp ui-qt/GotoBar.cpp ui-qt/GotoBar.h
 
-# 650 checks, up from 610
+# 656 checks, up from 610
 QT_QPA_PLATFORM=offscreen perl -e 'alarm 300; exec @ARGV or die "exec failed: $!"' -- \
   ./qtbuild/ui-qt/vinatext-qt --selftest \
   core/LanguageData.cpp tools/extract_language_data.py \

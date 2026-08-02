@@ -16,6 +16,8 @@
 #include <QShortcut>
 #include <QToolButton>
 
+#include <limits>
+
 namespace
 {
 	// ES_NUMBER, which is what all four of IDD_POS's edits carry: digits only.
@@ -98,23 +100,39 @@ CGotoBar::CGotoBar(QWidget* pParent)
 	pEscape->setContext(Qt::WidgetWithChildrenShortcut);
 	connect(pEscape, &QShortcut::activated, this, &CGotoBar::CloseRequested);
 
-	SetDocumentRange(0, 0);
+	SyncToDocument(0, 0, 0);
 }
 
-void CGotoBar::SetDocumentRange(int nLineCount, int nLength)
+int CGotoBar::ParseTarget(const QString& strText)
+{
+	bool bOk = false;
+	const int nValue = strText.toInt(&bOk);
+	if (bOk)
+	{
+		return nValue;
+	}
+	// Empty is 0 - the top of the document, deliberately. Anything else that
+	// failed to convert is a run of digits too big for an int, which means past
+	// the end rather than before the beginning.
+	return strText.isEmpty() ? 0 : std::numeric_limits<int>::max();
+}
+
+void CGotoBar::SyncToDocument(int nLineCount, int nLength, int nCaretPosition)
 {
 	m_pLineRange->setText(tr("line (1 - %1):").arg(nLineCount));
 	m_pOffset->setPlaceholderText(tr("0 - %1").arg(nLength));
+	// The offset box shows where the caret already is, which is
+	// CGotoDlg::InitGotoInfoFromEditor writing GetCurrentPosition() into
+	// m_EditPosition. It makes the field a readout of the current position as
+	// well as an input, which is most of what anyone opens it for - and is
+	// exactly why it cannot be left showing another document's number. A byte
+	// offset means nothing outside the document it was measured in.
+	m_pOffset->setText(QString::number(nCaretPosition));
 }
 
 void CGotoBar::Activate(int nLineCount, int nLength, int nCaretPosition)
 {
-	SetDocumentRange(nLineCount, nLength);
-	// The offset box opens on where the caret already is, which is
-	// CGotoDlg::InitGotoInfoFromEditor writing GetCurrentPosition() into
-	// m_EditPosition. It makes the field a readout of the current position as
-	// well as an input, which is most of what anyone opens it for.
-	m_pOffset->setText(QString::number(nCaretPosition));
+	SyncToDocument(nLineCount, nLength, nCaretPosition);
 	show();
 	// Focus on the LINE field, matching InitGotoInfoFromEditor's closing
 	// GetDlgItem(IDC_LINE)->SetFocus(). Going to a line is the common case; the
@@ -125,12 +143,12 @@ void CGotoBar::Activate(int nLineCount, int nLength, int nCaretPosition)
 
 int CGotoBar::GetLine() const
 {
-	return m_pLine->text().toInt();
+	return ParseTarget(m_pLine->text());
 }
 
 int CGotoBar::GetOffset() const
 {
-	return m_pOffset->text().toInt();
+	return ParseTarget(m_pOffset->text());
 }
 
 QString CGotoBar::GetLineRangeText() const
