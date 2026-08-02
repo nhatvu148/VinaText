@@ -2059,6 +2059,29 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 				QStringLiteral("preferences: opening and closing changes nothing"));
 		}
 
+		// Values OUTSIDE what the widgets can show must survive untouched. A
+		// spin box range and a combo's item count are guides for new input, not
+		// a licence to rewrite existing data - and the shared settings file may
+		// hold anything the MFC put there.
+		//
+		// The combo case is the dangerous one: an out-of-range index leaves it
+		// at -1, and writing -1 back would break the WINDOWS build, whose
+		// four-way FOLDER_MARGIN_STYPE chain then matches nothing and defines
+		// no fold markers at all.
+		{
+			Core::CAppSettings odd = before;
+			odd.SetLongLineColumnLimit(2000);		// beyond the spin box maximum
+			odd.SetFolderMarginStyle(7);			// beyond the combo's four items
+			CPreferencesDialog dialog(odd, this);
+			const Core::CAppSettings out = dialog.GetSettings();
+			Require(out.LongLineColumnLimit() == 2000,
+				QStringLiteral("preferences: an out-of-range column survives OK, got %1")
+					.arg(out.LongLineColumnLimit()));
+			Require(out.FolderMarginStyle() == 7,
+				QStringLiteral("preferences: an unknown margin style survives OK, got %1")
+					.arg(out.FolderMarginStyle()));
+		}
+
 		// An applied change must reach an open document, not merely the file.
 		CEditorWidget* pEditor = GetCurrentEditor();
 		if (pEditor != nullptr)

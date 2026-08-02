@@ -8,6 +8,8 @@
 
 #include "PreferencesDialog.h"
 
+#include <algorithm>
+
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDialogButtonBox>
@@ -32,10 +34,14 @@ CPreferencesDialog::CPreferencesDialog(const Core::CAppSettings& current, QWidge
 	m_pUrlHighlight = new QCheckBox(tr("Underline URLs"), pEditor);
 	m_pCaretLineFrame = new QCheckBox(tr("Frame the caret line"), pEditor);
 	m_pLongLine = new QSpinBox(pEditor);
-	// 1..512 rather than unbounded: a column of 0 turns the marker into a line
-	// down the left edge and a very large one puts it where nobody will see it,
-	// and neither is a thing a user means to ask for.
-	m_pLongLine->setRange(1, 512);
+	// 1..512 normally - a column of 0 puts the marker down the left edge and a
+	// very large one puts it where nobody will see it. But the range is WIDENED
+	// to admit whatever is already stored, because a widget range is a guide
+	// for new input, not a licence to rewrite existing data.
+	//
+	// Without that, a shared settings file holding 2000 was silently truncated
+	// to 512 by opening Preferences and pressing OK without touching anything.
+	m_pLongLine->setRange(1, std::max(512, current.LongLineColumnLimit()));
 	pEditorForm->addRow(m_pUrlHighlight);
 	pEditorForm->addRow(m_pCaretLineFrame);
 	pEditorForm->addRow(tr("Long line marker at column"), m_pLongLine);
@@ -81,7 +87,16 @@ CPreferencesDialog::CPreferencesDialog(const Core::CAppSettings& current, QWidge
 	m_pIgnoreNumbers->setChecked(current.AutoCompleteIgnoreNumbers());
 	m_pIgnoreCase->setEnabled(current.EnableAutoComplete());
 	m_pIgnoreNumbers->setEnabled(current.EnableAutoComplete());
-	m_pMarginStyle->setCurrentIndex(current.FolderMarginStyle());
+	// An out-of-range stored value leaves the combo at -1, showing blank, and
+	// GetSettings then preserves the original rather than writing -1 back.
+	//
+	// That -1 was the worse half of the same bug: the MFC's four-way if-chain
+	// over FOLDER_MARGIN_STYPE matches nothing at -1, so it would define NO
+	// fold markers - a Qt user pressing OK could break the fold margin in the
+	// Windows build, through a file both share.
+	const int nStoredStyle = current.FolderMarginStyle();
+	m_pMarginStyle->setCurrentIndex(
+		(nStoredStyle >= 0 && nStoredStyle < m_pMarginStyle->count()) ? nStoredStyle : -1);
 	m_pHighlightFolder->setChecked(current.EnableHighlightFolder());
 	m_pFoldingUnderline->setChecked(current.DrawFoldingLineUnderLineStyle());
 	m_pMarginClassic->setChecked(current.UseFolderMarginClassic());
@@ -111,7 +126,10 @@ Core::CAppSettings CPreferencesDialog::GetSettings() const
 	result.SetEnableAutoComplete(m_pAutoComplete->isChecked());
 	result.SetAutoCompleteIgnoreCase(m_pIgnoreCase->isChecked());
 	result.SetAutoCompleteIgnoreNumbers(m_pIgnoreNumbers->isChecked());
-	result.SetFolderMarginStyle(m_pMarginStyle->currentIndex());
+	// Preserve rather than write -1 back. The user has not chosen a style, so
+	// this dialog has nothing to say about it.
+	const int nStyle = m_pMarginStyle->currentIndex();
+	result.SetFolderMarginStyle(nStyle >= 0 ? nStyle : m_Original.FolderMarginStyle());
 	result.SetEnableHighlightFolder(m_pHighlightFolder->isChecked());
 	result.SetDrawFoldingLineUnderLineStyle(m_pFoldingUnderline->isChecked());
 	result.SetUseFolderMarginClassic(m_pMarginClassic->isChecked());
