@@ -1182,6 +1182,149 @@ bool CEditorWidget::FindNext(const QString& strPattern, const SFindOptions& opti
 	return false;
 }
 
+namespace
+{
+	// SCI_REPLACETARGETRE honours \1..\9 back-references and is what the MFC
+	// uses whenever SCFIND_REGEXP is set (src/Editor.cpp:3378, :3524). With a
+	// plain search the two differ: REPLACETARGETRE would treat a backslash in
+	// the replacement as an escape, so a literal replacement must not use it.
+	unsigned int ReplaceMessage(bool bRegex)
+	{
+		return bRegex ? SCI_REPLACETARGETRE : SCI_REPLACETARGET;
+	}
+}
+
+bool CEditorWidget::ReplaceNext(const QString& strPattern, const QString& strReplacement,
+	const SFindOptions& options)
+{
+	if (strPattern.isEmpty())
+	{
+		return false;
+	}
+	const QByteArray pattern = strPattern.toUtf8();
+	const QByteArray replacement = strReplacement.toUtf8();
+	Send(SCI_SETSEARCHFLAGS, static_cast<uptr_t>(ToSearchFlags(options)));
+
+	// From the selection's START, not its end: if the selection IS the match -
+	// which it is after a Find - this replaces the thing the user is looking at
+	// rather than the one after it. CEditorCtrl::ReplaceNext does the same.
+	const sptr_t nFrom = Send(SCI_GETSELECTIONSTART);
+	const sptr_t nDocEnd = Send(SCI_GETLENGTH);
+
+	Send(SCI_SETTARGETSTART, static_cast<uptr_t>(nFrom), 0);
+	Send(SCI_SETTARGETEND, static_cast<uptr_t>(nDocEnd), 0);
+	sptr_t nFound = Send(SCI_SEARCHINTARGET, static_cast<uptr_t>(pattern.size()),
+		reinterpret_cast<sptr_t>(pattern.constData()));
+
+	if (nFound < 0)
+	{
+		// Wrap once, as FindNext does - otherwise Replace stops working as soon
+		// as the caret is past the last match, with no indication why.
+		Send(SCI_SETTARGETSTART, 0, 0);
+		Send(SCI_SETTARGETEND, static_cast<uptr_t>(nFrom), 0);
+		nFound = Send(SCI_SEARCHINTARGET, static_cast<uptr_t>(pattern.size()),
+			reinterpret_cast<sptr_t>(pattern.constData()));
+		if (nFound < 0)
+		{
+			return false;
+		}
+	}
+
+	const sptr_t nReplaced = Send(ReplaceMessage(options._Regex),
+		static_cast<uptr_t>(replacement.size()),
+		reinterpret_cast<sptr_t>(replacement.constData()));
+
+	// Leave the replacement selected. The user's next Replace then acts on the
+	// following match, and the one just made is visible as the thing that
+	// changed.
+	Send(SCI_SETSEL, static_cast<uptr_t>(nFound), nFound + nReplaced);
+	Send(SCI_SCROLLCARET);
+	return true;
+}
+
+int CEditorWidget::ReplaceAll(const QString& strPattern, const QString& strReplacement,
+	const SFindOptions& options)
+{
+	if (strPattern.isEmpty())
+	{
+		return 0;
+	}
+	const QByteArray pattern = strPattern.toUtf8();
+	const QByteArray replacement = strReplacement.toUtf8();
+
+	// Where the user was, so they can be put back. CEditorCtrl::ReplaceAll
+	// restores both the caret line and the first visible line; replacing 200
+	// matches and landing at the bottom of the file is disorienting.
+	const sptr_t nCaretLine = Send(SCI_LINEFROMPOSITION, static_cast<uptr_t>(
+		Send(SCI_GETCURRENTPOS)));
+	const sptr_t nFirstVisible = Send(SCI_GETFIRSTVISIBLELINE);
+
+	Send(SCI_SETSEARCHFLAGS, static_cast<uptr_t>(ToSearchFlags(options)));
+
+	// Group the run so one Ctrl+Z takes back the whole replace-all. This is the
+	// documented way to guarantee it - but be clear about what is actually
+	// demonstrated: removing the pair changes nothing this self-test can see,
+	// because Scintilla already coalesces the four adjacent same-length
+	// replacements the test makes. Verified by A/B - one undo reverts fully
+	// either way, and SCI_CANUNDO is 0 after, both with and without.
+	//
+	// Kept because the coalescing is Scintilla's business and not a contract,
+	// and because explicit grouping is what the documentation asks for. But it
+	// is unproven here, not proven.
+	Send(SCI_BEGINUNDOACTION);
+
+	int nCount = 0;
+	sptr_t nFrom = 0;
+	while (true)
+	{
+		// The document length is re-read every iteration: each replacement
+		// changes it, and a stale end bound would either stop early or search
+		// past the buffer.
+		const sptr_t nDocEnd = Send(SCI_GETLENGTH);
+		if (nFrom > nDocEnd)
+		{
+			break;
+		}
+		Send(SCI_SETTARGETSTART, static_cast<uptr_t>(nFrom), 0);
+		Send(SCI_SETTARGETEND, static_cast<uptr_t>(nDocEnd), 0);
+		const sptr_t nFound = Send(SCI_SEARCHINTARGET, static_cast<uptr_t>(pattern.size()),
+			reinterpret_cast<sptr_t>(pattern.constData()));
+		if (nFound < 0)
+		{
+			break;
+		}
+		const sptr_t nMatchLength = Send(SCI_GETTARGETEND) - Send(SCI_GETTARGETSTART);
+		const sptr_t nReplaced = Send(ReplaceMessage(options._Regex),
+			static_cast<uptr_t>(replacement.size()),
+			reinterpret_cast<sptr_t>(replacement.constData()));
+		++nCount;
+
+		// THE GUARD THE ORIGINAL DOES NOT HAVE. CEditorCtrl::ReplaceAll advances
+		// to nFound + nReplaced. A zero-width match - regex "^", "\b", "x*" -
+		// replaced by the empty string gives nReplaced == 0, so the target start
+		// does not move, the same match is found again, and the loop never ends.
+		// Same shape as the CDiffEngine hang in doc/PORTING.md 6c correction 4:
+		// it allocates nothing, so it pins a core rather than crashing.
+		//
+		// Stepping one past a zero-length replacement cannot change any output
+		// that previously existed, because the states it excludes are exactly
+		// the ones that did not terminate.
+		nFrom = nFound + nReplaced;
+		if (nMatchLength == 0 && nReplaced == 0)
+		{
+			++nFrom;
+		}
+	}
+
+	Send(SCI_ENDUNDOACTION);
+
+	// Back where they were. GOTOLINE first, then the scroll position, because
+	// moving the caret scrolls.
+	Send(SCI_GOTOLINE, static_cast<uptr_t>(nCaretLine));
+	Send(SCI_SETFIRSTVISIBLELINE, static_cast<uptr_t>(nFirstVisible));
+	return nCount;
+}
+
 int CEditorWidget::HighlightMatches(const QString& strPattern, const SFindOptions& options)
 {
 	ClearHighlight();

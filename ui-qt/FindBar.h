@@ -20,6 +20,7 @@
 class QCheckBox;
 class QLabel;
 class QLineEdit;
+class QWidget;
 
 class CFindBar final : public QWidget
 {
@@ -34,16 +35,25 @@ public:
 	bool IsRegex() const;
 
 	// Takes focus and selects whatever is in the box, so typing replaces it.
-	void Activate(const QString& strInitial);
+	// bReplace shows the replace row. The bar is one widget in two modes rather
+	// than two widgets, so the pattern, the options and the match count survive
+	// switching between Find and Replace - which is what a user expects after
+	// typing a pattern and then deciding to replace it.
+	void Activate(const QString& strInitial, bool bReplace = false);
+	QString GetReplacement() const;
 	void ShowStatus(const QString& strText, bool bIsMiss);
 
 signals:
 	void FindRequested(bool bBackward);
+	void ReplaceRequested();
+	void ReplaceAllRequested();
 	void PatternChanged();
 	void CloseRequested();
 
 private:
 	QLineEdit*	m_pPattern = nullptr;
+	QLineEdit*	m_pReplacement = nullptr;
+	QWidget*	m_pReplaceRow = nullptr;
 	QCheckBox*	m_pMatchCase = nullptr;
 	QCheckBox*	m_pWholeWord = nullptr;
 	QCheckBox*	m_pRegex = nullptr;

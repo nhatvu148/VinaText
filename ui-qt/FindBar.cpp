@@ -10,6 +10,7 @@
 
 #include <QCheckBox>
 #include <QHBoxLayout>
+#include <QVBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
 #include <QShortcut>
@@ -42,8 +43,8 @@ CFindBar::CFindBar(QWidget* pParent)
 	pClose->setText(QStringLiteral("✕"));
 	pClose->setToolTip(tr("Close (Esc)"));
 
-	QHBoxLayout* pLayout = new QHBoxLayout(this);
-	pLayout->setContentsMargins(6, 3, 6, 3);
+	QHBoxLayout* pLayout = new QHBoxLayout();
+	pLayout->setContentsMargins(0, 0, 0, 0);
 	pLayout->setSpacing(4);
 	pLayout->addWidget(m_pPattern, 1);
 	pLayout->addWidget(pPrevious);
@@ -54,6 +55,44 @@ CFindBar::CFindBar(QWidget* pParent)
 	pLayout->addWidget(m_pStatus);
 	pLayout->addStretch(0);
 	pLayout->addWidget(pClose);
+
+	// The replace row. Hidden in Find mode, so the bar costs one line until the
+	// user asks for two.
+	m_pReplacement = new QLineEdit(this);
+	m_pReplacement->setPlaceholderText(tr("Replace with"));
+	m_pReplacement->setClearButtonEnabled(true);
+
+	QToolButton* pReplace = new QToolButton(this);
+	pReplace->setText(tr("Replace"));
+	pReplace->setToolTip(tr("Replace this match and move to the next"));
+	QToolButton* pReplaceAll = new QToolButton(this);
+	pReplaceAll->setText(tr("All"));
+	pReplaceAll->setToolTip(tr("Replace every match in this document"));
+
+	QHBoxLayout* pReplaceLayout = new QHBoxLayout();
+	pReplaceLayout->setContentsMargins(0, 0, 0, 0);
+	pReplaceLayout->setSpacing(4);
+	pReplaceLayout->addWidget(m_pReplacement, 1);
+	pReplaceLayout->addWidget(pReplace);
+	pReplaceLayout->addWidget(pReplaceAll);
+	pReplaceLayout->addStretch(0);
+
+	m_pReplaceRow = new QWidget(this);
+	m_pReplaceRow->setLayout(pReplaceLayout);
+	m_pReplaceRow->hide();
+
+	QVBoxLayout* pOuter = new QVBoxLayout(this);
+	pOuter->setContentsMargins(6, 3, 6, 3);
+	pOuter->setSpacing(3);
+	pOuter->addLayout(pLayout);
+	pOuter->addWidget(m_pReplaceRow);
+
+	connect(pReplace, &QToolButton::clicked, this, &CFindBar::ReplaceRequested);
+	connect(pReplaceAll, &QToolButton::clicked, this, &CFindBar::ReplaceAllRequested);
+	// Return in the replacement field replaces, matching Return in the pattern
+	// field finding. Anything else would make the two fields behave differently
+	// for the same key.
+	connect(m_pReplacement, &QLineEdit::returnPressed, this, &CFindBar::ReplaceRequested);
 
 	connect(pNext, &QToolButton::clicked, this, [this] { emit FindRequested(false); });
 	connect(pPrevious, &QToolButton::clicked, this, [this] { emit FindRequested(true); });
@@ -73,6 +112,11 @@ CFindBar::CFindBar(QWidget* pParent)
 	QShortcut* pEscape = new QShortcut(QKeySequence(Qt::Key_Escape), this);
 	pEscape->setContext(Qt::WidgetWithChildrenShortcut);
 	connect(pEscape, &QShortcut::activated, this, &CFindBar::CloseRequested);
+}
+
+QString CFindBar::GetReplacement() const
+{
+	return m_pReplacement->text();
 }
 
 QString CFindBar::GetPattern() const
@@ -95,13 +139,17 @@ bool CFindBar::IsRegex() const
 	return m_pRegex->isChecked();
 }
 
-void CFindBar::Activate(const QString& strInitial)
+void CFindBar::Activate(const QString& strInitial, bool bReplace)
 {
 	if (!strInitial.isEmpty())
 	{
 		m_pPattern->setText(strInitial);
 	}
+	m_pReplaceRow->setVisible(bReplace);
 	show();
+	// Focus stays on the PATTERN even in replace mode: you cannot replace
+	// anything until you have said what to replace, and arriving in the second
+	// field would mean tabbing backwards to start.
 	m_pPattern->setFocus();
 	m_pPattern->selectAll();
 }

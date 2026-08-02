@@ -158,6 +158,11 @@ jobs:
           QT_QPA_PLATFORM: offscreen
         run: |
           set -euo pipefail
+          # Under an alarm, because some defects HANG rather than fail: a
+          # replace loop that does not advance past a zero-width match spins
+          # forever. Without this the job burns its whole timeout and prints
+          # nothing useful. perl rather than timeout(1), which macOS lacks.
+          perl -e 'alarm 300; exec @ARGV' -- \
           ./qtbuild/ui-qt/vinatext-qt --selftest \
             core/LanguageData.cpp tools/extract_language_data.py \
             qtbuild/fixtures/crlf-bom.cpp qtbuild/fixtures/utf16.py \

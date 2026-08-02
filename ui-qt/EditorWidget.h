@@ -72,6 +72,18 @@ public:
 	};
 	bool FindNext(const QString& strPattern, const SFindOptions& options);
 
+	// Replaces the next match at or after the caret and selects the one after
+	// it, wrapping once - the shape of CEditorCtrl::ReplaceNext. Returns false
+	// when the pattern is not in the document.
+	bool ReplaceNext(const QString& strPattern, const QString& strReplacement,
+		const SFindOptions& options);
+
+	// Replaces every match and returns how many. Transcribes
+	// CEditorCtrl::ReplaceAll, including restoring the caret line and the first
+	// visible line afterwards, so the view does not jump.
+	int ReplaceAll(const QString& strPattern, const QString& strReplacement,
+		const SFindOptions& options);
+
 	// Marks every match with an indicator and returns how many there are - what
 	// the find bar counts. Leaves the caret and the selection alone.
 	int HighlightMatches(const QString& strPattern, const SFindOptions& options);
