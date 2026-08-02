@@ -299,7 +299,9 @@ branch. Single consolidated PR to `vinadevs/VinaText` when ready.**
   option(VINATEXT_BUILD_QT "Build the Qt frontend" OFF)
   ```
   This stays useful even on a branch: it keeps the Windows build green on `port/cross-platform` itself,
-  and it makes the eventual Phase 6 merge to `master` a non-event.
+  and it makes the merge to `master` a non-event. ~~at Phase 6~~ — **under D10 that merge
+  happens when the macOS/Linux editor ships, not at cutover, and the flag is exactly why it
+  is safe that early.**
 
 **The cost this incurs, and the two mitigations that make it survivable:**
 
@@ -453,7 +455,7 @@ cancelled.** (Decided 2026-08-02 by the project owner.)
 
 Phase 4 finished and the question "are we on track?" produced a number nobody had
 been reporting: the MFC app has **613 `ON_COMMAND` handlers** and `ui-qt/` has
-**15 menu actions**. Architecturally the port is proven — the strangler held across
+**14 menu actions** (6 File, 3 Search, 5 View). Architecturally the port is proven — the strangler held across
 five consecutive PRs with `src/` untouched, D2's Scintilla binding runs on Linux and
 macOS in CI, `core/` links into both frontends. But the *product* is 613 commands,
 and finishing all of them before shipping anything is how a port dies at 60%.
@@ -470,7 +472,7 @@ Windows exactly as now.
 | `platform/`'s IDE half — `Compiler`, `Debugger`, `SystemInfo`, `HostView`, `HostManager`, `WindowsPrinter` | ~3,500 | Risk 3 already called `Debugger`/`Compiler` "its own project" |
 | viewers and explorer — `FileExplorerCtrl`, `BuildWindow`, `ImageView`, `PdfView`, `MediaView`, `WebView` | ~10,200 | `FileExplorerCtrl` alone is 6,220 |
 | 16 of the 30 dialogs | ~3,170 | path tools, project templates, spell-check, password, gamma |
-| 6 of the 9 dock panes | — | build, path/search results, breakpoints, file explorer |
+| 6 of the 9 dock panes | — | `BuildWindow`, `PathResultWindow`, `SearchResultWindow`, `BreakpointWindow`, `SearchAndReplaceWindow`, `FileExplorerWindow` — named in full, because a category list dropped one |
 
 **Kept — what an editor needs:**
 
@@ -518,6 +520,23 @@ moment you click it. Applied uniformly to 613 commands it never finishes.
   where the two frontends could silently disagree.
 - **Light rigour**: the shallow, visible tail — menu commands, dialog layouts, text
   transforms. A self-test check and a screenshot, not a differential test.
+
+Reproduce D10's numbers:
+
+```bash
+# the command surface, and the gap that prompted this decision
+grep -ohE "ON_COMMAND\(" src/*.cpp | wc -l          # 613. ON_COMMAND_RANGE is
+                                                    # a separate macro and is not
+                                                    # counted; none are commented out
+
+# 14 menu actions - NOT `grep -c addAction`, which returns 15 by counting
+# pThemeGroup->addAction(pAction), a QActionGroup membership for the theme
+# radio pair rather than a menu entry. The obvious command overcounts.
+grep -oE "p(File|Search|View)->addAction\(" ui-qt/MainWindow.cpp | wc -l
+
+ls src/*Dlg.cpp | wc -l                             # 30, not the "~40" above
+ls -d platform/ 2>/dev/null || echo "not started"
+```
 
 ---
 
@@ -669,7 +688,8 @@ Hard rules:
 - VinaText is MIT. Never add a GPL dependency. Never use QScintilla (use upstream
   Scintilla's `qt/ScintillaEditBase`). Never link Qt statically.
 - All port work targets the `port/cross-platform` branch. PRs point at `port/cross-platform`, never `master`.
-  `master` is for shipping MFC releases only, until Phase 6 cutover.
+  `master` is for shipping MFC releases only, until the consolidated PR lands — which
+  under D10 is when the macOS/Linux editor ships, NOT at Phase 6 cutover.
 - The MFC build must keep building and shipping. Do not break it.
 - New Qt code goes in `ui-qt/`, gated behind the `VINATEXT_BUILD_QT` CMake option.
 ```
