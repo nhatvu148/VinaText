@@ -51,6 +51,12 @@ int main(int argc, char* argv[])
 		QStringLiteral("Directory holding languages.json and theme-*.json"),
 		QStringLiteral("dir"), DefaultDataDir());
 	parser.addOption(dataOption);
+
+	QCommandLineOption settingsOption(QStringLiteral("settings"),
+		QStringLiteral("Path to vinatext-app-settings.json (the file the Windows "
+			"build writes). Defaults to the platform's application-data location."),
+		QStringLiteral("file"));
+	parser.addOption(settingsOption);
 	QCommandLineOption selfTestOption(QStringLiteral("selftest"),
 		QStringLiteral("Run the headless checklist over the given files, then exit"));
 	parser.addOption(selfTestOption);
@@ -91,6 +97,8 @@ int main(int argc, char* argv[])
 			settingsDirectory.path());
 	}
 
+	// Settings before the window, because CMainWindow builds editors in its
+	// constructor and they read the settings as they are created.
 	CEditorData data;
 	QString strError;
 	if (!data.Load(parser.value(dataOption), strError))
@@ -107,6 +115,27 @@ int main(int argc, char* argv[])
 					.arg(parser.value(dataOption), strError));
 		}
 		return 2;
+	}
+
+	// A settings file that cannot be parsed is a warning, never a failure: the
+	// user's choices are being ignored, which is worth saying, but it is not a
+	// reason to refuse to edit text. In a headless run the settings path is the
+	// scratch directory set above, so --selftest and --screenshot read the
+	// shipped defaults rather than whatever this machine happens to have.
+	// An EXPLICIT --settings is honoured even headless: naming a file is a
+	// deliberate choice, and being able to run --selftest against a real
+	// settings file is the only way to check the wiring end to end. Without
+	// one, a headless run reads from the scratch directory rather than this
+	// machine's real settings, so CI sees the shipped defaults and cannot be
+	// perturbed by whatever the developer happens to have configured.
+	QString strSettingsWarning;
+	const QString strSettingsPath = parser.isSet(settingsOption)
+		? parser.value(settingsOption)
+		: (bHeadless ? settingsDirectory.path() + QStringLiteral("/none.json") : QString());
+	data.LoadSettings(strSettingsPath, strSettingsWarning);
+	if (!strSettingsWarning.isEmpty())
+	{
+		qWarning("settings: %s", qPrintable(strSettingsWarning));
 	}
 
 	CMainWindow window(data);

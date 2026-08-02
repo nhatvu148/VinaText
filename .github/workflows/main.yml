@@ -172,6 +172,18 @@ jobs:
             qtbuild/fixtures/latin1.md qtbuild/fixtures/no-trailing-newline.py \
             qtbuild/fixtures/tags.xml qtbuild/fixtures/urls.md
 
+          # AGAIN, with every setting flipped away from its default. Several of
+          # the settings paths are simply unreachable at their defaults - the
+          # "URL highlighting stays off" and "autocomplete stays shut" checks
+          # only execute here - so one run cannot show that settings are read.
+          perl -e 'alarm 300; exec @ARGV or die "exec failed: $!"' -- \
+          ./qtbuild/ui-qt/vinatext-qt --settings qtbuild/fixtures/settings.json \
+            --selftest \
+            core/LanguageData.cpp tools/extract_language_data.py \
+            qtbuild/fixtures/crlf-bom.cpp qtbuild/fixtures/utf16.py \
+            qtbuild/fixtures/latin1.md qtbuild/fixtures/no-trailing-newline.py \
+            qtbuild/fixtures/tags.xml qtbuild/fixtures/urls.md
+
       # A port whose whole point is that it now runs somewhere other than Windows
       # should be able to show that without asking anyone to build it.
       - name: Render both themes

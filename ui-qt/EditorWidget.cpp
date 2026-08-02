@@ -43,18 +43,10 @@ namespace
 	const int INDIC_TAGATTR = 11;
 	const int INDIC_URL_HOTSPOT = 14;
 
-	// AppSettingMgr.m_bEnableUrlHighlight, which ships TRUE (src/AppSettings.h:69
-	// and AppSettings.cpp:14). Settings are AppSettings, the last file in the
-	// Phase 2 backlog at 783 call sites, so the shipped default is transcribed
-	// here rather than read - the same as every other setting in this file.
-	const bool ENABLE_URL_HIGHLIGHT = true;
-
-	// The autocomplete settings, all shipped defaults (src/AppSettings.h:81-84
-	// and AppSettings.cpp:24-27). Same reasoning as ENABLE_URL_HIGHLIGHT.
-	const bool ENABLE_AUTOCOMPLETE = true;
-	const bool AUTOCOMPLETE_IGNORE_CASE = true;
-	const bool AUTOCOMPLETE_IGNORE_NUMBERS = true;
-	// src/EditorCommonDef.h:30-31.
+	// src/EditorCommonDef.h:30-31. These two are compile-time constants of the
+	// wire format, not settings - they say how SCI_AUTOCSHOW's list string is
+	// punctuated - so they stay here while the settings above them moved to
+	// core/AppSettings.
 	const char AUTOCOMPLETE_TYPE_SEPARATOR = '?';
 	const char AUTOCOMPLETE_WORD_SEPARATOR = '$';
 	// AppUtils::IsCStringAllDigits, which GetMatchedWordsOnFile gates on.
@@ -127,8 +119,7 @@ CEditorWidget::CEditorWidget(const CEditorData& data, QWidget* pParent)
 		| SC_AUTOMATICFOLD_CHANGE);
 	Send(SCI_SETCARETLINEVISIBLE, 1);
 	Send(SCI_SETCARETLINEVISIBLEALWAYS, 1);
-	// AppSettings ships m_bDrawCaretLineFrame TRUE (src/AppSettings.h:76).
-	Send(SCI_SETCARETLINEFRAME, 1);
+	Send(SCI_SETCARETLINEFRAME, m_Data.GetSettings().DrawCaretLineFrame() ? 1 : 0);
 
 	// The horizontal scrollbar sizes itself to the widest line seen, and the view
 	// may scroll past the last line - both as src/Editor.cpp:380-384.
@@ -144,7 +135,10 @@ CEditorWidget::CEditorWidget(const CEditorData& data, QWidget* pParent)
 	// The long-line marker's column is set here and the MODE only by the toggle,
 	// so it is invisible until asked for - the same two-step the MFC uses
 	// (src/Editor.cpp:417 sets the column, :3711 turns the mode on).
-	Send(SCI_SETEDGECOLUMN, 80);		// AppSettingMgr.m_nLongLineMaximum
+	// Stored as "LongLineColumnLimitation", NOT "LongLineMaximum" - the key is
+	// not the member name. See core/AppSettings.h.
+	Send(SCI_SETEDGECOLUMN,
+		static_cast<uptr_t>(m_Data.GetSettings().LongLineColumnLimit()));
 	Send(SCI_SETEDGEMODE, EDGE_NONE);
 
 	// A hand cursor over every margin (src/Editor.cpp:357-359).
@@ -171,7 +165,7 @@ CEditorWidget::CEditorWidget(const CEditorData& data, QWidget* pParent)
 
 	// Autocomplete options (src/Editor.cpp:361-368). The list is built and shown
 	// by OnCharAdded; these only describe how Scintilla should read and size it.
-	if (AUTOCOMPLETE_IGNORE_CASE)
+	if (m_Data.GetSettings().AutoCompleteIgnoreCase())
 	{
 		Send(SCI_AUTOCSETIGNORECASE, 1);
 	}
@@ -179,15 +173,16 @@ CEditorWidget::CEditorWidget(const CEditorData& data, QWidget* pParent)
 	Send(SCI_AUTOCSETTYPESEPARATOR, static_cast<uptr_t>(AUTOCOMPLETE_TYPE_SEPARATOR));
 	Send(SCI_AUTOCSETMAXWIDTH, 100);
 
-	// The fold-marker highlight, which AppSettings ships TRUE
-	// (src/AppSettings.h:77) and src/Editor.cpp:341-348 applies. Missed by the
-	// folding change - see doc/PORTING.md 6j.
-	//
-	// Its sibling there, SCI_SETFOLDFLAGS, is deliberately still absent: the
-	// original only calls it when m_bDrawFoldingLineUnderLineStyle is TRUE and
-	// AppSettings ships it FALSE (src/AppSettings.cpp:19), so not calling it IS
-	// the shipped behaviour.
-	Send(SCI_MARKERENABLEHIGHLIGHT, 1);
+	// The fold-marker highlight (src/Editor.cpp:341-348), and its sibling
+	// SCI_SETFOLDFLAGS (:187-190) which the original calls only when
+	// m_bDrawFoldingLineUnderLineStyle is set. Both now read the real setting
+	// rather than its shipped default.
+	Send(SCI_MARKERENABLEHIGHLIGHT,
+		m_Data.GetSettings().EnableHighlightFolder() ? 1 : 0);
+	if (m_Data.GetSettings().DrawFoldingLineUnderLineStyle())
+	{
+		Send(SCI_SETFOLDFLAGS, SC_FOLDFLAG_LINEAFTER_CONTRACTED, 0);
+	}
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -227,7 +222,7 @@ QStringList CEditorWidget::GetAutoCompleteList(const QString& strPrefix) const
 	}
 
 	// AppSettings ships m_bAutoCompleteIgnoreCase TRUE (src/AppSettings.h:84).
-	const Qt::CaseSensitivity sensitivity = AUTOCOMPLETE_IGNORE_CASE
+	const Qt::CaseSensitivity sensitivity = m_Data.GetSettings().AutoCompleteIgnoreCase()
 		? Qt::CaseInsensitive : Qt::CaseSensitive;
 
 	// 1. The language's keywords, which core/ already carries - the same blob
@@ -251,7 +246,7 @@ QStringList CEditorWidget::GetAutoCompleteList(const QString& strPrefix) const
 	//    POSIX regex over the whole buffer, anchored at a word start, and keeps
 	//    each distinct match. The pattern is EDITOR_REGEX_AUTO_COMPLETE_PATTERN
 	//    from src/MacroDef.h:83, verbatim.
-	if (!(AUTOCOMPLETE_IGNORE_NUMBERS && IsAllDigits(strPrefix)))
+	if (!(m_Data.GetSettings().AutoCompleteIgnoreNumbers() && IsAllDigits(strPrefix)))
 	{
 		const QByteArray pattern = ("\\<" + strPrefix
 			+ QStringLiteral("[^ \\t\\n\\r.,;:\"(){}=<>'+!\\[\\]]+")).toUtf8();
@@ -259,7 +254,7 @@ QStringList CEditorWidget::GetAutoCompleteList(const QString& strPrefix) const
 		// The MFC drops SCFIND_MATCHCASE when ignore-case is on and keeps the
 		// other three flags either way.
 		int nFlags = SCFIND_WORDSTART | SCFIND_REGEXP | SCFIND_POSIX;
-		if (!AUTOCOMPLETE_IGNORE_CASE)
+		if (!m_Data.GetSettings().AutoCompleteIgnoreCase())
 		{
 			nFlags |= SCFIND_MATCHCASE;
 		}
@@ -312,7 +307,7 @@ void CEditorWidget::OnCharAdded(int nChar)
 	// underscore, autocomplete enabled, and not the large-file mode ui-qt/ does
 	// not have. isalpha() is the C library's and therefore locale-dependent; this
 	// is the ASCII range it means here, spelled out rather than inherited.
-	if (!ENABLE_AUTOCOMPLETE)
+	if (!m_Data.GetSettings().EnableAutoComplete())
 	{
 		return;
 	}
@@ -383,7 +378,7 @@ void CEditorWidget::RenderUrlHotspots()
 	// WideCharToMultiByte to get a document offset. core/UrlScanner works on the
 	// UTF-8 bytes Scintilla already indexes; see the note in core/UrlScanner.h
 	// for why that finds the same URLs.
-	if (!ENABLE_URL_HIGHLIGHT)
+	if (!m_Data.GetSettings().EnableUrlHighlight())
 	{
 		return;
 	}
@@ -983,32 +978,62 @@ void CEditorWidget::ApplyFoldMargin(const Core::CEditorTheme& theme)
 			reinterpret_cast<sptr_t>(property[1]));
 	}
 
-	static const struct { int _Marker; int _Shape; } FOLD_MARKERS[] = {
-		{ SC_MARKNUM_FOLDEROPEN,    SC_MARK_BOXMINUS },
-		{ SC_MARKNUM_FOLDER,        SC_MARK_BOXPLUS },
-		{ SC_MARKNUM_FOLDERSUB,     SC_MARK_VLINE },
-		{ SC_MARKNUM_FOLDERTAIL,    SC_MARK_LCORNER },
-		{ SC_MARKNUM_FOLDEREND,     SC_MARK_BOXPLUSCONNECTED },
-		{ SC_MARKNUM_FOLDEROPENMID, SC_MARK_BOXMINUSCONNECTED },
-		{ SC_MARKNUM_FOLDERMIDTAIL, SC_MARK_TCORNER },
+	// All four branches of CEditorCtrl's marker-shape chain (src/Editor.cpp:
+	// 272-325), selected by FolderMarginStyle. Only STYLE_TREE_BOX was ported
+	// before, because it is what AppSettings ships - but the setting is now
+	// read, so the other three have to exist or configuring them does nothing.
+	//
+	// The per-branch RGB literals in the original are still NOT transcribed:
+	// it overwrites every one of them with the theme's folder colours two lines
+	// later, so copying them would be faithful to the text and wrong about the
+	// behaviour (doc/PORTING.md 6f).
+	static const struct { int _Marker; int _Arrow; int _PlusMinus;
+		int _TreeCircle; int _TreeBox; } FOLD_MARKERS[] = {
+		{ SC_MARKNUM_FOLDEROPEN,    SC_MARK_ARROWDOWN, SC_MARK_MINUS,
+		  SC_MARK_CIRCLEMINUS,          SC_MARK_BOXMINUS },
+		{ SC_MARKNUM_FOLDER,        SC_MARK_ARROW,     SC_MARK_PLUS,
+		  SC_MARK_CIRCLEPLUS,           SC_MARK_BOXPLUS },
+		{ SC_MARKNUM_FOLDERSUB,     SC_MARK_EMPTY,     SC_MARK_EMPTY,
+		  SC_MARK_VLINE,                SC_MARK_VLINE },
+		{ SC_MARKNUM_FOLDERTAIL,    SC_MARK_EMPTY,     SC_MARK_EMPTY,
+		  SC_MARK_LCORNERCURVE,         SC_MARK_LCORNER },
+		{ SC_MARKNUM_FOLDEREND,     SC_MARK_EMPTY,     SC_MARK_EMPTY,
+		  SC_MARK_CIRCLEPLUSCONNECTED,  SC_MARK_BOXPLUSCONNECTED },
+		{ SC_MARKNUM_FOLDEROPENMID, SC_MARK_EMPTY,     SC_MARK_EMPTY,
+		  SC_MARK_CIRCLEMINUSCONNECTED, SC_MARK_BOXMINUSCONNECTED },
+		{ SC_MARKNUM_FOLDERMIDTAIL, SC_MARK_EMPTY,     SC_MARK_EMPTY,
+		  SC_MARK_TCORNERCURVE,         SC_MARK_TCORNER },
 	};
+	const int nStyle = m_Data.GetSettings().FolderMarginStyle();
 	Core::SColor fore, back, margin;
 	const bool bHaveFore = theme.ResolveRole("editorFolderForeColor", fore);
 	const bool bHaveBack = theme.ResolveRole("editorFolderBackColor", back);
 	for (const auto& marker : FOLD_MARKERS)
 	{
-		Send(SCI_MARKERDEFINE, marker._Marker, marker._Shape);
+		// FOLDER_MARGIN_STYPE: 0 arrow, 1 plus/minus, 2 tree circle, 3 tree box
+		// (src/EnumDef.h:233-239). An out-of-range value falls back to the
+		// shipped tree-box rather than drawing nothing.
+		int nShape = marker._TreeBox;
+		if (nStyle == 0)      { nShape = marker._Arrow; }
+		else if (nStyle == 1) { nShape = marker._PlusMinus; }
+		else if (nStyle == 2) { nShape = marker._TreeCircle; }
+		Send(SCI_MARKERDEFINE, marker._Marker, nShape);
 		if (bHaveFore && bHaveBack)
 		{
 			Send(SCI_MARKERSETFORE, marker._Marker, ToScintillaColour(fore));
 			Send(SCI_MARKERSETBACK, marker._Marker, ToScintillaColour(back));
 		}
 	}
-	if (theme.ResolveRole("editorMarginBarColor", margin))
+	// Both branches of src/Editor.cpp:260-269 now, rather than only the shipped
+	// one: classic is a fixed black/grey pair that ignores the theme entirely,
+	// which is the point of it.
+	if (m_Data.GetSettings().UseFolderMarginClassic())
 	{
-		// The non-classic branch: AppSettings ships m_bUseFolderMarginClassic
-		// FALSE (src/AppSettings.h:95), so the margin takes the theme colour
-		// rather than the black/grey pair.
+		Send(SCI_SETFOLDMARGINCOLOUR, 1, 0x000000);			// RGB(0,0,0)
+		Send(SCI_SETFOLDMARGINHICOLOUR, 1, 0x606060);		// RGB(96,96,96)
+	}
+	else if (theme.ResolveRole("editorMarginBarColor", margin))
+	{
 		Send(SCI_SETFOLDMARGINCOLOUR, 1, ToScintillaColour(margin));
 		Send(SCI_SETFOLDMARGINHICOLOUR, 1, ToScintillaColour(margin));
 	}

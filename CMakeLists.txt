@@ -71,7 +71,9 @@ add_library(vinatext_core STATIC
     core/LineDiff.cpp
     core/LineDiff.h
     core/UrlScanner.cpp
-    core/UrlScanner.h)
+    core/UrlScanner.h
+    core/AppSettings.cpp
+    core/AppSettings.h)
 
 add_library(VinaText::core ALIAS vinatext_core)
 
@@ -99,7 +101,7 @@ if(VINATEXT_BUILD_TESTS)
     # No test framework on purpose: these must build anywhere a C++11 compiler
     # exists, with no package manager and no network. Each returns non-zero on
     # failure, which is all ctest needs.
-    foreach(test_name TestLanguageData TestLanguageLookup TestStyleAttributes TestStringUtil TestChecksum TestTextTransform TestTokenizer TestLineDiff TestUrlScanner)
+    foreach(test_name TestLanguageData TestLanguageLookup TestStyleAttributes TestStringUtil TestChecksum TestTextTransform TestTokenizer TestLineDiff TestUrlScanner TestAppSettings)
         add_executable(${test_name} core/tests/${test_name}.cpp)
         target_link_libraries(${test_name} PRIVATE vinatext_core)
         if(MSVC)
@@ -128,6 +130,10 @@ if(VINATEXT_BUILD_TESTS)
     # seven *Url* helpers. Does NOT cover the InternetCrackUrl replacement -
     # see core/UrlScanner.h.
     add_test(NAME core.UrlScanner COMMAND TestUrlScanner)
+    # Reads src/AppSettings.h to check core/'s copies of the shipped
+    # defaults have not drifted, so it needs the repo root.
+    add_test(NAME core.AppSettings
+             COMMAND TestAppSettings "${CMAKE_CURRENT_SOURCE_DIR}")
 endif()
 
 #-------------------------------------------------------------------------------
