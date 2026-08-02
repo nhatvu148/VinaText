@@ -978,32 +978,62 @@ void CEditorWidget::ApplyFoldMargin(const Core::CEditorTheme& theme)
 			reinterpret_cast<sptr_t>(property[1]));
 	}
 
-	static const struct { int _Marker; int _Shape; } FOLD_MARKERS[] = {
-		{ SC_MARKNUM_FOLDEROPEN,    SC_MARK_BOXMINUS },
-		{ SC_MARKNUM_FOLDER,        SC_MARK_BOXPLUS },
-		{ SC_MARKNUM_FOLDERSUB,     SC_MARK_VLINE },
-		{ SC_MARKNUM_FOLDERTAIL,    SC_MARK_LCORNER },
-		{ SC_MARKNUM_FOLDEREND,     SC_MARK_BOXPLUSCONNECTED },
-		{ SC_MARKNUM_FOLDEROPENMID, SC_MARK_BOXMINUSCONNECTED },
-		{ SC_MARKNUM_FOLDERMIDTAIL, SC_MARK_TCORNER },
+	// All four branches of CEditorCtrl's marker-shape chain (src/Editor.cpp:
+	// 272-325), selected by FolderMarginStyle. Only STYLE_TREE_BOX was ported
+	// before, because it is what AppSettings ships - but the setting is now
+	// read, so the other three have to exist or configuring them does nothing.
+	//
+	// The per-branch RGB literals in the original are still NOT transcribed:
+	// it overwrites every one of them with the theme's folder colours two lines
+	// later, so copying them would be faithful to the text and wrong about the
+	// behaviour (doc/PORTING.md 6f).
+	static const struct { int _Marker; int _Arrow; int _PlusMinus;
+		int _TreeCircle; int _TreeBox; } FOLD_MARKERS[] = {
+		{ SC_MARKNUM_FOLDEROPEN,    SC_MARK_ARROWDOWN, SC_MARK_MINUS,
+		  SC_MARK_CIRCLEMINUS,          SC_MARK_BOXMINUS },
+		{ SC_MARKNUM_FOLDER,        SC_MARK_ARROW,     SC_MARK_PLUS,
+		  SC_MARK_CIRCLEPLUS,           SC_MARK_BOXPLUS },
+		{ SC_MARKNUM_FOLDERSUB,     SC_MARK_EMPTY,     SC_MARK_EMPTY,
+		  SC_MARK_VLINE,                SC_MARK_VLINE },
+		{ SC_MARKNUM_FOLDERTAIL,    SC_MARK_EMPTY,     SC_MARK_EMPTY,
+		  SC_MARK_LCORNERCURVE,         SC_MARK_LCORNER },
+		{ SC_MARKNUM_FOLDEREND,     SC_MARK_EMPTY,     SC_MARK_EMPTY,
+		  SC_MARK_CIRCLEPLUSCONNECTED,  SC_MARK_BOXPLUSCONNECTED },
+		{ SC_MARKNUM_FOLDEROPENMID, SC_MARK_EMPTY,     SC_MARK_EMPTY,
+		  SC_MARK_CIRCLEMINUSCONNECTED, SC_MARK_BOXMINUSCONNECTED },
+		{ SC_MARKNUM_FOLDERMIDTAIL, SC_MARK_EMPTY,     SC_MARK_EMPTY,
+		  SC_MARK_TCORNERCURVE,         SC_MARK_TCORNER },
 	};
+	const int nStyle = m_Data.GetSettings().FolderMarginStyle();
 	Core::SColor fore, back, margin;
 	const bool bHaveFore = theme.ResolveRole("editorFolderForeColor", fore);
 	const bool bHaveBack = theme.ResolveRole("editorFolderBackColor", back);
 	for (const auto& marker : FOLD_MARKERS)
 	{
-		Send(SCI_MARKERDEFINE, marker._Marker, marker._Shape);
+		// FOLDER_MARGIN_STYPE: 0 arrow, 1 plus/minus, 2 tree circle, 3 tree box
+		// (src/EnumDef.h:233-239). An out-of-range value falls back to the
+		// shipped tree-box rather than drawing nothing.
+		int nShape = marker._TreeBox;
+		if (nStyle == 0)      { nShape = marker._Arrow; }
+		else if (nStyle == 1) { nShape = marker._PlusMinus; }
+		else if (nStyle == 2) { nShape = marker._TreeCircle; }
+		Send(SCI_MARKERDEFINE, marker._Marker, nShape);
 		if (bHaveFore && bHaveBack)
 		{
 			Send(SCI_MARKERSETFORE, marker._Marker, ToScintillaColour(fore));
 			Send(SCI_MARKERSETBACK, marker._Marker, ToScintillaColour(back));
 		}
 	}
-	if (theme.ResolveRole("editorMarginBarColor", margin))
+	// Both branches of src/Editor.cpp:260-269 now, rather than only the shipped
+	// one: classic is a fixed black/grey pair that ignores the theme entirely,
+	// which is the point of it.
+	if (m_Data.GetSettings().UseFolderMarginClassic())
 	{
-		// The non-classic branch: AppSettings ships m_bUseFolderMarginClassic
-		// FALSE (src/AppSettings.h:95), so the margin takes the theme colour
-		// rather than the black/grey pair.
+		Send(SCI_SETFOLDMARGINCOLOUR, 1, 0x000000);			// RGB(0,0,0)
+		Send(SCI_SETFOLDMARGINHICOLOUR, 1, 0x606060);		// RGB(96,96,96)
+	}
+	else if (theme.ResolveRole("editorMarginBarColor", margin))
+	{
 		Send(SCI_SETFOLDMARGINCOLOUR, 1, ToScintillaColour(margin));
 		Send(SCI_SETFOLDMARGINHICOLOUR, 1, ToScintillaColour(margin));
 	}

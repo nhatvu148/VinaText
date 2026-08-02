@@ -90,6 +90,7 @@ def main():
             '    "EnableUrlHighlight": false,\n'
             '    "EnableAutoComplete": false,\n'
             '    "AutoCompleteIgnoreCase": false,\n'
+            '    "AutoCompleteIgnoreNumbers": false,\n'
             '    "DrawCaretLineFrame": false,\n'
             '    "EnableHightLightFolder": false,\n'
             '    "DrawFoldingLineUnderLineStyle": true,\n'

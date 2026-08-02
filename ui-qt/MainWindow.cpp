@@ -89,6 +89,20 @@ CMainWindow::CMainWindow(const CEditorData& data, QWidget* pParent)
 	connect(m_pFindBar, &CFindBar::PatternChanged, this, &CMainWindow::OnPatternChanged);
 	connect(m_pFindBar, &CFindBar::CloseRequested, this, &CMainWindow::OnHideFind);
 
+	// Say where the settings came from. On macOS and Linux the file usually does
+	// not exist - it is written by the Windows build - so "using defaults" is
+	// the common case and worth stating rather than leaving the user to infer
+	// from behaviour.
+	if (m_Data.GetSettings().WasLoaded())
+	{
+		LogMessage(tr("Settings: read %1").arg(m_Data.GetSettingsPath()));
+	}
+	else
+	{
+		LogMessage(tr("Settings: no file at %1 - using defaults")
+			.arg(m_Data.GetSettingsPath()));
+	}
+
 	resize(1100, 750);
 	// After resize(), so a stored geometry wins over the default rather than
 	// being overwritten by it.
@@ -1471,10 +1485,28 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 			// And an empty prefix, which would otherwise offer the whole document.
 			Require(pEditor->GetAutoCompleteList(QString()).isEmpty(),
 				QStringLiteral("%1: an empty prefix offers nothing").arg(strName));
-			// AppSettings ships m_bAutoCompleteIgnoreNumbers TRUE, so a numeric
-			// prefix contributes no document words.
-			Require(pEditor->GetAutoCompleteList(QStringLiteral("1")).isEmpty(),
-				QStringLiteral("%1: a numeric prefix offers nothing").arg(strName));
+			// Follows the SETTING. This asserted the shipped default and was the
+			// last of three such checks - the other two broke as soon as a run
+			// configured otherwise; this one survived only because the fixture
+			// did not flip the key, which it now does.
+			const bool bIgnoreNumbers = m_Data.GetSettings().AutoCompleteIgnoreNumbers();
+			const QStringList numeric = pEditor->GetAutoCompleteList(QStringLiteral("1"));
+			if (bIgnoreNumbers)
+			{
+				Require(numeric.isEmpty(),
+					QStringLiteral("%1: a numeric prefix offers nothing when "
+						"AutoCompleteIgnoreNumbers is set").arg(strName));
+			}
+			else
+			{
+				for (const QString& strWord : numeric)
+				{
+					Require(strWord.startsWith(QLatin1Char('1')),
+						QStringLiteral("%1: with the setting off, numeric matches are "
+							"offered and start with the prefix, got '%2'")
+							.arg(strName, strWord));
+				}
+			}
 		}
 
 		// Status bar.
@@ -1882,6 +1914,43 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 			Require((pEditor->Send(SCI_AUTOCGETIGNORECASE) != 0)
 					== settings.AutoCompleteIgnoreCase(),
 				QStringLiteral("settings: autocomplete case-folding follows the setting"));
+
+			// The two the review found parsed, tested and never consumed. The
+			// marker shape is the visible half of FolderMarginStyle: style 1 is
+			// plus/minus, style 3 the shipped tree-box, and they differ in the
+			// FOLDER marker - so reading that back says which branch ran.
+			const sptr_t nFolderShape = pEditor->Send(SCI_MARKERSYMBOLDEFINED,
+				SC_MARKNUM_FOLDER);
+			const int aExpected[] = { SC_MARK_ARROW, SC_MARK_PLUS,
+				SC_MARK_CIRCLEPLUS, SC_MARK_BOXPLUS };
+			const int nStyle = settings.FolderMarginStyle();
+			const int nWanted = (nStyle >= 0 && nStyle <= 3)
+				? aExpected[nStyle] : SC_MARK_BOXPLUS;
+			Require(nFolderShape == nWanted,
+				QStringLiteral("settings: the fold marker follows FolderMarginStyle "
+					"%1 (wanted %2, got %3)").arg(nStyle).arg(nWanted).arg(nFolderShape));
+
+			// UseFolderMarginClassic is NOT verified here, and saying so is the
+			// point of this comment. SCI_SETFOLDMARGINCOLOUR has no getter and
+			// there is no SC_ELEMENT_FOLD_MARGIN, so the colour cannot be read
+			// back through the public API - the only check available would be
+			// sampling pixels from the margin, which is more fragile than the
+			// thing it tests.
+			//
+			// A first attempt asserted that the THEME's margin colour is not
+			// black, which is true whether or not the setting is consulted:
+			// an assertion that cannot fail. Verified by mutation - disabling
+			// the classic branch left it green - and removed rather than left
+			// there looking like coverage.
+			//
+			// What IS checked is that the fixture exercises the branch at all,
+			// so the code path runs even though its output is unreadable.
+			if (m_Data.GetSettings().WasLoaded())
+			{
+				Require(settings.UseFolderMarginClassic(),
+					QStringLiteral("settings: the flipped fixture exercises the "
+						"classic fold margin"));
+			}
 
 			// Autocomplete gates behaviour rather than a Scintilla flag, so it
 			// has to be provoked - on a SCRATCH document. Typing into pEditor

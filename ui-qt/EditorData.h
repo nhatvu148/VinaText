@@ -38,6 +38,11 @@ public:
 	//
 	// strPath empty means "the usual place for this platform".
 	void LoadSettings(const QString& strPath, QString& strWarningOut);
+	// Where the settings were read from, and whether anything was there. Shown
+	// in the message pane at startup, because a reader that gives the user no
+	// way to see what it read is half a feature - and until EditorSettingDlg
+	// exists this is the only way to tell defaults from a file.
+	const QString& GetSettingsPath() const { return m_strSettingsPath; }
 	const Core::CAppSettings& GetSettings() const { return m_Settings; }
 
 	// Where the MFC keeps it: %AppData%/VinaText on Windows, and the platform
@@ -70,4 +75,5 @@ private:
 	Core::CEditorTheme		m_Light;
 	Core::CEditorTheme		m_Dark;
 	Core::CAppSettings		m_Settings;
+	QString					m_strSettingsPath;
 };

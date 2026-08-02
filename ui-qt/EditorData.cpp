@@ -58,6 +58,7 @@ QString CEditorData::DefaultSettingsPath()
 void CEditorData::LoadSettings(const QString& strPath, QString& strWarningOut)
 {
 	const QString strActual = strPath.isEmpty() ? DefaultSettingsPath() : strPath;
+	m_strSettingsPath = strActual;
 	std::string strError;
 	if (!m_Settings.LoadFromFile(strActual.toStdString(), strError))
 	{
