@@ -20,6 +20,7 @@
 class QCheckBox;
 class QLabel;
 class QLineEdit;
+class QToolButton;
 class QWidget;
 
 class CFindBar final : public QWidget
@@ -41,6 +42,8 @@ public:
 	// typing a pattern and then deciding to replace it.
 	void Activate(const QString& strInitial, bool bReplace = false);
 	QString GetReplacement() const;
+	bool IsReplaceVisible() const;
+	void SetReplaceVisible(bool bVisible);
 	void ShowStatus(const QString& strText, bool bIsMiss);
 
 signals:
@@ -54,6 +57,7 @@ private:
 	QLineEdit*	m_pPattern = nullptr;
 	QLineEdit*	m_pReplacement = nullptr;
 	QWidget*	m_pReplaceRow = nullptr;
+	QToolButton*	m_pToggleReplace = nullptr;
 	QCheckBox*	m_pMatchCase = nullptr;
 	QCheckBox*	m_pWholeWord = nullptr;
 	QCheckBox*	m_pRegex = nullptr;

@@ -1780,7 +1780,17 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 			++nWithShortcut;
 
 			// Quit is legitimately Cmd+Q, so it is exempt from its own entry.
-			const bool bIsQuit = pAction->text().contains(QStringLiteral("Exit"))
+			//
+			// remove('&') first: the text is "E&xit", so a plain
+			// contains("Exit") is false and this exemption could never fire.
+			// It did not matter yet - Exit's shortcut is Qt::Key_Exit on macOS,
+			// not Cmd+Q, so the reserved comparison never reached it - but a
+			// safety valve that cannot open is worse than none, because the
+			// first person to bind Exit to Cmd+Q gets a confusing failure.
+			QString strPlain = pAction->text();
+			strPlain.remove(QLatin1Char('&'));
+			const bool bIsQuit = strPlain.contains(QStringLiteral("Exit"))
+				|| strPlain.contains(QStringLiteral("Quit"))
 				|| pAction->menuRole() == QAction::QuitRole;
 			for (const QKeySequence& taken : reserved)
 			{
@@ -1813,6 +1823,27 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 		}
 		Require(pReplaceAction != nullptr && !pReplaceAction->shortcut().isEmpty(),
 			QStringLiteral("shortcut: Replace has one"));
+
+		// End to end: triggering the action must actually open the bar in
+		// replace mode. The shortcut being right is only half of it - this is
+		// the half that says the action does something.
+		if (pReplaceAction != nullptr)
+		{
+			m_pFindBar->hide();
+			pReplaceAction->trigger();
+			Require(!m_pFindBar->isHidden() && m_pFindBar->IsReplaceVisible(),
+				QStringLiteral("shortcut: Replace opens the bar with the replace row"));
+
+			// And the bar's own toggle does it too, so the feature does not
+			// depend on a single key working on a single platform.
+			m_pFindBar->SetReplaceVisible(false);
+			Require(!m_pFindBar->IsReplaceVisible(),
+				QStringLiteral("shortcut: the replace row can be hidden"));
+			m_pFindBar->SetReplaceVisible(true);
+			Require(m_pFindBar->IsReplaceVisible(),
+				QStringLiteral("shortcut: the bar's own toggle shows the replace row"));
+			OnHideFind();
+		}
 	}
 
 	Require(nFoldClicksChecked > 0,
