@@ -25,6 +25,8 @@ qt_add_executable(vinatext-qt
     EditorWidget.h
     FindBar.cpp
     FindBar.h
+    AboutDialog.cpp
+    AboutDialog.h
     MessagePane.cpp
     MessagePane.h
     MainWindow.cpp
@@ -48,7 +50,9 @@ endif()
 # convention does not apply. Point at the JSON in the source tree; --data overrides.
 target_compile_definitions(vinatext-qt PRIVATE
     VINATEXT_DATA_DIR="${CMAKE_SOURCE_DIR}/Packages/data-packages"
-    VINATEXT_VERSION="${PROJECT_VERSION}")
+    VINATEXT_VERSION="${PROJECT_VERSION}"
+    VINATEXT_SCINTILLA_VERSION="${SCINTILLA_VERSION}"
+    VINATEXT_LEXILLA_VERSION="${LEXILLA_VERSION}")
 
 set_target_properties(vinatext-qt PROPERTIES
     MACOSX_BUNDLE FALSE          # a plain binary is easier to run from a terminal

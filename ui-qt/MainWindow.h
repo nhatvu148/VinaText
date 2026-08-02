@@ -64,6 +64,7 @@ private:
 	// not AppSettings: the MFC persists docking through CDockingManager into the
 	// registry, which has no portable counterpart and is not a file this port
 	// could read anyway. Deliberate divergence in mechanism, same behaviour.
+	void OnAbout();
 	void SaveDockState();
 	void RestoreDockState();
 
