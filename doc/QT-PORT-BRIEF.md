@@ -289,7 +289,8 @@ branch. Single consolidated PR to `vinadevs/VinaText` when ready.**
   Deliberately this way round, so a stray `git push` cannot reach the organisation repo.
 - **All port work targets `port/cross-platform`.** PRs point at `port/cross-platform`, not
   `master`, and are opened *within the fork*. `port/cross-platform` goes upstream as one
-  consolidated PR at cutover (Phase 6). Keep the existing `release_1.x` convention for
+  consolidated PR ~~at cutover (Phase 6)~~ — **superseded by D10: when the macOS/Linux
+  editor ships, because D10 blocks Phase 6 indefinitely.** Keep the existing `release_1.x` convention for
   shipping MFC releases off `upstream/master`.
 - **Rebase `port/cross-platform` on `upstream/master` weekly** — see the mitigations below.
   The fork adds a second sync hop, which makes the cadence more important, not less.
@@ -298,7 +299,9 @@ branch. Single consolidated PR to `vinadevs/VinaText` when ready.**
   option(VINATEXT_BUILD_QT "Build the Qt frontend" OFF)
   ```
   This stays useful even on a branch: it keeps the Windows build green on `port/cross-platform` itself,
-  and it makes the eventual Phase 6 merge to `master` a non-event.
+  and it makes the merge to `master` a non-event. ~~at Phase 6~~ — **under D10 that merge
+  happens when the macOS/Linux editor ships, not at cutover, and the flag is exactly why it
+  is safe that early.**
 
 **The cost this incurs, and the two mitigations that make it survivable:**
 
@@ -447,6 +450,94 @@ unused**. Stop tracking `bin/*.dll`, `lib/*.lib` going
 forward (`git rm --cached` + `.gitignore`) once vcpkg lands. Tell contributors to
 `git clone --depth 1`.
 
+**D10. Ship a cross-platform EDITOR first. The IDE features are deferred, not
+cancelled.** (Decided 2026-08-02 by the project owner.)
+
+Phase 4 finished and the question "are we on track?" produced a number nobody had
+been reporting: the MFC app has **613 `ON_COMMAND` handlers** and `ui-qt/` has
+**14 menu actions** (6 File, 3 Search, 5 View). Architecturally the port is proven — the strangler held across
+five consecutive PRs with `src/` untouched, D2's Scintilla binding runs on Linux and
+macOS in CI, `core/` links into both frontends. But the *product* is 613 commands,
+and finishing all of them before shipping anything is how a port dies at 60%.
+
+So the target is restated: **`ui-qt/` becomes a cross-platform text editor, not a
+cross-platform VinaText.** Full parity remains the eventual goal and nothing here
+forecloses it — every deferred file stays in `src/`, compiled and shipping on
+Windows exactly as now.
+
+**Deferred:**
+
+| | LOC | |
+|---|---:|---|
+| `platform/`'s IDE half — `Compiler`, `Debugger`, `SystemInfo`, `HostView`, `HostManager`, `WindowsPrinter` | ~3,500 | Risk 3 already called `Debugger`/`Compiler` "its own project" |
+| viewers and explorer — `FileExplorerCtrl`, `BuildWindow`, `ImageView`, `PdfView`, `MediaView`, `WebView` | ~10,200 | `FileExplorerCtrl` alone is 6,220 |
+| 16 of the 30 dialogs | ~3,170 | path tools, project templates, spell-check, password, gamma |
+| 6 of the 9 dock panes | — | `BuildWindow`, `PathResultWindow`, `SearchResultWindow`, `BreakpointWindow`, `SearchAndReplaceWindow`, `FileExplorerWindow` — named in full, because a category list dropped one |
+
+**Kept — what an editor needs:**
+
+- **14 dialogs, 4,594 LOC**: `FindDlg`, `ReplaceDlg`, `GotoDlg`, `CodePageMFCDlg`,
+  `AppAboutDlg` (required by D3 for the Qt LGPL attribution), the three settings
+  pages, and the six small text-transform dialogs.
+- **3 dock panes**: `MessageWindow` (done), `OpenTabWindows`, `BookmarkWindow`.
+- `platform/`'s portable half: `OSUtil`, `SingleInstanceApp`, `UnicodeUtils`,
+  `MultiThreadWorker`, `GuiUtils`.
+
+That roughly halves Phase 5.
+
+**The cost, stated plainly, because it is not free.** Phase 6 as written — "flip
+Windows to Qt, delete `ui-mfc/`" — **cannot happen under D10.** A Windows user who
+has a compiler and a debugger today cannot be given a Qt build that lacks them. So:
+
+- **macOS and Linux get the Qt editor.** They have nothing today, so an editor
+  without IDE features is a gain, not a regression.
+- **Windows keeps shipping MFC** until parity, exactly as D5 already requires.
+- **Dual maintenance (Risk 2) therefore extends indefinitely rather than ending at
+  Phase 6.** That is the price of shipping early, and it is the thing to re-examine
+  if the cost starts to bite.
+
+**D10 collides with D4, and the collision has to be resolved rather than left.** D4
+makes the fork "staging, not a permanent home" with "a defined exit: one consolidated
+PR upstream" — *at Phase 6 cutover*. D10 blocks Phase 6 indefinitely. Taken together
+those would strand the port in a fork forever, which is exactly what D4 was written to
+prevent.
+
+**So the exit moves earlier: the consolidated PR goes upstream when the macOS/Linux
+editor ships, not at cutover.** `ui-qt/` is gated behind `VINATEXT_BUILD_QT` (default
+OFF), so merging it into `vinadevs/master` changes nothing for the Windows build — the
+same property that made the flag worth having in the first place. After that merge,
+`ui-mfc/` and `ui-qt/` coexist on `master` and the deferred features are ordinary
+backlog rather than a branch that has to be kept alive.
+
+**And a working rule that follows from it — tier the rigour.** The standard applied
+through Phase 4 (differential test against a verbatim transcription, mutation-check
+every assertion, a documented section per feature) is correct where correctness is
+*invisible*: data keyed five different ways, encoding round-trips, an algorithm that
+hung on 6.4% of inputs. It is wrong for a menu command whose behaviour is obvious the
+moment you click it. Applied uniformly to 613 commands it never finishes.
+
+- **Heavy rigour**: anything extracted into `core/`, anything data-driven, anything
+  where the two frontends could silently disagree.
+- **Light rigour**: the shallow, visible tail — menu commands, dialog layouts, text
+  transforms. A self-test check and a screenshot, not a differential test.
+
+Reproduce D10's numbers:
+
+```bash
+# the command surface, and the gap that prompted this decision
+grep -ohE "ON_COMMAND\(" src/*.cpp | wc -l          # 613. ON_COMMAND_RANGE is
+                                                    # a separate macro and is not
+                                                    # counted; none are commented out
+
+# 14 menu actions - NOT `grep -c addAction`, which returns 15 by counting
+# pThemeGroup->addAction(pAction), a QActionGroup membership for the theme
+# radio pair rather than a menu entry. The obvious command overcounts.
+grep -oE "p(File|Search|View)->addAction\(" ui-qt/MainWindow.cpp | wc -l
+
+ls src/*Dlg.cpp | wc -l                             # 30, not the "~40" above
+ls -d platform/ 2>/dev/null || echo "not started"
+```
+
 ---
 
 ## 5. Phase plan
@@ -458,17 +549,20 @@ forward (`git rm --cached` + `.gitignore`) once vcpkg lands. Tell contributors t
 | **2. Extract `core/`** | Move + `CString`→`QString`. Start with the 3 zero-`CString` files, end with `PathUtil` (106 sites) | Windows, unchanged |
 | **3. Qt shell** | `QMainWindow`, `QTabWidget`, 9 × `QDockWidget`. **Interleaves with Phase 2 from 2026-07-31 (D9)** — alpha checklist ✅ done: tabs, open/save, lexer + themes, find, status bar. Docks are beta | First Linux/macOS **alpha** |
 | **4. Editor** | `ScintillaEditBase` + port `EditorLexerDark` / `EditorLexerLight`. ~~`LexerParser`~~ — done early as `core/Tokenizer` (#25); it was a delimiter tokenizer, not a lexer | Usable **beta** |
-| **5. Dialogs + platform** | ~40 `*Dlg` → `.ui`; `platform/` impls; viewers | Feature parity |
-| **6. Cutover** | Flip Windows to Qt, delete `ui-mfc/`, unify installers | Qt on all three |
+| **5. Dialogs + platform** | **Scoped by D10 to what an editor needs: 14 of the 30 `*Dlg` (the count is 30, not ~40 — re-derive it), 3 of the 9 dock panes, `platform/`'s portable half.** The IDE half is deferred | macOS + Linux **editor** |
+| **6. Cutover** | ~~Flip Windows to Qt, delete `ui-mfc/`~~ — **blocked by D10 and deliberately so.** Windows keeps MFC until parity; unify installers when it arrives | Qt on all three, eventually |
 
 - Phases 0–2 are **~40% of total effort with near-zero user-facing risk**.
+- **Phases 0–4 are DONE as of 2026-08-01** (#30–#38). Phase 5 began with #39.
 - **Order is 0 → 1 → (2 ∥ 3) → 4 → 5 → 6 since D9**: Phase 2's remainder is a demand-driven
   backlog (`FileUtil` → `FindReplaceTextWorker` → `StringHelper` rest → `PathUtil` →
   `AppSettings`, per PORTING.md §6c correction 5), pulled when `ui-qt/` needs each piece.
 - Phase 4 is the cheapest big win — Scintilla's message API is identical across platforms, so
   lexer and theme work survives largely intact.
 - Phase 5 is the long tail and the most parallelizable across a team.
-- **Total: 6–12 months for 1–2 devs.** Not weeks.
+- **Total: 6–12 months for 1–2 devs** for full parity. D10's editor-first scope is
+  roughly half of Phase 5, so a shippable macOS/Linux editor lands considerably
+  sooner — at the price of Phase 6 moving out indefinitely.
 
 ### Phase 5 platform mapping
 
@@ -594,7 +688,8 @@ Hard rules:
 - VinaText is MIT. Never add a GPL dependency. Never use QScintilla (use upstream
   Scintilla's `qt/ScintillaEditBase`). Never link Qt statically.
 - All port work targets the `port/cross-platform` branch. PRs point at `port/cross-platform`, never `master`.
-  `master` is for shipping MFC releases only, until Phase 6 cutover.
+  `master` is for shipping MFC releases only, until the consolidated PR lands — which
+  under D10 is when the macOS/Linux editor ships, NOT at Phase 6 cutover.
 - The MFC build must keep building and shipping. Do not break it.
 - New Qt code goes in `ui-qt/`, gated behind the `VINATEXT_BUILD_QT` CMake option.
 ```
