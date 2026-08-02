@@ -88,7 +88,11 @@ private:
 	void OnSetTheme(EEditorTheme theme);
 	void OnToggleWordWrap(bool bEnable);
 	void OnToggleLongLineMarker(bool bEnable);
-	void OnShowFind();
+	void OnShowFind() { ShowFindBar(false); }
+	void OnShowReplace() { ShowFindBar(true); }
+	void ShowFindBar(bool bReplace);
+	void OnReplace();
+	void OnReplaceAll();
 	void OnHideFind();
 	void OnFind(bool bBackward);
 	void OnPatternChanged();

@@ -84,6 +84,8 @@ CMainWindow::CMainWindow(const CEditorData& data, QWidget* pParent)
 		}
 	});
 	connect(m_pFindBar, &CFindBar::FindRequested, this, &CMainWindow::OnFind);
+	connect(m_pFindBar, &CFindBar::ReplaceRequested, this, &CMainWindow::OnReplace);
+	connect(m_pFindBar, &CFindBar::ReplaceAllRequested, this, &CMainWindow::OnReplaceAll);
 	connect(m_pFindBar, &CFindBar::PatternChanged, this, &CMainWindow::OnPatternChanged);
 	connect(m_pFindBar, &CFindBar::CloseRequested, this, &CMainWindow::OnHideFind);
 
@@ -118,6 +120,9 @@ void CMainWindow::BuildMenus()
 	pSearch->addAction(tr("Find &Next"), QKeySequence::FindNext, this, [this] { OnFind(false); });
 	pSearch->addAction(tr("Find &Previous"), QKeySequence::FindPrevious,
 		this, [this] { OnFind(true); });
+	pSearch->addSeparator();
+	pSearch->addAction(tr("&Replace..."), QKeySequence::Replace,
+		this, &CMainWindow::OnShowReplace);
 
 	// A theme switch, not a settings UI: two radio items, no page, nothing stored.
 	// Persisting the choice is AppSettings, the last file in the Phase 2 backlog
@@ -509,7 +514,7 @@ void CMainWindow::OnSetTheme(EEditorTheme theme)
 //////////////////////////////////////////////////////////////////////////
 // Find
 
-void CMainWindow::OnShowFind()
+void CMainWindow::ShowFindBar(bool bReplace)
 {
 	CEditorWidget* pEditor = GetCurrentEditor();
 	QString strSelected;
@@ -524,7 +529,54 @@ void CMainWindow::OnShowFind()
 			strSelected = QString::fromUtf8(buffer.constData());
 		}
 	}
-	m_pFindBar->Activate(strSelected);
+	m_pFindBar->Activate(strSelected, bReplace);
+	OnPatternChanged();
+}
+
+void CMainWindow::OnReplace()
+{
+	CEditorWidget* pEditor = GetCurrentEditor();
+	if (pEditor == nullptr)
+	{
+		return;
+	}
+	CEditorWidget::SFindOptions options;
+	options._MatchCase = m_pFindBar->IsMatchCase();
+	options._WholeWord = m_pFindBar->IsWholeWord();
+	options._Regex = m_pFindBar->IsRegex();
+
+	const bool bReplaced = pEditor->ReplaceNext(m_pFindBar->GetPattern(),
+		m_pFindBar->GetReplacement(), options);
+	m_pFindBar->ShowStatus(bReplaced ? tr("replaced") : tr("no match"), !bReplaced);
+	// The highlights describe the text as it was before the edit, so re-run
+	// them - otherwise an indicator sits over text that no longer matches.
+	OnPatternChanged();
+}
+
+void CMainWindow::OnReplaceAll()
+{
+	CEditorWidget* pEditor = GetCurrentEditor();
+	if (pEditor == nullptr)
+	{
+		return;
+	}
+	CEditorWidget::SFindOptions options;
+	options._MatchCase = m_pFindBar->IsMatchCase();
+	options._WholeWord = m_pFindBar->IsWholeWord();
+	options._Regex = m_pFindBar->IsRegex();
+
+	const int nCount = pEditor->ReplaceAll(m_pFindBar->GetPattern(),
+		m_pFindBar->GetReplacement(), options);
+	m_pFindBar->ShowStatus(nCount == 0 ? tr("no match")
+		: tr("%n replaced", nullptr, nCount), nCount == 0);
+	// Worth a line in the message pane: a replace-all is the one find operation
+	// that changes the document wholesale, and the count is the only evidence
+	// of what it did.
+	if (nCount > 0)
+	{
+		LogMessage(tr("Replaced %n occurrence(s) of '%1'", nullptr, nCount)
+			.arg(m_pFindBar->GetPattern()));
+	}
 	OnPatternChanged();
 }
 
@@ -1568,6 +1620,118 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 				+ QLatin1Char('/') + strFile;
 			Require(QFile::exists(strPath),
 				QStringLiteral("attribution: %1 exists").arg(strPath));
+		}
+	}
+
+	//----------------------------------------------------------------------
+	// Replace. Run on a scratch document rather than the corpus, because these
+	// checks MODIFY the text and the round-trip check below needs the files
+	// unchanged. The last tab is untitled and empty - see NewUntitled in the
+	// constructor - so nothing a user opened is touched.
+	//----------------------------------------------------------------------
+	{
+		CEditorWidget* pScratch = NewUntitled();
+		Require(pScratch != nullptr, QStringLiteral("replace: got a scratch document"));
+		if (pScratch != nullptr)
+		{
+			auto SetText = [pScratch](const char* szText)
+			{
+				pScratch->Send(SCI_SETTEXT, 0, reinterpret_cast<sptr_t>(szText));
+				pScratch->Send(SCI_EMPTYUNDOBUFFER);
+				pScratch->Send(SCI_GOTOPOS, 0);
+			};
+			auto GetText = [pScratch]() -> QString
+			{
+				const sptr_t n = pScratch->Send(SCI_GETLENGTH);
+				QByteArray b(static_cast<int>(n) + 1, '\0');
+				pScratch->Send(SCI_GETTEXT, static_cast<uptr_t>(n) + 1,
+					reinterpret_cast<sptr_t>(b.data()));
+				b.truncate(static_cast<int>(n));
+				return QString::fromUtf8(b);
+			};
+			CEditorWidget::SFindOptions plain;
+			CEditorWidget::SFindOptions regex;
+			regex._Regex = true;
+
+			// One at a time, leaving the rest alone.
+			SetText("aa bb aa bb aa");
+			Require(pScratch->ReplaceNext(QStringLiteral("aa"), QStringLiteral("XX"), plain),
+				QStringLiteral("replace: ReplaceNext reports a hit"));
+			Require(GetText() == QStringLiteral("XX bb aa bb aa"),
+				QStringLiteral("replace: only the first match changed, got '%1'")
+					.arg(GetText()));
+
+			// And then the rest.
+			Require(pScratch->ReplaceAll(QStringLiteral("aa"), QStringLiteral("YY"), plain) == 2,
+				QStringLiteral("replace: ReplaceAll reports 2"));
+			Require(GetText() == QStringLiteral("XX bb YY bb YY"),
+				QStringLiteral("replace: every remaining match changed, got '%1'")
+					.arg(GetText()));
+
+			// A pattern that is not there changes nothing and says so.
+			SetText("nothing to see");
+			Require(!pScratch->ReplaceNext(QStringLiteral("zzq"), QStringLiteral("x"), plain),
+				QStringLiteral("replace: ReplaceNext reports a miss"));
+			Require(pScratch->ReplaceAll(QStringLiteral("zzq"), QStringLiteral("x"), plain) == 0,
+				QStringLiteral("replace: ReplaceAll reports 0"));
+			Require(GetText() == QStringLiteral("nothing to see"),
+				QStringLiteral("replace: a miss leaves the document alone"));
+
+			// Back-references, which need SCI_REPLACETARGETRE rather than
+			// SCI_REPLACETARGET. Using the wrong one inserts a literal "\1".
+			SetText("cat hat");
+			Require(pScratch->ReplaceAll(QStringLiteral("\\([ch]\\)at"),
+					QStringLiteral("\\1og"), regex) == 2,
+				QStringLiteral("replace: regex ReplaceAll reports 2"));
+			Require(GetText() == QStringLiteral("cog hog"),
+				QStringLiteral("replace: back-references expand, got '%1'").arg(GetText()));
+
+			// A literal backslash must NOT be treated as an escape when the
+			// regex box is off - the other half of choosing between the two
+			// messages.
+			SetText("a b");
+			pScratch->ReplaceAll(QStringLiteral("a"), QStringLiteral("\\1"), plain);
+			Require(GetText() == QStringLiteral("\\1 b"),
+				QStringLiteral("replace: a plain replacement is literal, got '%1'")
+					.arg(GetText()));
+
+			// THE HANG. A zero-width match replaced by nothing does not advance
+			// the target, so the original's loop would never end. If this check
+			// ever regresses the self-test does not fail, it stops - which is
+			// why CI runs it under an alarm.
+			SetText("l1\nl2\nl3");
+			Require(pScratch->ReplaceAll(QStringLiteral("^"), QString(), regex) == 3,
+				QStringLiteral("replace: a zero-width match terminates, one per line"));
+			Require(GetText() == QStringLiteral("l1\nl2\nl3"),
+				QStringLiteral("replace: replacing nothing with nothing changes nothing"));
+
+			// One undo for the whole run. Without SCI_BEGINUNDOACTION the user
+			// presses Ctrl+Z once per replacement.
+			SetText("z z z z");
+			Require(pScratch->ReplaceAll(QStringLiteral("z"), QStringLiteral("Q"), plain) == 4,
+				QStringLiteral("replace: four replacements"));
+			pScratch->Send(SCI_UNDO);
+			Require(GetText() == QStringLiteral("z z z z"),
+				QStringLiteral("replace: ONE undo takes back the whole replace-all, got '%1'")
+					.arg(GetText()));
+
+			// The view comes back where it was, rather than at the last match.
+			SetText("x\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx");
+			pScratch->Send(SCI_GOTOLINE, 2);
+			const sptr_t nLineBefore = pScratch->Send(SCI_LINEFROMPOSITION,
+				static_cast<uptr_t>(pScratch->Send(SCI_GETCURRENTPOS)));
+			pScratch->ReplaceAll(QStringLiteral("x"), QStringLiteral("y"), plain);
+			Require(pScratch->Send(SCI_LINEFROMPOSITION,
+					static_cast<uptr_t>(pScratch->Send(SCI_GETCURRENTPOS))) == nLineBefore,
+				QStringLiteral("replace: the caret line survives a replace-all"));
+
+			// SETSAVEPOINT before closing, or ConfirmClose sees a modified
+			// document and raises the unsaved-changes box - which in a headless
+			// run has nobody to dismiss it and takes the whole self-test down
+			// with it. Exactly the hazard main.cpp's bHeadless comment names;
+			// this block earned it by hitting it.
+			pScratch->Send(SCI_SETSAVEPOINT);
+			OnCloseTab(m_pTabs->indexOf(pScratch));
 		}
 	}
 
