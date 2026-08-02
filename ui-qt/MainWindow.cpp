@@ -11,6 +11,7 @@
 #include "EditorWidget.h"
 #include "FindBar.h"
 #include "AboutDialog.h"
+#include "PreferencesDialog.h"
 #include "MessagePane.h"
 
 #include <Scintilla.h>
@@ -37,7 +38,7 @@
 #include <QVBoxLayout>
 #include <QWidget>
 
-CMainWindow::CMainWindow(const CEditorData& data, QWidget* pParent)
+CMainWindow::CMainWindow(CEditorData& data, QWidget* pParent)
 	: QMainWindow(pParent)
 	, m_Data(data)
 {
@@ -189,8 +190,61 @@ void CMainWindow::BuildMenus()
 	// Help. The About box is not decoration here - D3 requires the LGPLv3
 	// attribution and the corresponding-source offer to be reachable from the
 	// running application, so this menu is part of shipping, not of polish.
+	pView->addSeparator();
+	// QKeySequence::Preferences is Cmd+, on macOS and nothing on Windows or
+	// Linux, where Ctrl+, is the de facto convention - so both are given rather
+	// than trusting one to resolve everywhere. That lesson cost a PR.
+	QAction* pPreferences = pView->addAction(tr("&Preferences..."), this,
+		&CMainWindow::OnPreferences);
+	pPreferences->setShortcuts({ QKeySequence(QKeySequence::Preferences),
+		QKeySequence(Qt::CTRL | Qt::Key_Comma) });
+	pPreferences->setMenuRole(QAction::PreferencesRole);
+
 	QMenu* pHelp = menuBar()->addMenu(tr("&Help"));
 	pHelp->addAction(tr("&About VinaText"), this, &CMainWindow::OnAbout);
+}
+
+void CMainWindow::OnPreferences()
+{
+	CPreferencesDialog dialog(m_Data.GetSettings(), this);
+	if (dialog.exec() != QDialog::Accepted)
+	{
+		return;
+	}
+
+	QString strError;
+	const bool bSaved = m_Data.ApplySettings(dialog.GetSettings(), strError);
+
+	// Apply to the running editors whether or not the save succeeded: the user
+	// asked for these settings, and refusing to honour them because a file
+	// could not be written would be a second failure on top of the first.
+	ReapplySettings();
+
+	if (!bSaved)
+	{
+		LogMessage(tr("Settings not saved - %1").arg(strError), QColor(Qt::red));
+		statusBar()->showMessage(tr("Settings applied but not saved"), 5000);
+	}
+	else
+	{
+		LogMessage(tr("Settings saved to %1").arg(m_Data.GetSettingsPath()));
+	}
+}
+
+void CMainWindow::ReapplySettings()
+{
+	// BOTH calls. ApplySettings covers what is not a theme colour - the edge
+	// column, the caret-line frame, autocomplete case folding, the fold flags -
+	// and ApplyTheme covers the rest, including the fold marker shapes, which
+	// depend on FolderMarginStyle as well as on the palette.
+	for (int i = 0; i < m_pTabs->count(); ++i)
+	{
+		if (CEditorWidget* pEditor = qobject_cast<CEditorWidget*>(m_pTabs->widget(i)))
+		{
+			pEditor->ApplySettings();
+			pEditor->ApplyTheme(m_Theme);
+		}
+	}
 }
 
 void CMainWindow::OnAbout()
@@ -1978,6 +2032,51 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 				pScratch->Send(SCI_SETSAVEPOINT);
 				OnCloseTab(m_pTabs->indexOf(pScratch));
 			}
+		}
+	}
+
+	//----------------------------------------------------------------------
+	// Preferences. The dialog must round-trip untouched settings unchanged -
+	// otherwise opening it and pressing OK silently rewrites the file - and an
+	// applied change must reach an open document.
+	//----------------------------------------------------------------------
+	{
+		const Core::CAppSettings before = m_Data.GetSettings();
+		{
+			CPreferencesDialog dialog(before, this);
+			const Core::CAppSettings after = dialog.GetSettings();
+			Require(after.EnableUrlHighlight() == before.EnableUrlHighlight()
+				&& after.EnableAutoComplete() == before.EnableAutoComplete()
+				&& after.AutoCompleteIgnoreCase() == before.AutoCompleteIgnoreCase()
+				&& after.AutoCompleteIgnoreNumbers() == before.AutoCompleteIgnoreNumbers()
+				&& after.DrawCaretLineFrame() == before.DrawCaretLineFrame()
+				&& after.DrawFoldingLineUnderLineStyle()
+					== before.DrawFoldingLineUnderLineStyle()
+				&& after.EnableHighlightFolder() == before.EnableHighlightFolder()
+				&& after.UseFolderMarginClassic() == before.UseFolderMarginClassic()
+				&& after.FolderMarginStyle() == before.FolderMarginStyle()
+				&& after.LongLineColumnLimit() == before.LongLineColumnLimit(),
+				QStringLiteral("preferences: opening and closing changes nothing"));
+		}
+
+		// An applied change must reach an open document, not merely the file.
+		CEditorWidget* pEditor = GetCurrentEditor();
+		if (pEditor != nullptr)
+		{
+			Core::CAppSettings changed = before;
+			changed.SetLongLineColumnLimit(37);
+			QString strSaveError;
+			m_Data.ApplySettings(changed, strSaveError);	// may fail to write; fine
+			ReapplySettings();
+			Require(pEditor->Send(SCI_GETEDGECOLUMN) == 37,
+				QStringLiteral("preferences: an applied change reaches an open editor, "
+					"got %1").arg(pEditor->Send(SCI_GETEDGECOLUMN)));
+
+			// Put it back, so nothing after this sees a modified configuration.
+			m_Data.ApplySettings(before, strSaveError);
+			ReapplySettings();
+			Require(pEditor->Send(SCI_GETEDGECOLUMN) == before.LongLineColumnLimit(),
+				QStringLiteral("preferences: and restoring it takes effect too"));
 		}
 	}
 

@@ -44,6 +44,10 @@ public:
 	// exists this is the only way to tell defaults from a file.
 	const QString& GetSettingsPath() const { return m_strSettingsPath; }
 	const Core::CAppSettings& GetSettings() const { return m_Settings; }
+	// Replaces the settings and writes them back. Returns false and fills
+	// strErrorOut when the file cannot be written; the in-memory settings are
+	// updated either way, so a failed save does not also discard the edit.
+	bool ApplySettings(const Core::CAppSettings& settings, QString& strErrorOut);
 
 	// Where the MFC keeps it: %AppData%/VinaText on Windows, and the platform
 	// equivalent elsewhere. QStandardPaths with no organisation name yields

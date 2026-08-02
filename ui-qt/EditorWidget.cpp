@@ -119,7 +119,6 @@ CEditorWidget::CEditorWidget(const CEditorData& data, QWidget* pParent)
 		| SC_AUTOMATICFOLD_CHANGE);
 	Send(SCI_SETCARETLINEVISIBLE, 1);
 	Send(SCI_SETCARETLINEVISIBLEALWAYS, 1);
-	Send(SCI_SETCARETLINEFRAME, m_Data.GetSettings().DrawCaretLineFrame() ? 1 : 0);
 
 	// The horizontal scrollbar sizes itself to the widest line seen, and the view
 	// may scroll past the last line - both as src/Editor.cpp:380-384.
@@ -135,10 +134,6 @@ CEditorWidget::CEditorWidget(const CEditorData& data, QWidget* pParent)
 	// The long-line marker's column is set here and the MODE only by the toggle,
 	// so it is invisible until asked for - the same two-step the MFC uses
 	// (src/Editor.cpp:417 sets the column, :3711 turns the mode on).
-	// Stored as "LongLineColumnLimitation", NOT "LongLineMaximum" - the key is
-	// not the member name. See core/AppSettings.h.
-	Send(SCI_SETEDGECOLUMN,
-		static_cast<uptr_t>(m_Data.GetSettings().LongLineColumnLimit()));
 	Send(SCI_SETEDGEMODE, EDGE_NONE);
 
 	// A hand cursor over every margin (src/Editor.cpp:357-359).
@@ -163,26 +158,14 @@ CEditorWidget::CEditorWidget(const CEditorData& data, QWidget* pParent)
 	connect(this, &ScintillaEditBase::updateUi, this, &CEditorWidget::OnUpdateUi);
 	connect(this, &ScintillaEditBase::charAdded, this, &CEditorWidget::OnCharAdded);
 
+	ApplySettings();
+
 	// Autocomplete options (src/Editor.cpp:361-368). The list is built and shown
 	// by OnCharAdded; these only describe how Scintilla should read and size it.
-	if (m_Data.GetSettings().AutoCompleteIgnoreCase())
-	{
-		Send(SCI_AUTOCSETIGNORECASE, 1);
-	}
 	Send(SCI_AUTOCSETSEPARATOR, static_cast<uptr_t>(AUTOCOMPLETE_WORD_SEPARATOR));
 	Send(SCI_AUTOCSETTYPESEPARATOR, static_cast<uptr_t>(AUTOCOMPLETE_TYPE_SEPARATOR));
 	Send(SCI_AUTOCSETMAXWIDTH, 100);
 
-	// The fold-marker highlight (src/Editor.cpp:341-348), and its sibling
-	// SCI_SETFOLDFLAGS (:187-190) which the original calls only when
-	// m_bDrawFoldingLineUnderLineStyle is set. Both now read the real setting
-	// rather than its shipped default.
-	Send(SCI_MARKERENABLEHIGHLIGHT,
-		m_Data.GetSettings().EnableHighlightFolder() ? 1 : 0);
-	if (m_Data.GetSettings().DrawFoldingLineUnderLineStyle())
-	{
-		Send(SCI_SETFOLDFLAGS, SC_FOLDFLAG_LINEAFTER_CONTRACTED, 0);
-	}
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -725,6 +708,30 @@ void CEditorWidget::DetectEol(const QByteArray& utf8)
 
 //////////////////////////////////////////////////////////////////////////
 // Styling
+
+void CEditorWidget::ApplySettings()
+{
+	const Core::CAppSettings& settings = m_Data.GetSettings();
+
+	// AppSettings ships m_bDrawCaretLineFrame TRUE (src/AppSettings.h:76).
+	Send(SCI_SETCARETLINEFRAME, settings.DrawCaretLineFrame() ? 1 : 0);
+
+	// Stored as "LongLineColumnLimitation", NOT "LongLineMaximum" - the key is
+	// not the member name. See core/AppSettings.h.
+	Send(SCI_SETEDGECOLUMN, static_cast<uptr_t>(settings.LongLineColumnLimit()));
+
+	// Explicitly BOTH ways: setting it only when true means turning the setting
+	// off leaves the previous value in place, which is the classic bug in
+	// re-appliable configuration.
+	Send(SCI_AUTOCSETIGNORECASE, settings.AutoCompleteIgnoreCase() ? 1 : 0);
+
+	// The fold-marker highlight (src/Editor.cpp:341-348) and its sibling
+	// SCI_SETFOLDFLAGS (:187-190), which the original calls only when
+	// m_bDrawFoldingLineUnderLineStyle is set.
+	Send(SCI_MARKERENABLEHIGHLIGHT, settings.EnableHighlightFolder() ? 1 : 0);
+	Send(SCI_SETFOLDFLAGS, settings.DrawFoldingLineUnderLineStyle()
+		? SC_FOLDFLAG_LINEAFTER_CONTRACTED : 0, 0);
+}
 
 void CEditorWidget::ApplyTheme(EEditorTheme theme)
 {

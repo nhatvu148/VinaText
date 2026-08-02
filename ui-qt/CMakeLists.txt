@@ -25,6 +25,8 @@ qt_add_executable(vinatext-qt
     EditorWidget.h
     FindBar.cpp
     FindBar.h
+    PreferencesDialog.cpp
+    PreferencesDialog.h
     AboutDialog.cpp
     AboutDialog.h
     MessagePane.cpp

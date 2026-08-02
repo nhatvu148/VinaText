@@ -22,6 +22,9 @@
 #include <fstream>
 #include <iostream>
 #include <sstream>
+#include <algorithm>
+#include <cstdio>
+#include <iterator>
 #include <string>
 
 namespace
@@ -212,6 +215,95 @@ int main(int argc, char** argv)
 		Check(!missing.WasLoaded(), "and WasLoaded reports that nothing was read");
 		Check(missing.EnableUrlHighlight() && missing.LongLineColumnLimit() == 80,
 			"every default survives an absent file");
+	}
+
+	//----------------------------------------------------------------------
+	// 5. Saving preserves every key this class does not understand.
+	//    CAppSettings::SaveSettingData writes 84 keys; this class knows 10. A
+	//    save that serialised only its own would discard the other 74 the first
+	//    time a macOS user ticked a checkbox in a file their Windows install
+	//    shares. This is the check that says it does not.
+	//----------------------------------------------------------------------
+	{
+		const std::string strPath = strRoot + "/core-appsettings-roundtrip.json";
+		{
+			std::ofstream seed(strPath.c_str(), std::ios::binary);
+			seed << "{\n \"VinaText Setting\": {\n"
+				"  \"EnableUrlHighlight\": true,\n"
+				"  \"CompilerPathCPP\": \"/usr/bin/g++\",\n"
+				"  \"LanguageSpellCheck\": \"en-GB\",\n"
+				"  \"FilePreviewSizeLimit\": 4096,\n"
+				"  \"SomeFutureSetting\": {\"nested\": [1, 2, 3]}\n"
+				" },\n \"AnotherRoot\": { \"x\": 1 }\n}";
+		}
+
+		Core::CAppSettings settings;
+		std::string strError;
+		Check(settings.LoadFromFile(strPath, strError), "seeded file loads: " + strError);
+		settings.SetEnableUrlHighlight(false);
+		settings.SetLongLineColumnLimit(42);
+		Check(settings.SaveToFile(strPath, strError), "saves: " + strError);
+
+		// Re-read the raw text: the four keys core/ has never heard of, and the
+		// sibling root object, must all still be there.
+		std::ifstream back(strPath.c_str(), std::ios::binary);
+		const std::string strAfter((std::istreambuf_iterator<char>(back)),
+			std::istreambuf_iterator<char>());
+		back.close();
+
+		// Compared after stripping backslashes: picojson serialises '/' as "\/",
+		// which is legal JSON and which the MFC's own JSonWriter produces too,
+		// since both use the same picojson. So the VALUE survives even though
+		// these bytes differ from the seed, and comparing raw text here would
+		// fail on an escaping convention rather than on any data loss. Learned
+		// by writing the raw comparison first and watching it fail on
+		// "/usr/bin/g++".
+		std::string strFlat = strAfter;
+		strFlat.erase(std::remove(strFlat.begin(), strFlat.end(), '\\'), strFlat.end());
+
+		const char* aPreserved[] = { "CompilerPathCPP", "/usr/bin/g++",
+			"LanguageSpellCheck", "en-GB", "FilePreviewSizeLimit",
+			"SomeFutureSetting", "nested", "AnotherRoot" };
+		for (size_t i = 0; i < sizeof(aPreserved) / sizeof(aPreserved[0]); ++i)
+		{
+			Check(strFlat.find(aPreserved[i]) != std::string::npos,
+				std::string("saving preserves an unknown key: ") + aPreserved[i]);
+		}
+
+		// And what we did change round-trips.
+		Core::CAppSettings reread;
+		Check(reread.LoadFromFile(strPath, strError), "the saved file re-loads");
+		Check(!reread.EnableUrlHighlight(), "the changed bool round-trips");
+		Check(reread.LongLineColumnLimit() == 42, "the changed int round-trips");
+		Check(reread.DrawCaretLineFrame(), "an untouched setting keeps its value");
+
+		// Saving twice must produce identical bytes. Without that the two
+		// frontends would rewrite each other's file on every save, and a shared
+		// settings file would churn forever.
+		Core::CAppSettings again;
+		Check(again.LoadFromFile(strPath, strError), "re-load for the idempotence check");
+		Check(again.SaveToFile(strPath, strError), "second save");
+		std::ifstream twice(strPath.c_str(), std::ios::binary);
+		const std::string strTwice((std::istreambuf_iterator<char>(twice)),
+			std::istreambuf_iterator<char>());
+		twice.close();
+		Check(strTwice == strAfter, "saving twice is byte-identical");
+
+		// An unparseable file is REFUSED, not overwritten: far more likely to be
+		// someone's settings plus a typo than something safe to replace.
+		{
+			std::ofstream broken(strPath.c_str(), std::ios::binary);
+			broken << "{ this is not json";
+		}
+		Core::CAppSettings refuses;
+		Check(!refuses.SaveToFile(strPath, strError),
+			"an unparseable settings file is not overwritten");
+		std::ifstream check(strPath.c_str(), std::ios::binary);
+		const std::string strStill((std::istreambuf_iterator<char>(check)),
+			std::istreambuf_iterator<char>());
+		Check(strStill == "{ this is not json", "and its contents survive");
+		check.close();
+		std::remove(strPath.c_str());
 	}
 
 	std::cout << "\n" << (g_Checks - g_Failures) << "/" << g_Checks << " checks passed\n";

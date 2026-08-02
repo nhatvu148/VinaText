@@ -46,6 +46,15 @@ public:
 	// theme switch.
 	void ApplyTheme(EEditorTheme theme);
 
+	// Re-reads every setting that is not a theme colour and applies it. Called
+	// from the constructor and again whenever Preferences changes something.
+	//
+	// It exists because these calls WERE in the constructor, where they ran
+	// once and could never be re-applied - a changed setting reached the file
+	// and the running editor never heard about it. Found by a self-test check
+	// asserting that an applied change reaches an open document, which failed.
+	void ApplySettings();
+
 	// View toggles, mirroring CEditorCtrl::EnableTextWrappingMode and
 	// EnableLongLineChecker. Both start off, as they do on Windows.
 	void SetWordWrap(bool bEnable);

@@ -46,6 +46,33 @@ namespace Core
 		bool LoadFromFile(const std::string& strPath, std::string& strError);
 		bool LoadFromString(const std::string& strJson, std::string& strError);
 
+		// Writes back ONLY the keys this class owns, leaving every other key in
+		// the file exactly as it was.
+		//
+		// THAT PRESERVATION IS THE WHOLE POINT. CAppSettings::SaveSettingData
+		// writes 84 keys; this class understands 10. A save that serialised
+		// just its own would silently discard the other 74 - compiler paths,
+		// the recent-file list, the spell-check language - the first time a
+		// macOS user changed a checkbox in a file their Windows install shares.
+		//
+		// Fails if the containing directory does not exist: creating it is a
+		// platform question and core/ takes no platform dependency, so the
+		// frontend does that (ui-qt/ uses QDir::mkpath) before calling.
+		bool SaveToFile(const std::string& strPath, std::string& strError) const;
+
+		// Setters, for a settings UI. Only the keys above are settable, for the
+		// same reason only they are read.
+		void SetEnableUrlHighlight(bool b) { m_bEnableUrlHighlight = b; }
+		void SetEnableAutoComplete(bool b) { m_bEnableAutoComplete = b; }
+		void SetAutoCompleteIgnoreCase(bool b) { m_bAutoCompleteIgnoreCase = b; }
+		void SetAutoCompleteIgnoreNumbers(bool b) { m_bAutoCompleteIgnoreNumbers = b; }
+		void SetDrawCaretLineFrame(bool b) { m_bDrawCaretLineFrame = b; }
+		void SetDrawFoldingLineUnderLineStyle(bool b) { m_bDrawFoldingLineUnderLineStyle = b; }
+		void SetEnableHighlightFolder(bool b) { m_bEnableHightLightFolder = b; }
+		void SetUseFolderMarginClassic(bool b) { m_bUseFolderMarginClassic = b; }
+		void SetFolderMarginStyle(int n) { m_nFolderMarginStyle = n; }
+		void SetLongLineColumnLimit(int n) { m_nLongLineMaximum = n; }
+
 		// True once a settings file has actually been read, so a frontend can
 		// tell "the user chose the defaults" from "there was nothing to read".
 		bool WasLoaded() const { return m_bLoaded; }
