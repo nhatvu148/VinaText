@@ -93,6 +93,9 @@ public:
 	// plus the words already in the document, both filtered by prefix. Public so
 	// the self-test can check the list without synthesising a key press.
 	QStringList GetAutoCompleteList(const QString& strPrefix) const;
+	// For the self-test: drives OnCharAdded without synthesising a key event,
+	// which offscreen cannot deliver to Scintilla reliably.
+	void OnCharAddedForTest(int nChar) { OnCharAdded(nChar); }
 
 	sptr_t Send(unsigned int iMessage, uptr_t wParam = 0, sptr_t lParam = 0) const
 	{

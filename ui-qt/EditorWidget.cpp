@@ -43,18 +43,10 @@ namespace
 	const int INDIC_TAGATTR = 11;
 	const int INDIC_URL_HOTSPOT = 14;
 
-	// AppSettingMgr.m_bEnableUrlHighlight, which ships TRUE (src/AppSettings.h:69
-	// and AppSettings.cpp:14). Settings are AppSettings, the last file in the
-	// Phase 2 backlog at 783 call sites, so the shipped default is transcribed
-	// here rather than read - the same as every other setting in this file.
-	const bool ENABLE_URL_HIGHLIGHT = true;
-
-	// The autocomplete settings, all shipped defaults (src/AppSettings.h:81-84
-	// and AppSettings.cpp:24-27). Same reasoning as ENABLE_URL_HIGHLIGHT.
-	const bool ENABLE_AUTOCOMPLETE = true;
-	const bool AUTOCOMPLETE_IGNORE_CASE = true;
-	const bool AUTOCOMPLETE_IGNORE_NUMBERS = true;
-	// src/EditorCommonDef.h:30-31.
+	// src/EditorCommonDef.h:30-31. These two are compile-time constants of the
+	// wire format, not settings - they say how SCI_AUTOCSHOW's list string is
+	// punctuated - so they stay here while the settings above them moved to
+	// core/AppSettings.
 	const char AUTOCOMPLETE_TYPE_SEPARATOR = '?';
 	const char AUTOCOMPLETE_WORD_SEPARATOR = '$';
 	// AppUtils::IsCStringAllDigits, which GetMatchedWordsOnFile gates on.
@@ -127,8 +119,7 @@ CEditorWidget::CEditorWidget(const CEditorData& data, QWidget* pParent)
 		| SC_AUTOMATICFOLD_CHANGE);
 	Send(SCI_SETCARETLINEVISIBLE, 1);
 	Send(SCI_SETCARETLINEVISIBLEALWAYS, 1);
-	// AppSettings ships m_bDrawCaretLineFrame TRUE (src/AppSettings.h:76).
-	Send(SCI_SETCARETLINEFRAME, 1);
+	Send(SCI_SETCARETLINEFRAME, m_Data.GetSettings().DrawCaretLineFrame() ? 1 : 0);
 
 	// The horizontal scrollbar sizes itself to the widest line seen, and the view
 	// may scroll past the last line - both as src/Editor.cpp:380-384.
@@ -144,7 +135,10 @@ CEditorWidget::CEditorWidget(const CEditorData& data, QWidget* pParent)
 	// The long-line marker's column is set here and the MODE only by the toggle,
 	// so it is invisible until asked for - the same two-step the MFC uses
 	// (src/Editor.cpp:417 sets the column, :3711 turns the mode on).
-	Send(SCI_SETEDGECOLUMN, 80);		// AppSettingMgr.m_nLongLineMaximum
+	// Stored as "LongLineColumnLimitation", NOT "LongLineMaximum" - the key is
+	// not the member name. See core/AppSettings.h.
+	Send(SCI_SETEDGECOLUMN,
+		static_cast<uptr_t>(m_Data.GetSettings().LongLineColumnLimit()));
 	Send(SCI_SETEDGEMODE, EDGE_NONE);
 
 	// A hand cursor over every margin (src/Editor.cpp:357-359).
@@ -171,7 +165,7 @@ CEditorWidget::CEditorWidget(const CEditorData& data, QWidget* pParent)
 
 	// Autocomplete options (src/Editor.cpp:361-368). The list is built and shown
 	// by OnCharAdded; these only describe how Scintilla should read and size it.
-	if (AUTOCOMPLETE_IGNORE_CASE)
+	if (m_Data.GetSettings().AutoCompleteIgnoreCase())
 	{
 		Send(SCI_AUTOCSETIGNORECASE, 1);
 	}
@@ -179,15 +173,16 @@ CEditorWidget::CEditorWidget(const CEditorData& data, QWidget* pParent)
 	Send(SCI_AUTOCSETTYPESEPARATOR, static_cast<uptr_t>(AUTOCOMPLETE_TYPE_SEPARATOR));
 	Send(SCI_AUTOCSETMAXWIDTH, 100);
 
-	// The fold-marker highlight, which AppSettings ships TRUE
-	// (src/AppSettings.h:77) and src/Editor.cpp:341-348 applies. Missed by the
-	// folding change - see doc/PORTING.md 6j.
-	//
-	// Its sibling there, SCI_SETFOLDFLAGS, is deliberately still absent: the
-	// original only calls it when m_bDrawFoldingLineUnderLineStyle is TRUE and
-	// AppSettings ships it FALSE (src/AppSettings.cpp:19), so not calling it IS
-	// the shipped behaviour.
-	Send(SCI_MARKERENABLEHIGHLIGHT, 1);
+	// The fold-marker highlight (src/Editor.cpp:341-348), and its sibling
+	// SCI_SETFOLDFLAGS (:187-190) which the original calls only when
+	// m_bDrawFoldingLineUnderLineStyle is set. Both now read the real setting
+	// rather than its shipped default.
+	Send(SCI_MARKERENABLEHIGHLIGHT,
+		m_Data.GetSettings().EnableHighlightFolder() ? 1 : 0);
+	if (m_Data.GetSettings().DrawFoldingLineUnderLineStyle())
+	{
+		Send(SCI_SETFOLDFLAGS, SC_FOLDFLAG_LINEAFTER_CONTRACTED, 0);
+	}
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -227,7 +222,7 @@ QStringList CEditorWidget::GetAutoCompleteList(const QString& strPrefix) const
 	}
 
 	// AppSettings ships m_bAutoCompleteIgnoreCase TRUE (src/AppSettings.h:84).
-	const Qt::CaseSensitivity sensitivity = AUTOCOMPLETE_IGNORE_CASE
+	const Qt::CaseSensitivity sensitivity = m_Data.GetSettings().AutoCompleteIgnoreCase()
 		? Qt::CaseInsensitive : Qt::CaseSensitive;
 
 	// 1. The language's keywords, which core/ already carries - the same blob
@@ -251,7 +246,7 @@ QStringList CEditorWidget::GetAutoCompleteList(const QString& strPrefix) const
 	//    POSIX regex over the whole buffer, anchored at a word start, and keeps
 	//    each distinct match. The pattern is EDITOR_REGEX_AUTO_COMPLETE_PATTERN
 	//    from src/MacroDef.h:83, verbatim.
-	if (!(AUTOCOMPLETE_IGNORE_NUMBERS && IsAllDigits(strPrefix)))
+	if (!(m_Data.GetSettings().AutoCompleteIgnoreNumbers() && IsAllDigits(strPrefix)))
 	{
 		const QByteArray pattern = ("\\<" + strPrefix
 			+ QStringLiteral("[^ \\t\\n\\r.,;:\"(){}=<>'+!\\[\\]]+")).toUtf8();
@@ -259,7 +254,7 @@ QStringList CEditorWidget::GetAutoCompleteList(const QString& strPrefix) const
 		// The MFC drops SCFIND_MATCHCASE when ignore-case is on and keeps the
 		// other three flags either way.
 		int nFlags = SCFIND_WORDSTART | SCFIND_REGEXP | SCFIND_POSIX;
-		if (!AUTOCOMPLETE_IGNORE_CASE)
+		if (!m_Data.GetSettings().AutoCompleteIgnoreCase())
 		{
 			nFlags |= SCFIND_MATCHCASE;
 		}
@@ -312,7 +307,7 @@ void CEditorWidget::OnCharAdded(int nChar)
 	// underscore, autocomplete enabled, and not the large-file mode ui-qt/ does
 	// not have. isalpha() is the C library's and therefore locale-dependent; this
 	// is the ASCII range it means here, spelled out rather than inherited.
-	if (!ENABLE_AUTOCOMPLETE)
+	if (!m_Data.GetSettings().EnableAutoComplete())
 	{
 		return;
 	}
@@ -383,7 +378,7 @@ void CEditorWidget::RenderUrlHotspots()
 	// WideCharToMultiByte to get a document offset. core/UrlScanner works on the
 	// UTF-8 bytes Scintilla already indexes; see the note in core/UrlScanner.h
 	// for why that finds the same URLs.
-	if (!ENABLE_URL_HIGHLIGHT)
+	if (!m_Data.GetSettings().EnableUrlHighlight())
 	{
 		return;
 	}

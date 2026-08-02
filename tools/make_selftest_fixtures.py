@@ -79,6 +79,26 @@ def main():
             "    <data><![CDATA[<item>not a tag</item>]]></data>\n"
             "</root>\n").encode("utf-8"),
 
+        # A settings file in the shape CAppSettings::SaveSettingData writes,
+        # with every value DIFFERENT from its shipped default. The self-test is
+        # run twice in CI - once without it and once with - because a setting
+        # only proves it is read when reading it changes something, and half
+        # these code paths are unreachable at their defaults.
+        "settings.json": (
+            '{\n'
+            '  "VinaText Setting": {\n'
+            '    "EnableUrlHighlight": false,\n'
+            '    "EnableAutoComplete": false,\n'
+            '    "AutoCompleteIgnoreCase": false,\n'
+            '    "DrawCaretLineFrame": false,\n'
+            '    "EnableHightLightFolder": false,\n'
+            '    "DrawFoldingLineUnderLineStyle": true,\n'
+            '    "UseFolderMarginClassic": true,\n'
+            '    "FolderMarginStyle": 1,\n'
+            '    "LongLineColumnLimitation": 42\n'
+            '  }\n'
+            '}\n').encode("utf-8"),
+
         # URL hotspots. Each line is one rule from src/StringHelper.cpp's
         # scanner: the five supported schemes, a scheme that is not supported, a
         # scheme that is not at a delimiter, the trailing punctuation that is
