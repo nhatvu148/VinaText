@@ -69,6 +69,23 @@ public:
 	int GetCaretLine() const;			// 1-based, as shown to the user
 	int GetCaretColumn() const;			// 1-based
 	int GetSelectedCharacterCount() const;
+	int GetLineCount() const;
+	int GetCaretPosition() const;		// byte offset, as SCI_GETCURRENTPOS gives it
+
+	// Navigation - the four GO buttons of src/GotoDlg.cpp, minus the one that is
+	// not ported. Transcribes CEditorCtrl::GotoLine (src/Editor.cpp:2020) and
+	// GotoPosition (:1145), whose asymmetry is deliberate and preserved: see the
+	// .cpp. GotoLine takes the 1-based number the user types.
+	void GotoLine(int nLine);
+	void GotoPosition(int nPosition);
+	// SCI_PARAUP / SCI_PARADOWN, from the Goto tab's two paragraph buttons. Also
+	// reachable from the MFC's Edit menu (src/EditorView.cpp:3185-3193), which is
+	// the shape they are ported in here.
+	void GotoPreviousParagraph();
+	void GotoNextParagraph();
+	// The tab's "Goto Caret >> |" button: scroll the view back to the caret,
+	// without moving it. CEditorCtrl::SetLineCenterDisplay(GetCurrentLine()).
+	void ScrollToCaret();
 
 	// Find. Searches from the caret, wrapping once; leaves the match selected and
 	// visible. Returns false when the pattern is not in the document at all.
@@ -136,6 +153,15 @@ private:
 	// gates are CEditorView's (src/EditorView.cpp:6183-6190).
 	// Transcribes CEditorCtrl::DoXMLHTMLTagsHightlight.
 	void UpdateTagMatch();
+
+	// Both goto paths expand every fold first: a line inside a collapsed fold
+	// cannot hold a caret, so jumping to it without expanding lands elsewhere.
+	// CEditorCtrl::ExpandAllFoldings (src/Editor.cpp:3820).
+	void ExpandAllFoldings();
+	// Puts nLine roughly in the middle of the viewport. Transcribes
+	// CEditorCtrl::SetLineCenterDisplay (:2034) and SetFirstVisibleLine (:1077).
+	void SetLineCenterDisplay(int nLine);
+	void SetFirstVisibleLine(int nLine);
 
 	void ApplyEditorStyles(const Core::CEditorTheme& theme);
 	void ApplyLanguageStyles(const Core::CEditorTheme& theme);

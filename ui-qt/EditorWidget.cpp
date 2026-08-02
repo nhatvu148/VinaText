@@ -1161,6 +1161,110 @@ int CEditorWidget::GetSelectedCharacterCount() const
 	return static_cast<int>(Send(SCI_COUNTCHARACTERS, static_cast<uptr_t>(nStart), nEnd));
 }
 
+int CEditorWidget::GetLineCount() const
+{
+	return static_cast<int>(Send(SCI_GETLINECOUNT));
+}
+
+int CEditorWidget::GetCaretPosition() const
+{
+	return static_cast<int>(Send(SCI_GETCURRENTPOS));
+}
+
+//////////////////////////////////////////////////////////////////////////
+// Navigation
+//
+// Where src/GotoDlg.cpp's GO buttons end up. The dialog itself does not survive
+// the port - see doc/PORTING.md 6l - but these are its behaviour, transcribed.
+
+void CEditorWidget::ExpandAllFoldings()
+{
+	Send(SCI_FOLDALL, SC_FOLDACTION_EXPAND);
+}
+
+void CEditorWidget::SetFirstVisibleLine(int nLine)
+{
+	if (nLine < 0)
+	{
+		return;
+	}
+	// Through the VISIBLE line space, not the document one. With folds collapsed
+	// or lines wrapped the two differ, and SCI_SETFIRSTVISIBLELINE speaks the
+	// visible space - handing it a document number would scroll to the wrong
+	// place by however many lines are hidden above it.
+	const sptr_t nDisplayed = Send(SCI_GETFIRSTVISIBLELINE);
+	const sptr_t nDocLine = Send(SCI_DOCLINEFROMVISIBLE, static_cast<uptr_t>(nDisplayed));
+	if (nDocLine != nLine)
+	{
+		Send(SCI_SETFIRSTVISIBLELINE,
+			static_cast<uptr_t>(Send(SCI_VISIBLEFROMDOCLINE, static_cast<uptr_t>(nLine))));
+	}
+}
+
+void CEditorWidget::SetLineCenterDisplay(int nLine)
+{
+	if (nLine < 0)
+	{
+		return;
+	}
+	// The original's arithmetic, kept: two lines of margin, then half a screen
+	// above the target, clamped at the top of the document.
+	const int nLinesOnScreen = static_cast<int>(Send(SCI_LINESONSCREEN)) - 2;
+	int nStart = nLine - (nLinesOnScreen / 2);
+	if (nStart < 0)
+	{
+		nStart = 0;
+	}
+	SetFirstVisibleLine(nStart);
+}
+
+void CEditorWidget::GotoLine(int nLine)
+{
+	// The guard is < 0 and not < 1, which is the original's, and it is load
+	// bearing rather than sloppy: line 0 is what an EMPTY field gives (the MFC
+	// runs the text through _ttoi, which returns 0 for ""), so it reaches
+	// SCI_GOTOLINE with -1 and Scintilla clamps that to the first line. Pressing
+	// GO on an empty box goes to the top of the document, on both frontends.
+	if (nLine < 0)
+	{
+		return;
+	}
+	ExpandAllFoldings();
+	Send(SCI_GOTOLINE, static_cast<uptr_t>(nLine - 1));
+	// GetCaretLine() is 1-based and SetLineCenterDisplay indexes document lines
+	// from 0, so the view settles one line off centre. That is the original's
+	// behaviour (src/Editor.cpp:2026 passes GetCurrentLine() straight in) and it
+	// is reproduced rather than corrected, like the unsorted autocomplete list in
+	// doc/PORTING.md 6j: a one-line difference in scroll position is not worth
+	// the two frontends scrolling differently.
+	SetLineCenterDisplay(GetCaretLine());
+}
+
+void CEditorWidget::GotoPosition(int nPosition)
+{
+	// NO guard and NO centring, unlike GotoLine. Both asymmetries are the
+	// original's (src/Editor.cpp:1145): an out-of-range offset is Scintilla's to
+	// clamp, and the view is left to SCI_GOTOPOS's own scrolling. Adding either
+	// here would make the two frontends behave differently for the same input.
+	ExpandAllFoldings();
+	Send(SCI_GOTOPOS, static_cast<uptr_t>(nPosition));
+}
+
+void CEditorWidget::GotoPreviousParagraph()
+{
+	Send(SCI_PARAUP);
+}
+
+void CEditorWidget::GotoNextParagraph()
+{
+	Send(SCI_PARADOWN);
+}
+
+void CEditorWidget::ScrollToCaret()
+{
+	SetLineCenterDisplay(GetCaretLine());
+}
+
 //////////////////////////////////////////////////////////////////////////
 // Find
 
