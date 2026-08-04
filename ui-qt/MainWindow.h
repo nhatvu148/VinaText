@@ -18,6 +18,7 @@
 #pragma once
 
 #include "EditorData.h"
+#include "EncodingDialog.h"
 
 #include <QColor>
 #include <QMainWindow>
@@ -27,6 +28,7 @@ class CMessagePane;
 class CFindBar;
 class CGotoBar;
 class QLabel;
+class QMenu;
 class QTabWidget;
 
 class CMainWindow final : public QMainWindow
@@ -67,6 +69,12 @@ private:
 	// The About box, which carries D3's LGPLv3 attribution.
 	void OnAbout();
 	void OnPreferences();
+
+	// Encoding. Two operations, never one - see CEditorWidget's encoding
+	// section and doc/PORTING.md 6m.
+	void BuildEncodingMenu(QMenu* pMenu, CEncodingDialog::EMode mode);
+	void OnChooseEncoding(CEncodingDialog::EMode mode);
+	void ApplyEncoding(CEncodingDialog::EMode mode, const QString& strEncoding);
 	// Re-applies the current settings to every open editor.
 	void ReapplySettings();
 

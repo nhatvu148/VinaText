@@ -11,6 +11,7 @@
 #include "EditorWidget.h"
 #include "FindBar.h"
 #include "GotoBar.h"
+#include "EncodingDialog.h"
 #include "AboutDialog.h"
 #include "PreferencesDialog.h"
 #include "MessagePane.h"
@@ -37,6 +38,8 @@
 #include <QTabWidget>
 #include <QTemporaryDir>
 #include <QVBoxLayout>
+#include <QSet>
+#include <QTextCodec>
 
 #include <limits>
 #include <QWidget>
@@ -151,9 +154,22 @@ void CMainWindow::BuildMenus()
 	QMenu* pFile = menuBar()->addMenu(tr("&File"));
 	pFile->addAction(tr("&New"), QKeySequence::New, this, &CMainWindow::OnNew);
 	pFile->addAction(tr("&Open..."), QKeySequence::Open, this, &CMainWindow::OnOpen);
+
+	// The two encoding submenus, in the two places src/VinaText.rc:306-331 puts
+	// them: reopen right under Open, save-as under the save group. Same six
+	// fixed encodings, same separator, same "Code Page Table..." at the foot.
+	// The MFC's own File menu is the layout being reproduced, not a convention.
+	//
+	// They are SEPARATE MENUS and not one, because they are separate
+	// operations - see CEditorWidget's encoding section.
+	BuildEncodingMenu(pFile->addMenu(tr("&Reopen With Encoding")),
+		CEncodingDialog::EMode::Reinterpret);
+
 	pFile->addSeparator();
 	pFile->addAction(tr("&Save"), QKeySequence::Save, this, [this] { OnSave(); });
 	pFile->addAction(tr("Save &As..."), QKeySequence::SaveAs, this, [this] { OnSaveAs(); });
+	BuildEncodingMenu(pFile->addMenu(tr("Save As &Encoding")),
+		CEncodingDialog::EMode::Convert);
 	pFile->addSeparator();
 	pFile->addAction(tr("&Close Tab"), QKeySequence::Close, this, [this]
 	{
@@ -322,6 +338,110 @@ void CMainWindow::BuildMenus()
 
 	QMenu* pHelp = menuBar()->addMenu(tr("&Help"));
 	pHelp->addAction(tr("&About VinaText"), this, &CMainWindow::OnAbout);
+}
+
+void CMainWindow::BuildEncodingMenu(QMenu* pMenu, CEncodingDialog::EMode mode)
+{
+	// The MFC's six, with its own labels (src/VinaText.rc:308-313). "ANSI"
+	// means the system codepage there; Qt spells that encoding "System", so
+	// the label is the MFC's and the value is Qt's.
+	const struct { const char* _Label; const char* _Encoding; } fixed[] = {
+		{ "ANSI",		"System"	},
+		{ "UTF-8",		"UTF-8"		},
+		{ "UTF-16-LE",	"UTF-16LE"	},
+		{ "UTF-16-BE",	"UTF-16BE"	},
+		{ "UTF-32-LE",	"UTF-32LE"	},
+		{ "UTF-32-BE",	"UTF-32BE"	},
+	};
+	for (const auto& entry : fixed)
+	{
+		const QString strEncoding = QString::fromLatin1(entry._Encoding);
+		pMenu->addAction(tr(entry._Label), this, [this, mode, strEncoding]
+		{
+			ApplyEncoding(mode, strEncoding);
+		});
+	}
+	pMenu->addSeparator();
+	pMenu->addAction(tr("Code Page Table..."), this, [this, mode]
+	{
+		OnChooseEncoding(mode);
+	});
+}
+
+void CMainWindow::OnChooseEncoding(CEncodingDialog::EMode mode)
+{
+	CEditorWidget* pEditor = GetCurrentEditor();
+	if (pEditor == nullptr)
+	{
+		return;
+	}
+	CEncodingDialog dialog(mode, pEditor->GetEncodingName(), this);
+	if (dialog.exec() != QDialog::Accepted)
+	{
+		return;
+	}
+	const QString strChosen = dialog.SelectedEncoding();
+	if (!strChosen.isEmpty())
+	{
+		ApplyEncoding(mode, strChosen);
+	}
+}
+
+void CMainWindow::ApplyEncoding(CEncodingDialog::EMode mode, const QString& strEncoding)
+{
+	CEditorWidget* pEditor = GetCurrentEditor();
+	if (pEditor == nullptr)
+	{
+		return;
+	}
+
+	if (mode == CEncodingDialog::EMode::Reinterpret)
+	{
+		// THE DESTRUCTIVE HALF. Re-reading from disk throws away whatever is
+		// unsaved, so it asks first - and defaults to Cancel, because the
+		// answer that loses work should never be the one a stray Return picks.
+		if (pEditor->IsModified())
+		{
+			const QMessageBox::StandardButton answer = QMessageBox::warning(this,
+				tr("Reopen with encoding"),
+				tr("%1 has unsaved changes.\n\nRe-reading it from disk as %2 will "
+					"discard them.").arg(pEditor->GetDisplayName(), strEncoding),
+				QMessageBox::Discard | QMessageBox::Cancel, QMessageBox::Cancel);
+			if (answer != QMessageBox::Discard)
+			{
+				return;
+			}
+		}
+		QString strError;
+		if (!pEditor->ReloadWithEncoding(strEncoding, strError))
+		{
+			LogMessage(tr("Reopen failed - %1").arg(strError), QColor(Qt::red));
+			QMessageBox::warning(this, tr("Reopen with encoding"), strError);
+			return;
+		}
+		LogMessage(tr("Reopened %1 as %2").arg(pEditor->GetDisplayName(), strEncoding));
+	}
+	else
+	{
+		if (!pEditor->SetSaveEncoding(strEncoding))
+		{
+			const QString strError =
+				tr("%1 is not an encoding this build knows.").arg(strEncoding);
+			LogMessage(strError, QColor(Qt::red));
+			QMessageBox::warning(this, tr("Save as encoding"), strError);
+			return;
+		}
+		// Set, then save - the order CEditorDoc::OnFileSaveAsEncoding uses.
+		// If the save is cancelled or fails the document keeps the new encoding,
+		// which is also what the MFC does: the choice outlives one save.
+		if (OnSave())
+		{
+			LogMessage(tr("Saved %1 as %2")
+				.arg(pEditor->GetDisplayName(), pEditor->GetEncodingName()));
+		}
+	}
+	UpdateStatusBar();
+	UpdateTabLabel(pEditor);
 }
 
 void CMainWindow::OnPreferences()
@@ -2406,6 +2526,332 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 
 			pScratch->Send(SCI_SETSAVEPOINT);
 			OnCloseTab(m_pTabs->indexOf(pScratch));
+		}
+	}
+
+	//----------------------------------------------------------------------
+	// Encoding - src/CodePageMFCDlg.cpp. See doc/PORTING.md 6m.
+	//
+	// The point of every check here is that REINTERPRET and CONVERT are
+	// different operations. Confusing them writes a file in an encoding the
+	// user did not ask for, silently, which is the failure mode this port
+	// spends its round-trip checks on.
+	//----------------------------------------------------------------------
+	{
+		const QStringList encodings = CEditorWidget::AvailableEncodings();
+		Require(encodings.size() > 100,
+			QStringLiteral("encoding: the picker has %1 encodings to offer")
+				.arg(encodings.size()));
+		Require(encodings.contains(QStringLiteral("UTF-8")),
+			QStringLiteral("encoding: UTF-8 is offered"));
+		// The reason the compatibility module is used at all: QStringConverter
+		// has no Vietnamese codepage, and this is a Vietnamese editor.
+		Require(encodings.contains(QStringLiteral("windows-1258")),
+			QStringLiteral("encoding: windows-1258 is offered"));
+		Require(encodings.size() == QSet<QString>(encodings.begin(), encodings.end()).size(),
+			QStringLiteral("encoding: the list has no duplicates"));
+
+		// QFile::open is [[nodiscard]], and a read that silently failed would
+		// make every byte comparison below compare two empty arrays and pass.
+		auto ReadAll = [](const QString& strFile)
+		{
+			QFile f(strFile);
+			if (!f.open(QIODevice::ReadOnly))
+			{
+				return QByteArray();
+			}
+			return f.readAll();
+		};
+
+		QTemporaryDir scratch;
+		Require(scratch.isValid(), QStringLiteral("encoding: got a scratch directory"));
+		if (scratch.isValid())
+		{
+			const QString strPath = scratch.filePath(QStringLiteral("enc.txt"));
+			const QString strText = QStringLiteral("cafeé naïve\n");
+
+			// A UTF-8 file to start from.
+			{
+				QFile seed(strPath);
+				Require(seed.open(QIODevice::WriteOnly),
+					QStringLiteral("encoding: wrote the seed file"));
+				const QByteArray seedBytes = strText.toUtf8();
+				Require(seed.write(seedBytes) == seedBytes.size(),
+					QStringLiteral("encoding: the whole seed file was written"));
+				seed.close();
+			}
+			Require(OpenFile(strPath), QStringLiteral("encoding: opened the seed file"));
+			CEditorWidget* pEnc = GetCurrentEditor();
+			Require(pEnc != nullptr, QStringLiteral("encoding: the seed file is current"));
+			if (pEnc != nullptr)
+			{
+				const QByteArray utf8Bytes = ReadAll(strPath);
+				Require(!utf8Bytes.isEmpty(),
+					QStringLiteral("encoding: the seed file has bytes to compare against"));
+
+				// A name BOTH libraries know must resolve to the BUILTIN path,
+				// so the encodings with proven round-trips keep them.
+				Require(pEnc->SetSaveEncoding(QStringLiteral("UTF-8")),
+					QStringLiteral("encoding: UTF-8 is accepted"));
+				Require(pEnc->GetEncodingName() == QStringLiteral("UTF-8"),
+					QStringLiteral("encoding: and is reported as UTF-8, got '%1'")
+						.arg(pEnc->GetEncodingName()));
+
+				// An unknown name is refused and changes NOTHING.
+				const QString strBefore = pEnc->GetEncodingName();
+				Require(!pEnc->SetSaveEncoding(QStringLiteral("not-an-encoding")),
+					QStringLiteral("encoding: an unknown name is refused"));
+				Require(pEnc->GetEncodingName() == strBefore,
+					QStringLiteral("encoding: and leaves the encoding alone, got '%1'")
+						.arg(pEnc->GetEncodingName()));
+
+				//------------------------------------------------------
+				// CONVERT writes. The bytes change; the text does not.
+				//------------------------------------------------------
+				Require(pEnc->SetSaveEncoding(QStringLiteral("UTF-16LE")),
+					QStringLiteral("encoding: UTF-16LE is accepted"));
+				QString strSaveError;
+				Require(pEnc->SaveFile(strPath, strSaveError),
+					QStringLiteral("encoding: saved as UTF-16LE (%1)").arg(strSaveError));
+				const QByteArray after = ReadAll(strPath);
+				Require(after != utf8Bytes,
+					QStringLiteral("encoding: converting CHANGED the bytes on disk"));
+				Require(QStringDecoder(QStringConverter::Utf16LE).decode(after) == strText,
+					QStringLiteral("encoding: and the text survived the conversion"));
+
+				//------------------------------------------------------
+				// REINTERPRET does not write. The text changes; the bytes
+				// do not. This is the check that fails if the two
+				// operations are ever wired to the same code path.
+				//------------------------------------------------------
+				const QByteArray beforeReload = after;
+				QString strReloadError;
+				Require(pEnc->ReloadWithEncoding(QStringLiteral("ISO-8859-1"), strReloadError),
+					QStringLiteral("encoding: reinterpreted as Latin-1 (%1)")
+						.arg(strReloadError));
+				const QByteArray afterReload = ReadAll(strPath);
+				Require(afterReload == beforeReload,
+					QStringLiteral("encoding: reinterpreting wrote NOTHING to disk"));
+				Require(!pEnc->IsModified(),
+					QStringLiteral("encoding: and leaves the document clean, because the "
+						"file still matches what is on screen"));
+
+				// Reading UTF-16 bytes as Latin-1 must actually have changed
+				// what is on screen - otherwise the check above is vacuous.
+				const sptr_t nLen = pEnc->Send(SCI_GETLENGTH);
+				QByteArray shown(static_cast<int>(nLen) + 1, '\0');
+				pEnc->Send(SCI_GETTEXT, static_cast<uptr_t>(nLen) + 1,
+					reinterpret_cast<sptr_t>(shown.data()));
+				shown.truncate(static_cast<int>(nLen));
+				Require(QString::fromUtf8(shown) != strText,
+					QStringLiteral("encoding: reinterpreting DID change the text, so the "
+						"no-write check above means something"));
+
+				//------------------------------------------------------
+				// WHICH PATH a name resolves to, tested through the BOM
+				// rather than through the name.
+				//
+				// GetEncodingName() returns "UTF-8" whichever library handled
+				// it, so a check on the name cannot tell the two apart - the
+				// first version of this block asserted exactly that and a
+				// mutation forcing every name onto the codec path went
+				// UNCAUGHT. The observable difference is the byte-order mark:
+				// the codec path forces m_bHasBom false, so a UTF-8 file with
+				// a BOM would silently lose it on save.
+				//------------------------------------------------------
+				{
+					const QString strBomPath = scratch.filePath(QStringLiteral("bom.txt"));
+					QFile bom(strBomPath);
+					Require(bom.open(QIODevice::WriteOnly),
+						QStringLiteral("encoding: wrote a BOM'd seed file"));
+					bom.write("\xEF\xBB\xBF");
+					bom.write(strText.toUtf8());
+					bom.close();
+
+					Require(OpenFile(strBomPath),
+						QStringLiteral("encoding: opened the BOM'd file"));
+					CEditorWidget* pBom = GetCurrentEditor();
+					Require(pBom != nullptr && pBom->GetEncodingLabel().contains(
+							QStringLiteral("BOM")),
+						QStringLiteral("encoding: it is recognised as carrying a BOM, got '%1'")
+							.arg(pBom == nullptr ? QString() : pBom->GetEncodingLabel()));
+					if (pBom != nullptr)
+					{
+						// UTF-8 must go to the BUILTIN path, which is the only
+						// one that can write a BOM back.
+						Require(pBom->SetSaveEncoding(QStringLiteral("UTF-8")),
+							QStringLiteral("encoding: UTF-8 accepted on the BOM'd file"));
+						QString strErr;
+						Require(pBom->SaveFile(strBomPath, strErr),
+							QStringLiteral("encoding: saved it (%1)").arg(strErr));
+						Require(ReadAll(strBomPath).startsWith("\xEF\xBB\xBF"),
+							QStringLiteral("encoding: THE ROUTING - choosing UTF-8 keeps the "
+								"BOM, so the name went to QStringConverter and not to a codec"));
+
+						// And switching to a legacy codepage drops it, which is
+						// the invariant stated on m_CodecName.
+						Require(pBom->SetSaveEncoding(QStringLiteral("windows-1258")),
+							QStringLiteral("encoding: windows-1258 accepted on a BOM'd file"));
+						Require(pBom->SaveFile(strBomPath, strErr),
+							QStringLiteral("encoding: saved as windows-1258 (%1)").arg(strErr));
+						Require(!ReadAll(strBomPath).startsWith("\xEF\xBB\xBF"),
+							QStringLiteral("encoding: THE INVARIANT - a codepage save drops "
+								"the byte-order mark rather than writing a UTF-8 one"));
+
+						// AND COMING BACK RESTORES IT. The mark belongs to the
+						// file as it was read, not to the last encoding chosen,
+						// so a visit to a codepage must not destroy it for good.
+						// The first version cleared m_bHasBom when a codec was
+						// picked, which did exactly that - mutation testing
+						// showed the line was untested AND wrong.
+						Require(pBom->SetSaveEncoding(QStringLiteral("UTF-8")),
+							QStringLiteral("encoding: back to UTF-8 from a codepage"));
+						Require(pBom->SaveFile(strBomPath, strErr),
+							QStringLiteral("encoding: saved again (%1)").arg(strErr));
+						Require(ReadAll(strBomPath).startsWith("\xEF\xBB\xBF"),
+							QStringLiteral("encoding: and the BOM came back, because a detour "
+								"through a codepage must not destroy it permanently"));
+
+						pBom->Send(SCI_SETSAVEPOINT);
+						OnCloseTab(m_pTabs->indexOf(pBom));
+					}
+					m_pTabs->setCurrentIndex(m_pTabs->indexOf(pEnc));
+				}
+
+				//------------------------------------------------------
+				// A legacy codec round-trips, and never claims a BOM.
+				//------------------------------------------------------
+				if (QTextCodec* pCodec = QTextCodec::codecForName("windows-1258"))
+				{
+					if (pCodec->canEncode(strText))
+					{
+						Require(pEnc->ReloadWithEncoding(QStringLiteral("UTF-16LE"),
+								strReloadError),
+							QStringLiteral("encoding: back to the UTF-16LE text"));
+						Require(pEnc->SetSaveEncoding(QStringLiteral("windows-1258")),
+							QStringLiteral("encoding: windows-1258 is accepted"));
+						Require(pEnc->GetEncodingName() == QStringLiteral("windows-1258"),
+							QStringLiteral("encoding: and is reported, got '%1'")
+								.arg(pEnc->GetEncodingName()));
+						Require(!pEnc->GetEncodingLabel().contains(QStringLiteral("BOM")),
+							QStringLiteral("encoding: THE INVARIANT - a codec-path encoding "
+								"never carries a BOM, got '%1'")
+								.arg(pEnc->GetEncodingLabel()));
+						Require(pEnc->SaveFile(strPath, strSaveError),
+							QStringLiteral("encoding: saved as windows-1258 (%1)")
+								.arg(strSaveError));
+						const QByteArray legacy = ReadAll(strPath);
+						Require(!legacy.startsWith("\xEF\xBB\xBF")
+								&& !legacy.startsWith("\xFF\xFE"),
+							QStringLiteral("encoding: and wrote no byte-order mark"));
+						Require(pEnc->ReloadWithEncoding(QStringLiteral("windows-1258"),
+								strReloadError),
+							QStringLiteral("encoding: read it back as windows-1258"));
+						QByteArray back(static_cast<int>(pEnc->Send(SCI_GETLENGTH)) + 1, '\0');
+						pEnc->Send(SCI_GETTEXT,
+							static_cast<uptr_t>(pEnc->Send(SCI_GETLENGTH)) + 1,
+							reinterpret_cast<sptr_t>(back.data()));
+						back.truncate(static_cast<int>(pEnc->Send(SCI_GETLENGTH)));
+						Require(QString::fromUtf8(back) == strText,
+							QStringLiteral("encoding: and the text round-tripped through a "
+								"legacy codepage"));
+					}
+				}
+
+				//------------------------------------------------------
+				// THROUGH ApplyEncoding, which is what the menus call.
+				//
+				// Everything above drives the editor directly, so swapping the
+				// two submenus - the single worst mistake available here -
+				// would not have failed one of them. This is the check that
+				// covers the wiring rather than the mechanism.
+				//------------------------------------------------------
+				const QByteArray beforeMenu = ReadAll(strPath);
+				ApplyEncoding(CEncodingDialog::EMode::Reinterpret,
+					QStringLiteral("ISO-8859-1"));
+				Require(ReadAll(strPath) == beforeMenu,
+					QStringLiteral("encoding: the REINTERPRET menu path writes nothing"));
+
+				ApplyEncoding(CEncodingDialog::EMode::Convert, QStringLiteral("UTF-8"));
+				const QByteArray afterMenu = ReadAll(strPath);
+				Require(afterMenu != beforeMenu,
+					QStringLiteral("encoding: the CONVERT menu path does write"));
+				Require(pEnc->GetEncodingName() == QStringLiteral("UTF-8"),
+					QStringLiteral("encoding: and left the document on UTF-8, got '%1'")
+						.arg(pEnc->GetEncodingName()));
+
+				pEnc->Send(SCI_SETSAVEPOINT);
+				OnCloseTab(m_pTabs->indexOf(pEnc));
+			}
+
+			// An untitled document has nothing on disk to reinterpret, and
+			// saying so beats silently loading an empty file over the user's
+			// unsaved typing.
+			CEditorWidget* pFresh = NewUntitled();
+			QString strFreshError;
+			Require(pFresh != nullptr && !pFresh->ReloadWithEncoding(
+					QStringLiteral("UTF-8"), strFreshError),
+				QStringLiteral("encoding: an untitled document refuses to be reinterpreted"));
+			// The specific message, not merely "some error". Without the
+			// IsUntitled guard the code reaches QFile("") which also fails, so
+			// a non-empty error proves nothing about which check refused - the
+			// first version asserted exactly that and the mutation was MISSED.
+			Require(strFreshError.contains(QStringLiteral("never been saved")),
+				QStringLiteral("encoding: and refuses for the RIGHT reason, got '%1'")
+					.arg(strFreshError));
+			if (pFresh != nullptr)
+			{
+				pFresh->Send(SCI_SETSAVEPOINT);
+				OnCloseTab(m_pTabs->indexOf(pFresh));
+			}
+		}
+
+		//--------------------------------------------------------------
+		// The dialog: one class, two modes, and the caption is the only
+		// thing distinguishing them at the moment of committing.
+		//--------------------------------------------------------------
+		{
+			CEncodingDialog reopen(CEncodingDialog::EMode::Reinterpret,
+				QStringLiteral("UTF-8"), this);
+			CEncodingDialog convert(CEncodingDialog::EMode::Convert,
+				QStringLiteral("UTF-8"), this);
+			Require(reopen.OkButtonText() != convert.OkButtonText(),
+				QStringLiteral("encoding: the two modes label the OK button differently "
+					"('%1' vs '%2')").arg(reopen.OkButtonText(), convert.OkButtonText()));
+			Require(reopen.OkButtonText() == QStringLiteral("Reopen File"),
+				QStringLiteral("encoding: reinterpret says 'Reopen File', got '%1'")
+					.arg(reopen.OkButtonText()));
+			Require(convert.OkButtonText() == QStringLiteral("Save File"),
+				QStringLiteral("encoding: convert says 'Save File', got '%1'")
+					.arg(convert.OkButtonText()));
+
+			// It opens on what the document already is, not at the top of an
+			// alphabetical list of 800.
+			Require(reopen.SelectedEncoding() == QStringLiteral("UTF-8"),
+				QStringLiteral("encoding: the dialog opens on the current encoding, got '%1'")
+					.arg(reopen.SelectedEncoding()));
+
+			const int nAll = reopen.VisibleRowCount();
+			reopen.SetFilterForTest(QStringLiteral("1258"));
+			const int nFiltered = reopen.VisibleRowCount();
+			Require(nFiltered > 0 && nFiltered < nAll,
+				QStringLiteral("encoding: the filter narrows %1 rows to %2")
+					.arg(nAll).arg(nFiltered));
+			// A row hidden by the filter must not still be returned, or accepting
+			// would apply an encoding the user can no longer see. This holds
+			// because QTreeWidget clears the selection when the row is hidden -
+			// so this check is asserting QT'S behaviour, which the dialog relies
+			// on instead of re-guarding. If Qt ever changes, this fails and the
+			// explicit isHidden() guard goes back into SelectedEncoding().
+			Require(reopen.SelectedEncoding().isEmpty(),
+				QStringLiteral("encoding: a filtered-out selection returns nothing, got '%1'")
+					.arg(reopen.SelectedEncoding()));
+			Require(reopen.SelectForTest(QStringLiteral("windows-1258"))
+					&& reopen.SelectedEncoding() == QStringLiteral("windows-1258"),
+				QStringLiteral("encoding: selecting a visible row returns it"));
+			reopen.SetFilterForTest(QString());
+			Require(reopen.VisibleRowCount() == nAll,
+				QStringLiteral("encoding: clearing the filter restores every row"));
 		}
 	}
 

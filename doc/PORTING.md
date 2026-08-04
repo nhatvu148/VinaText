@@ -2114,6 +2114,138 @@ QT_QPA_PLATFORM=offscreen perl -e 'alarm 300; exec @ARGV or die "exec failed: $!
 
 ---
 
+## 6m. The encoding picker, and two operations that must not be confused
+
+### The premise this was started from was wrong
+
+The brief for this work said the MFC *conflates* reinterpreting bytes with
+converting text, and asked which of the two `CCodePageMFCDlg` performs. **It
+performs both, and the MFC does not conflate them at all.** One dialog class,
+an `m_bReopen` flag its callers set, and two entirely separate paths:
+
+| `m_bReopen` | Caller | OK button | Does |
+|---|---|---|---|
+| `TRUE` | `CVinaTextApp::OnFileOpenAsEncoding` | **"Reopen File"** | `SetEncodingFromUser` → `OnReLoadDocument` — **reinterpret** |
+| `FALSE` | `CEditorDoc::OnFileSaveAsEncoding` | **"Save File"** | `SetSaveEncoding` → `DoSaveDocument` — **convert** |
+
+The button caption is the only thing on screen distinguishing them at the moment
+of committing, so it is reproduced verbatim rather than tidied into one generic
+OK. `ui-qt/` keeps the same shape: one `CEncodingDialog`, an `EMode`, two menus.
+
+**And the menu layout is the MFC's own** (`src/VinaText.rc:306-331`): a
+`POPUP "Reopen With Encoding"` directly under Open File and a
+`POPUP "Save As Encoding"` under the save group, each with the same six fixed
+encodings, a separator, and `"Code Page Table..."`. Reproduced item for item —
+the same thing §6l found for Goto, and the second time the `.rc`'s own menus
+turned out to be the right guide to what an editor needs.
+
+### Two things in the MFC worth knowing, neither of them a shipping bug
+
+- **`m_bReopen` is never initialised.** Both callers set it, so it is latent —
+  but a third caller that forgot would choose between reinterpret and convert
+  from stack garbage, which is the exact silent-data-loss failure.
+- **Five `OnUpdate*` handlers gate the save-encoding family on
+  `IsReadOnlyEditor()`** — inverted, since a read-only document is the one you
+  *cannot* save. The obvious reading is "Save As Encoding is unreachable on
+  Windows". **That reading is wrong**: `CEditorDoc`'s message map has 10
+  `ON_COMMAND` entries and **zero** `ON_UPDATE_COMMAND_UI`, so not one of those
+  handlers is ever wired. Dead code. Checked before reporting it, because the
+  wrong version of that sentence would have been alarming and false.
+
+### 805 encodings, from a module already linked
+
+`QStringConverter` offers **9** encodings, all Unicode plus Latin-1 — and no
+Vietnamese codepage, in a Vietnamese editor. `QTextCodec` offers **805**
+including `windows-1258`, and Qt5Compat is **already** a dependency of
+`vinatext-qt` because Scintilla's own Qt binding uses `QTextCodec` in
+`PlatQt.cpp` and `ScintillaQt.cpp`. So the full list costs no new dependency.
+
+**The two paths are chosen in exactly one place each direction**
+(`SetSaveEncoding` for identity, `EncodeForSave`/`DecodeBytes` for the bytes),
+and a name **both** libraries know goes to `QStringConverter`. That is
+deliberate: those are the encodings whose byte-for-byte behaviour this port
+already has round-trip fixtures for, and routing them through the compatibility
+module instead would quietly change which bytes a UTF-8 save produces.
+
+The list dialog gets a filter box. 805 rows without one is unusable — the MFC
+ships exactly that.
+
+### What mutation testing found, which reading the code did not
+
+Every encoding check passed on the first run. Five of the first eight mutations
+were **MISSED**, and two of the holes were defects rather than weak checks:
+
+1. **The menus were not covered at all.** Every check drove
+   `CEditorWidget` directly, so *swapping the two submenus* — the single worst
+   mistake available here — failed nothing. A check now goes through
+   `ApplyEncoding`, which is what the menus call.
+2. **`m_bHasBom = false` on the codec path was untested AND wrong.** It was
+   written as "the invariant". The invariant is actually enforced in
+   `EncodeForSave`, which passes `QTextCodec::IgnoreHeader` and never consults
+   `m_bHasBom` — so the line bought nothing, while it **permanently destroyed**
+   the byte-order mark for a document that went UTF-8 → codepage → UTF-8, since
+   the builtin branch has nothing to restore it from. Removed; a check now
+   asserts the mark comes back.
+3. **A name check could not tell the two paths apart.** `GetEncodingName()`
+   returns `"UTF-8"` whichever library handled it, so asserting on it passed
+   with every name forced onto the codec path. The observable difference is the
+   BOM, and the check is written through that instead.
+4. **"some error" is not "the right error".** The untitled-document check
+   asserted only that reinterpreting failed. Without the `IsUntitled` guard it
+   still fails — `QFile("")` cannot open — so the check passed with the guard
+   removed. It now asserts the message.
+5. **A guard that could never fire.** `SelectedEncoding` tested
+   `selected.first()->isHidden()`. Measured: `QTreeWidget` **clears** the
+   selection when the current row is hidden, so `selectedItems()` is already
+   empty and the clause was dead code dressed as a guard. Removed, and the
+   self-test now asserts *Qt's* behaviour, which is what the dialog relies on.
+
+**Two mutations remain MISSED, and both are recorded as uncovered rather than
+left looking checked:**
+
+- **`IgnoreHeader` on the encode path.** Unreachable: every codec that would
+  emit a mark is a Unicode one, and all of those route to `QStringConverter`.
+  Removing it changes no result today. Defensive, and said so in the code.
+- **A hidden row staying selected.** That is Qt's behaviour, not this code's, so
+  no mutation of this repository can produce it.
+
+**9 mutations, 7 caught, 2 impossible.**
+
+**Self-test: 656 → 711 checks on defaults, 660 → 715 configured.**
+
+Reproduce:
+
+```bash
+# the mode flag, its two callers, and the captions that distinguish them
+grep -n "m_bReopen" src/CodePageMFCDlg.cpp src/CodePageMFCDlg.h
+grep -rn "SetDlgModeReopen" src/*.cpp
+
+# the MFC's own File menu - the layout ui-qt/ reproduces
+sed -n '306,331p' src/VinaText.rc
+
+# the inverted enable handlers, and the reason they never run
+awk '/BEGIN_MESSAGE_MAP\(CEditorDoc/,/END_MESSAGE_MAP/' src/EditorDoc.cpp \
+  | grep -c "ON_UPDATE_COMMAND_UI"      # 0 - so none of them is ever wired
+awk '/BEGIN_MESSAGE_MAP\(CEditorDoc/,/END_MESSAGE_MAP/' src/EditorDoc.cpp \
+  | grep -c "ON_COMMAND"                # 10
+grep -cE "^void CEditorDoc::On[Uu]pdateFileSave" src/EditorDoc.cpp   # 5 dead handlers
+
+# 9 versus 805, and why the compatibility module is worth using
+#   QStringConverter: UTF-8/16/32, Latin-1, Locale  -> no Vietnamese codepage
+#   QTextCodec:       805 names, windows-1258 among them
+grep -rn "QTextCodec" thirdparty/scintilla/qt/ScintillaEditBase/*.cpp | head -3   # already a dependency
+
+# 711 checks, up from 656
+QT_QPA_PLATFORM=offscreen perl -e 'alarm 300; exec @ARGV or die "exec failed: $!"' -- \
+  ./qtbuild/ui-qt/vinatext-qt --selftest \
+  core/LanguageData.cpp tools/extract_language_data.py \
+  qtbuild/fixtures/crlf-bom.cpp qtbuild/fixtures/utf16.py \
+  qtbuild/fixtures/latin1.md qtbuild/fixtures/no-trailing-newline.py \
+  qtbuild/fixtures/tags.xml qtbuild/fixtures/urls.md
+```
+
+---
+
 ## 7. How to reproduce these numbers
 
 ```bash
