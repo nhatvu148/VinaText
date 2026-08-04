@@ -1979,9 +1979,12 @@ result. It is exercised on Linux. Verified by hand by forcing the non-macOS
 branch locally: with the filter the suite passes; without it the duplicate check
 reports `⌘G is bound twice`.
 
-**It still needs a human to press Cmd+L on macOS** — the harness can prove a key
-is bound and cannot prove it arrives, which is exactly how the first two
-instances got through.
+**Confirmed by a person on macOS, 2026-08-04: Cmd+L opens the goto bar and Cmd+G
+now works for Find Next**, where it previously did nothing. That confirmation is
+the evidence for this section, not the checks — the harness can prove a key is
+*bound* and cannot prove it *arrives*, which is exactly how the first two
+instances got through. **Every new menu shortcut still needs this step**; nothing
+here makes it automatable.
 
 ### Two review findings, both real, both about a field that lies
 
