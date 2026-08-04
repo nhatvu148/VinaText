@@ -2209,9 +2209,53 @@ left looking checked:**
 - **A hidden row staying selected.** That is Qt's behaviour, not this code's, so
   no mutation of this repository can produce it.
 
-**9 mutations, 7 caught, 2 impossible.**
+### The eighth instance, found in review
 
-**Self-test: 656 → 711 checks on defaults, 660 → 715 configured.**
+`ui-qt/`'s fixed menu table read `{ "ANSI", "System" }` — the **enumerator's**
+name. `QStringConverter` calls that encoding **`"Locale"`**:
+
+```
+nameForEncoding(System)   = 'Locale'
+encodingForName("System") -> none    | QTextCodec::codecForName("System") -> NULL
+encodingForName("Locale") -> Locale
+```
+
+So the eighth instance of *the name of a thing is not the name of the thing it
+uses* went in exactly like the previous seven: the string looked right. Two
+distinct defects fell out of it, and **the review found the milder one**:
+
+- **Reported:** the picker offers `"Locale"` (via `nameForEncoding`), that
+  resolves, and `GetEncodingLabel()`'s switch had no `System` case — so it fell
+  into `default: "UTF-8"` and the status bar named a *different encoding from
+  the one about to be written*.
+- **Not reported, and worse:** the **ANSI menu item was entirely broken.** It
+  passed the literal `"System"`, which resolves in neither library, so choosing
+  it failed outright. That is the second time in this session the real defect
+  was worse than the one described.
+
+Both fixed at the source rather than at the symptom: **the table now holds enum
+values and the name is derived** with `nameForEncoding`, which makes a
+non-resolving entry structurally impossible rather than merely detected. And
+`GetEncodingLabel`'s `default:` no longer guesses — it falls back to
+`nameForEncoding`, because guessing "UTF-8" is precisely how the `System` case
+hid.
+
+**And the checks that should have caught it did not exist.** Three encodings
+were exercised by hand out of the 805 the picker offers and the six the menus
+hard-code. Offering an encoding is a promise that choosing it works, so that is
+now the check: **every** name in `AvailableEncodings()` must be accepted and
+must not be labelled `UTF-8` unless it *resolves* to UTF-8, and **every** fixed
+menu item must name an encoding that resolves — read off the action's own
+`data()`, so a check can ask an item what it will actually apply.
+
+One correction on the way: comparing the *requested* name against `"UTF-8"`
+flagged 13 encodings that are simply **aliases** of it (`ibm-1208`, `utf8`, …)
+and are labelled correctly. The comparison is against the **resolved** encoding
+instead — a check that cries wolf on correct behaviour gets deleted, not obeyed.
+
+**11 mutations, 9 caught, 2 impossible.**
+
+**Self-test: 656 → 735 checks on defaults, 660 → 739 configured.**
 
 Reproduce:
 
@@ -2235,7 +2279,7 @@ grep -cE "^void CEditorDoc::On[Uu]pdateFileSave" src/EditorDoc.cpp   # 5 dead ha
 #   QTextCodec:       805 names, windows-1258 among them
 grep -rn "QTextCodec" thirdparty/scintilla/qt/ScintillaEditBase/*.cpp | head -3   # already a dependency
 
-# 711 checks, up from 656
+# 735 checks, up from 656
 QT_QPA_PLATFORM=offscreen perl -e 'alarm 300; exec @ARGV or die "exec failed: $!"' -- \
   ./qtbuild/ui-qt/vinatext-qt --selftest \
   core/LanguageData.cpp tools/extract_language_data.py \

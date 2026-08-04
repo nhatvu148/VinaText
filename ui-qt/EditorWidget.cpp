@@ -1171,7 +1171,18 @@ QString CEditorWidget::GetEncodingLabel() const
 	case QStringConverter::Utf32LE:		szName = "UTF-32 LE"; break;
 	case QStringConverter::Utf32BE:		szName = "UTF-32 BE"; break;
 	case QStringConverter::Latin1:		szName = "Latin-1"; break;
-	default:							szName = "UTF-8"; break;
+	// The system codepage, which the MFC's menu calls ANSI. Missing from this
+	// switch it fell into default and every such document read "UTF-8" in the
+	// status bar - a label that names a different encoding from the one about
+	// to be written. Found in review.
+	case QStringConverter::System:		szName = "System"; break;
+	// NOT a silent default. Anything reaching here is an encoding
+	// QStringConverter grew that this switch has not been told about, and
+	// guessing "UTF-8" is how the System case hid. nameForEncoding always has
+	// an answer, so an unknown one is named rather than mislabelled.
+	default:
+		return QString::fromLatin1(QStringConverter::nameForEncoding(m_Encoding))
+			+ (m_bHasBom ? QStringLiteral(" BOM") : QString());
 	}
 	const QString strName = QString::fromLatin1(szName);
 	return m_bHasBom ? strName + QStringLiteral(" BOM") : strName;

@@ -345,21 +345,36 @@ void CMainWindow::BuildEncodingMenu(QMenu* pMenu, CEncodingDialog::EMode mode)
 	// The MFC's six, with its own labels (src/VinaText.rc:308-313). "ANSI"
 	// means the system codepage there; Qt spells that encoding "System", so
 	// the label is the MFC's and the value is Qt's.
-	const struct { const char* _Label; const char* _Encoding; } fixed[] = {
-		{ "ANSI",		"System"	},
-		{ "UTF-8",		"UTF-8"		},
-		{ "UTF-16-LE",	"UTF-16LE"	},
-		{ "UTF-16-BE",	"UTF-16BE"	},
-		{ "UTF-32-LE",	"UTF-32LE"	},
-		{ "UTF-32-BE",	"UTF-32BE"	},
+	//
+	// THE ENCODING IS DERIVED FROM THE ENUM, NEVER SPELLED OUT. This table
+	// first read { "ANSI", "System" } - the enumerator's own name - and
+	// QStringConverter calls that encoding "Locale". encodingForName("System")
+	// resolves to nothing, so the ANSI item failed outright, and the eighth
+	// instance of "the name of a thing is not the name of the thing it uses"
+	// went in the same way as the previous seven: the string looked right.
+	// nameForEncoding() is the only thing that knows, so ask it.
+	const struct { const char* _Label; QStringConverter::Encoding _Encoding; } fixed[] = {
+		{ "ANSI",		QStringConverter::System	},
+		{ "UTF-8",		QStringConverter::Utf8		},
+		{ "UTF-16-LE",	QStringConverter::Utf16LE	},
+		{ "UTF-16-BE",	QStringConverter::Utf16BE	},
+		{ "UTF-32-LE",	QStringConverter::Utf32LE	},
+		{ "UTF-32-BE",	QStringConverter::Utf32BE	},
 	};
 	for (const auto& entry : fixed)
 	{
-		const QString strEncoding = QString::fromLatin1(entry._Encoding);
-		pMenu->addAction(tr(entry._Label), this, [this, mode, strEncoding]
+		const QString strEncoding = QString::fromLatin1(
+			QStringConverter::nameForEncoding(entry._Encoding));
+		QAction* pAction = pMenu->addAction(tr(entry._Label), this,
+			[this, mode, strEncoding]
 		{
 			ApplyEncoding(mode, strEncoding);
 		});
+		// The encoding is on the action as well as in the lambda, so the
+		// self-test can ask each menu item what it will actually apply. Without
+		// it a check can only confirm the item exists, which is what let an
+		// item naming a non-existent encoding ship.
+		pAction->setData(strEncoding);
 	}
 	pMenu->addSeparator();
 	pMenu->addAction(tr("Code Page Table..."), this, [this, mode]
@@ -2563,6 +2578,65 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 			return f.readAll();
 		};
 
+		//--------------------------------------------------------------
+		// EVERY encoding offered must actually work, and must not lie
+		// about its own name.
+		//
+		// The checks below this used to exercise three encodings by hand -
+		// UTF-8, UTF-16LE, windows-1258 - out of the 805 the picker offers and
+		// the six the menus offer. So a name that resolved to nothing, and a
+		// label that reported the wrong encoding, both shipped. Offering an
+		// encoding in a list is a promise that choosing it works; this is that
+		// promise, checked.
+		//--------------------------------------------------------------
+		{
+			CEditorWidget* pProbe = NewUntitled();
+			Require(pProbe != nullptr, QStringLiteral("encoding: got a probe document"));
+			if (pProbe != nullptr)
+			{
+				int nRejected = 0;
+				int nMislabelled = 0;
+				QString strFirstRejected;
+				QString strFirstMislabelled;
+				for (const QString& strName : encodings)
+				{
+					if (!pProbe->SetSaveEncoding(strName))
+					{
+						++nRejected;
+						if (strFirstRejected.isEmpty()) { strFirstRejected = strName; }
+						continue;
+					}
+					// A label reading "UTF-8" for something that is not UTF-8
+					// names a different encoding from the one about to be
+					// written, which is the whole failure mode this feature
+					// has to avoid.
+					//
+					// Compared against the RESOLVED encoding, not against the
+					// name asked for. The first version compared the requested
+					// name and flagged 13 encodings that are simply ALIASES of
+					// UTF-8 - ibm-1208, utf8, UTF8 and friends - which are
+					// labelled "UTF-8" entirely correctly. A check that cries
+					// wolf on correct behaviour gets deleted, not obeyed.
+					const QString strLabel = pProbe->GetEncodingLabel();
+					if (strLabel == QStringLiteral("UTF-8")
+						&& pProbe->GetEncodingName() != QStringLiteral("UTF-8"))
+					{
+						++nMislabelled;
+						if (strFirstMislabelled.isEmpty()) { strFirstMislabelled = strName; }
+					}
+				}
+				Require(nRejected == 0,
+					QStringLiteral("encoding: every offered encoding is accepted; %1 were "
+						"not, first '%2'").arg(nRejected).arg(strFirstRejected));
+				Require(nMislabelled == 0,
+					QStringLiteral("encoding: no encoding is labelled UTF-8 when it is not; "
+						"%1 were, first '%2'").arg(nMislabelled).arg(strFirstMislabelled));
+
+				pProbe->Send(SCI_SETSAVEPOINT);
+				OnCloseTab(m_pTabs->indexOf(pProbe));
+			}
+		}
+
 		QTemporaryDir scratch;
 		Require(scratch.isValid(), QStringLiteral("encoding: got a scratch directory"));
 		if (scratch.isValid())
@@ -2852,6 +2926,60 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 			reopen.SetFilterForTest(QString());
 			Require(reopen.VisibleRowCount() == nAll,
 				QStringLiteral("encoding: clearing the filter restores every row"));
+		}
+
+		//--------------------------------------------------------------
+		// The six fixed MENU entries, through the menu.
+		//
+		// The list check above covers what the dialog offers; this covers what
+		// the menus hard-code, which is a different set of strings and is where
+		// "System" - a name no library resolves - shipped.
+		//--------------------------------------------------------------
+		{
+			CEditorWidget* pMenuProbe = NewUntitled();
+			Require(pMenuProbe != nullptr,
+				QStringLiteral("encoding: got a document for the menu check"));
+			QMenu* pSaveMenu = nullptr;
+			for (QMenu* pMenu : menuBar()->findChildren<QMenu*>())
+			{
+				QString strTitle = pMenu->title();
+				strTitle.remove(QLatin1Char('&'));
+				if (strTitle == QStringLiteral("Save As Encoding"))
+				{
+					pSaveMenu = pMenu;
+				}
+			}
+			Require(pSaveMenu != nullptr,
+				QStringLiteral("encoding: found the Save As Encoding menu"));
+			if (pSaveMenu != nullptr && pMenuProbe != nullptr)
+			{
+				int nFixed = 0;
+				for (QAction* pAction : pSaveMenu->actions())
+				{
+					if (pAction->isSeparator()
+						|| pAction->text().contains(QStringLiteral("Code Page")))
+					{
+						continue;
+					}
+					++nFixed;
+					// Set it to something else first, so "it worked" cannot be
+					// the previous iteration's leftover.
+					Require(pMenuProbe->SetSaveEncoding(QStringLiteral("ISO-8859-1")),
+						QStringLiteral("encoding: reset before '%1'").arg(pAction->text()));
+					const QString strEncoding = pAction->data().toString();
+					Require(!strEncoding.isEmpty(),
+						QStringLiteral("encoding: menu item '%1' carries the encoding it "
+							"applies").arg(pAction->text()));
+					Require(pMenuProbe->SetSaveEncoding(strEncoding),
+						QStringLiteral("encoding: menu item '%1' names an encoding that "
+							"resolves, got '%2'").arg(pAction->text(), strEncoding));
+				}
+				Require(nFixed == 6,
+					QStringLiteral("encoding: the menu offers the MFC's six fixed encodings, "
+						"got %1").arg(nFixed));
+				pMenuProbe->Send(SCI_SETSAVEPOINT);
+				OnCloseTab(m_pTabs->indexOf(pMenuProbe));
+			}
 		}
 	}
 
