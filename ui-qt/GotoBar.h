@@ -1,0 +1,91 @@
+/*#*******************************************************************************
+# COPYRIGHT NOTES
+# ---------------
+# This is a part of VinaText Project
+# Copyright(C) - free open source - vinadevs
+# This source code can be used, distributed or modified under MIT license
+#*******************************************************************************/
+
+// Go to line, and go to offset: a strip below the editor, next to the find bar.
+//
+// NOT a dialog, and that is not a preference - src/GotoDlg.cpp is not a dialog
+// either. IDD_POS is declared WS_CHILD and created as
+// m_GotoDlg.Create(IDD_POS, &m_CTabCtrl) (src/SearchAndReplaceDlg.cpp:341), tab
+// 2 of CSearchAndReplaceWindowDlg's tab control, beside Find, Replace and
+// Bracket Outline. Its OnOK and OnCancel are overridden EMPTY, so it has no
+// accept and no cancel; Escape hands focus back to the editor rather than
+// closing anything. There is nothing there to make modal.
+//
+// ui-qt/ already ships tabs 0 and 1 of that same control as CFindBar, so putting
+// goto in the same place reproduces the MFC's own grouping. The alternative -
+// building the SearchAndReplaceWindow dock to host it - would mean standing up
+// one of the six panes D10 defers in order to land one of the dialogs D10 keeps.
+//
+// A separate widget from CFindBar rather than a third mode of it. CFindBar is
+// one widget in two modes BECAUSE find and replace share the pattern, the
+// options and the match count; goto shares none of them, so folding it in would
+// buy nothing and put an unrelated field on the same row.
+//
+// See doc/PORTING.md 6l, including the two operations of the tab that are not
+// ported here and where the other three went.
+
+#pragma once
+
+#include <QWidget>
+
+class QLabel;
+class QLineEdit;
+
+class CGotoBar final : public QWidget
+{
+	Q_OBJECT
+
+public:
+	explicit CGotoBar(QWidget* pParent = nullptr);
+
+	// Everything the bar shows that is DERIVED FROM THE DOCUMENT: both range
+	// readouts and the offset field, which opens on the caret. One method
+	// because the rule is one rule - whatever the document fills in has to be
+	// refilled when the document changes - and having it in two places is how
+	// the offset came to go stale on a tab switch.
+	//
+	// The line field is deliberately not touched: nothing ever fills it from the
+	// document, so there is nothing there to go out of date and typing in it
+	// survives a tab switch.
+	void SyncToDocument(int nLineCount, int nLength, int nCaretPosition);
+
+	// Takes focus and selects the line field, so typing replaces what is there.
+	void Activate(int nLineCount, int nLength, int nCaretPosition);
+
+	// Empty gives 0, matching what the MFC's _ttoi does with an empty edit - and
+	// CEditorWidget::GotoLine documents why that is not the same as doing nothing.
+	int GetLine() const;
+	int GetOffset() const;
+
+	// What a box's text means as a target line or offset.
+	//
+	// Empty is 0, which reaches the top of the document. A number too large for
+	// an int is INT_MAX rather than 0: QString::toInt OVERFLOWS TO ZERO, so
+	// without this "99999999999" would be indistinguishable from an empty box
+	// and would silently jump to the TOP - the opposite end from the one the
+	// user asked for. INT_MAX lets Scintilla clamp it to the end, which is what
+	// a merely-large-but-representable number already does, so the two agree.
+	//
+	// Public and static so the self-test can assert on it without typing into a
+	// widget, and free of any UI state so there is nothing else it could depend
+	// on.
+	static int ParseTarget(const QString& strText);
+
+	// For the self-test, which cannot read a QLineEdit it did not type into.
+	QString GetLineRangeText() const;
+
+signals:
+	void GotoLineRequested();
+	void GotoOffsetRequested();
+	void CloseRequested();
+
+private:
+	QLabel*		m_pLineRange = nullptr;
+	QLineEdit*	m_pLine = nullptr;
+	QLineEdit*	m_pOffset = nullptr;
+};

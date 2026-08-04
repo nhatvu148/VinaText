@@ -1810,6 +1810,310 @@ QT_QPA_PLATFORM=offscreen ./qtbuild/ui-qt/vinatext-qt --selftest \
 
 ---
 
+## 6l. Goto — a dialog that was never a dialog
+
+**The record skipped five PRs.** §6k ends at 553 checks and the suite is now at
+610; #41 (About), #42 (Replace), #43 (the macOS shortcut fix), #44 (AppSettings
+read) and #45 (Preferences) added 57 checks between them and wrote no section
+here. Their reasoning is in their commit messages only. That is worth knowing
+before reading this as a continuous record, and worth not repeating.
+
+### The design question answered itself
+
+The task was "decide deliberately whether this is a dialog at all". It is not,
+and not by preference — **`CGotoDlg` is not a dialog in the MFC either.**
+
+```
+IDD_POS DIALOGEX 0, 0, 227, 185
+STYLE DS_SETFONT | WS_CHILD | WS_SYSMENU        <- WS_CHILD
+```
+
+`m_GotoDlg.Create(IDD_POS, &m_CTabCtrl)` (`src/SearchAndReplaceDlg.cpp:341`)
+makes it **tab 2 of `CSearchAndReplaceWindowDlg`'s tab control**, beside Find,
+Replace and Bracket Outline. `OnOK` and `OnCancel` are overridden to empty
+bodies (`src/GotoDlg.h:41-42`), so it has no accept and no cancel; its Escape
+handler hands focus back to the editor rather than closing anything. There is
+nothing there to make modal.
+
+Two consequences the brief does not draw out:
+
+- `ui-qt/` already ships tabs 0 and 1 of that same control as `CFindBar`, so a
+  goto bar in the same place **reproduces the MFC's own grouping** rather than
+  merely following a modern convention.
+- The dialog D10 *keeps* is hosted by a dock pane D10 *defers*
+  (`SearchAndReplaceWindow` is named in the deferred six). A faithful port would
+  mean standing up a deferred pane to hold a kept dialog.
+
+Not a third mode of `CFindBar`, though. That widget is one widget in two modes
+**because** find and replace share the pattern, the options and the match count;
+goto shares none of them.
+
+### The tab carries six operations, not two
+
+`IDD_POS` has 4 edits and 6 buttons. The prompt for this work described it as
+"go to line, and the go to offset mode the same dialog carries" — that is two of
+the six.
+
+| MFC control | what it calls | ported as |
+|---|---|---|
+| `IDC_LINE` + GO | `CEditorCtrl::GotoLine` | goto bar, line field |
+| `IDC_POSITION` + GO | `GotoPosition` | goto bar, offset field |
+| `ID_EDITOR_GOTO_POINT_X`/`_Y` + GO | `GotoPointXY` | **not ported** |
+| `..._LINE_GO_PREVIOUS_PARAH` | `SCI_PARAUP` | Search menu, Ctrl+[ |
+| `..._LINE_GO_NEXT_PARAH` | `SCI_PARADOWN` | Search menu, Ctrl+] |
+| `..._LINE_GO_TO_CARET` | `SetLineCenterDisplay(GetCurrentLine())` | Search menu |
+
+**This split is the MFC's own, not a judgement call.** `src/VinaText.rc:402-411`
+is a **`POPUP "Goto..."` menu** carrying exactly these operations, in this
+order, with separators in exactly these two places:
+
+```
+POPUP "Goto..."
+BEGIN
+    MENUITEM "Goto Line\tCtrl+G",           ID_OPTIONS_GOTOLINE
+    MENUITEM "Goto Position",               ID_OPTIONS_GOTOPOS
+    MENUITEM SEPARATOR
+    MENUITEM "Goto Next Paragraph\tCtrl+]", ID_OPTIONS_GOTO_NEXT_PARAGRAPH
+    MENUITEM "Goto Previous Paragraph\tCtrl+[", ID_OPTIONS_GOTO_PREV_PARAGRAPH
+    MENUITEM SEPARATOR
+    MENUITEM "Goto To Caret\tMiddle Mouse", ID_EDIT_SCROLL_TO_CARET
+END
+```
+
+The tab and this menu are two front ends onto the same six handlers, and the
+menu is the one that maps onto an editor. `ui-qt/`'s Search menu reproduces it
+item for item and separator for separator.
+
+**Note what that menu does not carry: Goto Point.** The MFC does not consider it
+a command worth exposing anywhere but the tab, which settles the one operation
+not ported here. `GotoPointXY` is `SCI_POSITIONFROMPOINT`, which takes
+**client-area pixel coordinates** — so where the caret lands depends on the
+scroll offset and the window size at the instant GO is pressed. It is a
+debugging probe rather than navigation. `grep -rn GotoPointXY src/*.cpp src/*.h`
+returns three hits: the declaration, the definition, and a **single** call site,
+which is this tab.
+
+**Goto To Caret gets no keyboard shortcut here, because it has none there
+either** — its binding is the middle mouse button. A menu item is the entry
+point that survives having no third button.
+
+### Two asymmetries transcribed rather than tidied
+
+`GotoLine` guards `lLine < 0`, expands folds, jumps, then centres.
+`GotoPosition` guards nothing, expands folds, and jumps **without centring**.
+Both are preserved:
+
+- **The guard is `< 0`, not `< 1`, and that is load-bearing.** An empty edit
+  through `_ttoi` is `0`, so an empty box reaches `SCI_GOTOLINE` with `-1` and
+  Scintilla clamps to the first line. Pressing GO on an empty box goes to the top
+  of the document, and tightening the guard to `< 1` to look tidier would make it
+  do nothing instead. A check covers exactly this.
+- **The centring is one line out.** `GotoLine` passes the 1-based
+  `GetCurrentLine()` to `SetLineCenterDisplay`, which indexes document lines from
+  0. Reproduced, for the same reason §6j reproduced the unsorted autocomplete
+  list: the MFC has the same defect and two frontends scrolling differently is
+  worse than both scrolling one line low. The check encodes the off-by-one on
+  purpose, so "fixing" it fails here first.
+
+### Two bars at once, which the MFC cannot do
+
+The find bar and the goto bar are independent strips and can both be open. The
+MFC makes them mutually exclusive only because they are pages of one tab
+control. Hiding a search the user has set up because they also want to jump to a
+line would lose state for no reason. Both are in the screenshot.
+
+### Ctrl+G on macOS, a claim that was wrong, and the third instance of the Cmd+H bug
+
+`src/VinaText.rc`'s accelerator table binds `ID_OPTIONS_GOTOLINE` to Ctrl+G, and
+Qt maps `Qt::CTRL` to Command. The reasoning written down first was: *Cmd+G is
+already Find Next on macOS, so Ctrl+G would collide, and the duplicate-shortcut
+check from the Replace/Cmd+H PR catches it.*
+
+**That was asserted and then tested, and it was false.** Binding goto to Ctrl+G
+produced no failure at all. The reason turned out to be a defect rather than a
+quirk:
+
+```
+QKeySequence::keyBindings(FindNext)     -> [F3, Ctrl+G]
+QKeySequence::keyBindings(FindPrevious) -> [Shift+F3, Ctrl+Shift+G]
+```
+
+`addAction(text, QKeySequence::FindNext, ...)` takes the **first** binding only.
+So Find Next shipped answering to **F3 and nothing else**, while Cmd+G — the
+macOS convention, listed by Qt itself — did nothing. On a Mac laptop F3 needs Fn
+held down, so the binding that worked was the awkward one and the natural one was
+dead. Nothing collided with Ctrl+G because Cmd+G was not bound to anything.
+
+**That is the third instance of one bug**, after Replace on Cmd+H (reserved by
+the OS) and Exit on `Qt::Key_Exit` (a key no Mac keyboard has). A shortcut that
+*resolves* is not a shortcut that *arrives*.
+
+**And the check could not have caught it**, because it read `shortcut()` — the
+primary — and never `shortcuts()`. Every secondary binding in the app was
+invisible to the check written to police bindings. Both fixed — `setShortcuts` on
+Find Next and Find Previous, and the check now iterates every sequence an action
+answers to. Only *then* does the original claim become true, demonstrated rather
+than asserted: binding goto to Ctrl+G gives
+`shortcut: ⌘G is bound twice, most recently by '&Go to Line...'`.
+
+**And then CI failed on Linux, with that same new check.** Qt lists Ctrl+G for
+Find Next on Linux and Windows too, so installing every binding took the key away
+from Go to Line — where `src/VinaText.rc`'s accelerator and every editor on those
+platforms puts it. Two corrections followed:
+
+- **Ownership is decided once, before either action is bound.** `gotoKey` is
+  Cmd+L on macOS and Ctrl+G elsewhere, and Find Next's bindings are Qt's list
+  **with `gotoKey` filtered out** rather than an `#ifdef` — so the two cannot
+  both be assigned it on any platform, including ones nobody has thought about.
+  On macOS the filter removes nothing.
+- **The check states the real invariant.** "Every binding is installed" was
+  wrong, and Linux was right to fail it. The rule is that **no binding Qt lists
+  is left doing nothing** — each is either installed on that action or claimed
+  by another. That is precisely what the shipped defect violated: Cmd+G was
+  neither.
+
+**One thing the local sweep cannot cover, stated rather than left looking like
+coverage.** On macOS `gotoKey` is Cmd+L, which is not in Find Next's binding
+list, so the filter is **inert** here and no local mutation of it can change a
+result. It is exercised on Linux. Verified by hand by forcing the non-macOS
+branch locally: with the filter the suite passes; without it the duplicate check
+reports `⌘G is bound twice`.
+
+**Confirmed by a person on macOS, 2026-08-04: Cmd+L opens the goto bar and Cmd+G
+now works for Find Next**, where it previously did nothing. That confirmation is
+the evidence for this section, not the checks — the harness can prove a key is
+*bound* and cannot prove it *arrives*, which is exactly how the first two
+instances got through. **Every new menu shortcut still needs this step**; nothing
+here makes it automatable.
+
+### Two review findings, both real, both about a field that lies
+
+Both premises reproduced, and both were worth fixing for reasons a little
+different from the ones given.
+
+**`QString::toInt` overflows to zero.** Typing `99999999999` — or anything past
+`2147483647` — gave `0`, which this port has deliberately made mean *the top of
+the document*. So a user asking for a line far past the end silently landed at
+the **opposite end**, indistinguishable from an empty box. Measured:
+
+```
+""            -> 0 (ok=0)
+"999999"      -> 999999 (ok=1)
+"99999999999" -> 0 (ok=0)
+"2147483648"  -> 0 (ok=0)
+```
+
+The suggested fix was capping the validator. Capping refuses keystrokes
+silently, and would be the second time this port let a widget's range rewrite
+what the user typed. `CGotoBar::ParseTarget` instead returns `INT_MAX` for a
+non-empty run of digits that will not convert, so Scintilla clamps it to the end
+— which is **already** what a merely-large-but-representable number does. The
+two now agree. Empty still means 0, so the `< 0` guard behaviour above is
+untouched.
+
+**The offset box went stale on a tab switch.** Only the labels were refreshed, so
+the field kept showing the *previous* document's caret offset. The MFC has the
+same staleness — `CGotoDlg::ClearAll` is reachable only from
+`CMainFrame::OnCleanUpAllWindows`, not from a document switch — so this is a
+deliberate divergence, and the reason is that this port gave the field a
+**readout** role: it opens on the caret position. A readout showing another
+document's number is a field that lies, and a byte offset means nothing outside
+the document it was measured in.
+
+The fix is a rule rather than a patch. `SyncToDocument` fills **everything
+derived from the document** — both ranges and the offset — and is called from
+both `Activate` and the tab-change handler; having it in two places is how the
+two drifted apart. The line field is deliberately untouched, because nothing ever
+fills it from the document, so typing in it survives a tab switch.
+
+### The harness broke again, in a new way
+
+Two of the four defects this session were in the verification machinery, keeping
+§6i–§6k's pattern intact:
+
+1. **A mutation harness whose restore step left the mutation in the binary.**
+   `cp` for the backup and `mv` to restore gives the restored file the
+   *backup's* mtime, which is older than the object built from the mutated
+   source — so ninja reported "no work to do" and never rebuilt it. Mutations
+   accumulated across cases, and the "clean" self-test afterwards was running a
+   mutated binary. Same family as §6i's harness that re-ran a stale binary,
+   reached by a different route. Fixed with `touch` after restore, plus a final
+   clean run the harness now asserts on rather than prints.
+2. **A mapping check that measured an identity.** `SetFirstVisibleLine` converts
+   document lines to visible lines through `SCI_VISIBLEFROMDOCLINE`. With nothing
+   folded the two spaces are equal, so deleting the conversion changed no result
+   and the mutation went **uncaught** — every other check ran on a fully expanded
+   document. Two wrong attempts at fixing it, both worth recording:
+   - **Word wrap does not do it.** `SCI_VISIBLEFROMDOCLINE` counts lines hidden
+     by *folds*; wrap rows are display rows it does not touch. The wrapped
+     version asserted `182 != 182` and failed its own guard.
+   - **`SCI_FOLDALL` does not do it either.** Contracting every fold in a
+     521-line file leaves **12 visible lines** — fewer than the 39 that fit on
+     screen — so nothing can scroll and first-visible is pinned at 0. Measured,
+     after that version also failed its own guard.
+
+   Folding **one** block is what works. `ScrollToCaret` is the only public path
+   that can meet hidden lines at all, because both goto paths expand folds
+   before they scroll.
+
+   Both guards firing rather than passing is the point: they were written as
+   `Require(found, ...)` precisely so that a check with nothing to check says so.
+
+### Checks
+
+Line and offset land exactly; `GotoLine` is 1-based; it centres and
+`GotoPosition` does not (asserted relationally, so it holds whatever the
+offscreen viewport turns out to be); an empty box goes to the top; a negative is
+refused; jumping into a collapsed fold expands it; Scroll to Caret moves the view
+and not the caret; scrolling counts visible and not document lines; the two
+paragraph commands move in opposite directions; the bar's readout carries the
+current document's line count and follows a tab switch; the offset box opens on
+the caret; the menu action opens the bar; the close path hides it.
+
+**14 mutations, 14 caught** — including the one that was missed on the first
+sweep, and the two covering the review fixes. The filter case is not among them,
+for the reason given above. The centring check mirrors the implementation's own arithmetic, so it is a
+change-detector for that formula rather than an independent oracle; the
+asymmetry check is the independent part.
+
+**Self-test: 610 → 656 checks on defaults, 614 → 660 configured.**
+
+Reproduce:
+
+```bash
+# it is a child window, and a tab page, not a dialog
+sed -n '1406,1408p' src/VinaText.rc                  # STYLE ... WS_CHILD
+grep -n 'm_GotoDlg.Create' src/SearchAndReplaceDlg.cpp
+sed -n '41,42p' src/GotoDlg.h                        # OnOK/OnCancel, empty
+
+# 4 edits and 6 buttons - six operations, not two
+sed -n '1406,1424p' src/VinaText.rc | grep -c EDITTEXT       # 4
+sed -n '1406,1424p' src/VinaText.rc | grep -c DEFPUSHBUTTON  # 6
+
+# the MFC's own Goto menu - the grouping ui-qt/ reproduces, and the operation
+# it leaves out
+sed -n '402,411p' src/VinaText.rc
+
+# that operation has one CALL site (the other two hits declare and define it)
+grep -rn 'GotoPointXY' src/*.cpp src/*.h
+
+# Ctrl+G, which is why macOS could not have it
+awk '/ACCELERATORS/,/^END/' src/VinaText.rc | grep ID_OPTIONS_GOTOLINE
+
+# 292 lines become 208 across two files
+wc -l src/GotoDlg.cpp ui-qt/GotoBar.cpp ui-qt/GotoBar.h
+
+# 656 checks, up from 610
+QT_QPA_PLATFORM=offscreen perl -e 'alarm 300; exec @ARGV or die "exec failed: $!"' -- \
+  ./qtbuild/ui-qt/vinatext-qt --selftest \
+  core/LanguageData.cpp tools/extract_language_data.py \
+  qtbuild/fixtures/crlf-bom.cpp qtbuild/fixtures/utf16.py \
+  qtbuild/fixtures/latin1.md qtbuild/fixtures/no-trailing-newline.py \
+  qtbuild/fixtures/tags.xml qtbuild/fixtures/urls.md
+```
+
+---
+
 ## 7. How to reproduce these numbers
 
 ```bash

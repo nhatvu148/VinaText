@@ -25,6 +25,7 @@
 class CEditorWidget;
 class CMessagePane;
 class CFindBar;
+class CGotoBar;
 class QLabel;
 class QTabWidget;
 
@@ -103,6 +104,13 @@ private:
 	void OnFind(bool bBackward);
 	void OnPatternChanged();
 
+	// Goto. src/GotoDlg.cpp is tab 2 of the same MFC control the find bar is
+	// tabs 0 and 1 of, so it lands in the same place - see ui-qt/GotoBar.h.
+	void OnShowGoto();
+	void OnHideGoto();
+	void OnGotoLine();
+	void OnGotoOffset();
+
 	// Save/Discard/Cancel for one modified document. Returns false only for
 	// Cancel, i.e. "do not proceed with whatever asked".
 	bool ConfirmClose(CEditorWidget* pEditor);
@@ -113,6 +121,7 @@ private:
 	CMessagePane*			m_pMessagePane = nullptr;
 	QTabWidget*			m_pTabs = nullptr;
 	CFindBar*			m_pFindBar = nullptr;
+	CGotoBar*			m_pGotoBar = nullptr;
 	QLabel*				m_pStatusPosition = nullptr;
 	QLabel*				m_pStatusLanguage = nullptr;
 	QLabel*				m_pStatusEncoding = nullptr;

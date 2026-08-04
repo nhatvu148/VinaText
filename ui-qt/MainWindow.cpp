@@ -10,6 +10,7 @@
 
 #include "EditorWidget.h"
 #include "FindBar.h"
+#include "GotoBar.h"
 #include "AboutDialog.h"
 #include "PreferencesDialog.h"
 #include "MessagePane.h"
@@ -36,6 +37,8 @@
 #include <QTabWidget>
 #include <QTemporaryDir>
 #include <QVBoxLayout>
+
+#include <limits>
 #include <QWidget>
 
 CMainWindow::CMainWindow(CEditorData& data, QWidget* pParent)
@@ -49,6 +52,8 @@ CMainWindow::CMainWindow(CEditorData& data, QWidget* pParent)
 
 	m_pFindBar = new CFindBar(this);
 	m_pFindBar->hide();
+	m_pGotoBar = new CGotoBar(this);
+	m_pGotoBar->hide();
 
 	QWidget* pCentral = new QWidget(this);
 	QVBoxLayout* pLayout = new QVBoxLayout(pCentral);
@@ -56,6 +61,12 @@ CMainWindow::CMainWindow(CEditorData& data, QWidget* pParent)
 	pLayout->setSpacing(0);
 	pLayout->addWidget(m_pTabs, 1);
 	pLayout->addWidget(m_pFindBar);
+	// Below the find bar, and INDEPENDENT of it. The MFC makes the two mutually
+	// exclusive because they are pages of one tab control, not because anything
+	// about them conflicts; here they are separate strips, and hiding a search
+	// the user has set up because they also want to jump to a line would be
+	// losing state for no reason.
+	pLayout->addWidget(m_pGotoBar);
 	setCentralWidget(pCentral);
 
 	// The first of Phase 5's nine dock panes. Created before BuildMenus so the
@@ -83,12 +94,35 @@ CMainWindow::CMainWindow(CEditorData& data, QWidget* pParent)
 			// a tab the user is no longer looking at.
 			OnPatternChanged();
 		}
+		if (!m_pGotoBar->isHidden())
+		{
+			// Same reason: "line (1 - 240)" describing a file that is no longer
+			// in front of the user is worse than no readout at all. The MFC
+			// refreshes it on every tab change too - InitGotoRangeByDocument is
+			// called from OnTcnSelchangeTab (src/SearchAndReplaceDlg.cpp:390).
+			if (CEditorWidget* pEditor = GetCurrentEditor())
+			{
+				// SyncToDocument and not just the ranges. The offset box shows
+				// the caret position, so leaving it holding the previous
+				// document's number makes it a readout that lies - and a byte
+				// offset is meaningless outside the document it was measured in.
+				// Found in review; the MFC has the same staleness, but its field
+				// is refreshed only when the tab is re-opened, so the divergence
+				// is deliberate.
+				m_pGotoBar->SyncToDocument(pEditor->GetLineCount(),
+					static_cast<int>(pEditor->Send(SCI_GETLENGTH)),
+					pEditor->GetCaretPosition());
+			}
+		}
 	});
 	connect(m_pFindBar, &CFindBar::FindRequested, this, &CMainWindow::OnFind);
 	connect(m_pFindBar, &CFindBar::ReplaceRequested, this, &CMainWindow::OnReplace);
 	connect(m_pFindBar, &CFindBar::ReplaceAllRequested, this, &CMainWindow::OnReplaceAll);
 	connect(m_pFindBar, &CFindBar::PatternChanged, this, &CMainWindow::OnPatternChanged);
 	connect(m_pFindBar, &CFindBar::CloseRequested, this, &CMainWindow::OnHideFind);
+	connect(m_pGotoBar, &CGotoBar::GotoLineRequested, this, &CMainWindow::OnGotoLine);
+	connect(m_pGotoBar, &CGotoBar::GotoOffsetRequested, this, &CMainWindow::OnGotoOffset);
+	connect(m_pGotoBar, &CGotoBar::CloseRequested, this, &CMainWindow::OnHideGoto);
 
 	// Say where the settings came from. On macOS and Linux the file usually does
 	// not exist - it is written by the Windows build - so "using defaults" is
@@ -131,10 +165,51 @@ void CMainWindow::BuildMenus()
 	pFile->addAction(tr("E&xit"), QKeySequence::Quit, this, &QWidget::close);
 
 	QMenu* pSearch = menuBar()->addMenu(tr("&Search"));
+
+	// The sequence Go to Line claims, decided HERE - before Find Next is bound -
+	// because the two want the same key on some platforms and the resolution has
+	// to be a decision rather than whichever happens to be assigned second.
+	//
+	// Ctrl+G is src/VinaText.rc's own accelerator for ID_OPTIONS_GOTOLINE, and
+	// what Notepad++, Visual Studio, VS Code, Sublime and gedit all use. On macOS
+	// Qt maps Qt::CTRL to Command and Cmd+G is firmly Find Next, so goto takes
+	// Cmd+L there - Xcode's and TextMate's jump-to-line.
+#ifdef Q_OS_MACOS
+	const QKeySequence gotoKey(Qt::CTRL | Qt::Key_L);
+#else
+	const QKeySequence gotoKey(Qt::CTRL | Qt::Key_G);
+#endif
+
 	pSearch->addAction(tr("&Find..."), QKeySequence::Find, this, &CMainWindow::OnShowFind);
-	pSearch->addAction(tr("Find &Next"), QKeySequence::FindNext, this, [this] { OnFind(false); });
-	pSearch->addAction(tr("Find &Previous"), QKeySequence::FindPrevious,
+	// setShortcutS, plural, and that is a fix rather than a tidy-up. The
+	// single-sequence overload takes only the FIRST of a standard key's
+	// bindings, and on macOS QKeySequence::FindNext is [F3, Cmd+G] - so Find
+	// Next shipped responding to F3 only, while Cmd+G, which is the macOS
+	// convention and which Qt itself lists, did nothing. F3 on a Mac laptop
+	// needs Fn held down, so the reachable binding was the awkward one and the
+	// natural one was dead.
+	//
+	// Third instance of the same bug: Replace on Cmd+H (unreachable), Exit on
+	// Qt::Key_Exit (a key no Mac has), and now this. The pattern is that a
+	// shortcut which RESOLVES is not the same as a shortcut that ARRIVES.
+	//
+	// Minus whatever goto has claimed, which is Qt's list filtered rather than
+	// an #ifdef: on Linux and Windows Qt lists Ctrl+G for Find Next as well, and
+	// installing it there would take the key away from Go to Line. Filtering by
+	// gotoKey means the two can never both be assigned it, on any platform,
+	// including ones neither of us has thought about. On macOS gotoKey is Cmd+L,
+	// so removeAll does nothing and Find Next keeps both of its bindings.
+	QAction* pFindNext = pSearch->addAction(tr("Find &Next"), this, [this] { OnFind(false); });
+	QList<QKeySequence> findNextKeys = QKeySequence::keyBindings(QKeySequence::FindNext);
+	findNextKeys.removeAll(gotoKey);
+	pFindNext->setShortcuts(findNextKeys);
+
+	QAction* pFindPrevious = pSearch->addAction(tr("Find &Previous"),
 		this, [this] { OnFind(true); });
+	QList<QKeySequence> findPreviousKeys =
+		QKeySequence::keyBindings(QKeySequence::FindPrevious);
+	findPreviousKeys.removeAll(gotoKey);
+	pFindPrevious->setShortcuts(findPreviousKeys);
 	pSearch->addSeparator();
 	QAction* pReplace = pSearch->addAction(tr("&Replace..."), this,
 		&CMainWindow::OnShowReplace);
@@ -152,6 +227,51 @@ void CMainWindow::BuildMenus()
 	// collide.
 	pReplace->setShortcut(QKeySequence::Replace);
 #endif
+
+	pSearch->addSeparator();
+	QAction* pGoto = pSearch->addAction(tr("&Go to Line..."), this,
+		&CMainWindow::OnShowGoto);
+	pGoto->setShortcut(gotoKey);
+
+	// The three commands the Goto tab carries that are not prompts. They are
+	// buttons in the MFC because the tab was somewhere to put them, but nothing
+	// about them needs a text field.
+	//
+	// This grouping is not invented: src/VinaText.rc:402-411 is a "Goto..."
+	// popup menu holding exactly these, in exactly this order, with separators
+	// in exactly these two places - Goto Line and Goto Position, then the two
+	// paragraph commands, then Goto To Caret. The tab and the menu are two
+	// front ends onto the same six handlers, and the menu is the one that maps
+	// onto an editor. Note what that menu does NOT carry: Goto Point.
+	pSearch->addSeparator();
+	pSearch->addAction(tr("Go to &Next Paragraph"),
+		QKeySequence(Qt::CTRL | Qt::Key_BracketRight), this, [this]
+	{
+		if (CEditorWidget* pEditor = GetCurrentEditor())
+		{
+			pEditor->GotoNextParagraph();
+		}
+	});
+	pSearch->addAction(tr("Go to &Previous Paragraph"),
+		QKeySequence(Qt::CTRL | Qt::Key_BracketLeft), this, [this]
+	{
+		if (CEditorWidget* pEditor = GetCurrentEditor())
+		{
+			pEditor->GotoPreviousParagraph();
+		}
+	});
+	// No keyboard shortcut, because the MFC gives it none either - its binding
+	// is the MIDDLE MOUSE BUTTON ("Goto To Caret\tMiddle Mouse"). A menu item is
+	// the entry point that survives having no third button, and it is one more
+	// feature that does not depend on a key arriving.
+	pSearch->addSeparator();
+	pSearch->addAction(tr("Scroll to &Caret"), this, [this]
+	{
+		if (CEditorWidget* pEditor = GetCurrentEditor())
+		{
+			pEditor->ScrollToCaret();
+		}
+	});
 
 	// A theme switch, not a settings UI: two radio items, no page, nothing stored.
 	// Persisting the choice is AppSettings, the last file in the Phase 2 backlog
@@ -697,6 +817,60 @@ void CMainWindow::OnPatternChanged()
 			: (nCount == 1) ? tr("1 match") : tr("%1 matches").arg(nCount);
 		m_pFindBar->ShowStatus(strStatus, nCount == 0);
 	}
+}
+
+//////////////////////////////////////////////////////////////////////////
+// Goto
+
+void CMainWindow::OnShowGoto()
+{
+	CEditorWidget* pEditor = GetCurrentEditor();
+	if (pEditor == nullptr)
+	{
+		return;
+	}
+	m_pGotoBar->Activate(pEditor->GetLineCount(),
+		static_cast<int>(pEditor->Send(SCI_GETLENGTH)),
+		pEditor->GetCaretPosition());
+}
+
+void CMainWindow::OnHideGoto()
+{
+	m_pGotoBar->hide();
+	if (CEditorWidget* pEditor = GetCurrentEditor())
+	{
+		// Focus back to the editor, which is what CGotoDlg::PreTranslateMessage
+		// does with VK_ESCAPE - the one thing its Escape handler exists to do.
+		pEditor->setFocus();
+	}
+}
+
+void CMainWindow::OnGotoLine()
+{
+	CEditorWidget* pEditor = GetCurrentEditor();
+	if (pEditor == nullptr)
+	{
+		return;
+	}
+	pEditor->GotoLine(m_pGotoBar->GetLine());
+	// The MFC calls SetFocus() on the editor after every GO, so the bar is not
+	// somewhere you get stuck. The bar stays OPEN, though, which it also does on
+	// Windows - a tab page does not close itself - and it means a second jump
+	// costs one click rather than one shortcut plus one click.
+	pEditor->setFocus();
+	UpdateStatusBar();
+}
+
+void CMainWindow::OnGotoOffset()
+{
+	CEditorWidget* pEditor = GetCurrentEditor();
+	if (pEditor == nullptr)
+	{
+		return;
+	}
+	pEditor->GotoPosition(m_pGotoBar->GetOffset());
+	pEditor->setFocus();
+	UpdateStatusBar();
 }
 
 void CMainWindow::OnFind(bool bBackward)
@@ -1850,6 +2024,392 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 	}
 
 	//----------------------------------------------------------------------
+	// Goto - src/GotoDlg.cpp, which is a tab page and not a dialog. See
+	// doc/PORTING.md 6l and ui-qt/GotoBar.h.
+	//----------------------------------------------------------------------
+	{
+		CEditorWidget* pScratch = NewUntitled();
+		Require(pScratch != nullptr, QStringLiteral("goto: got a scratch document"));
+		if (pScratch != nullptr)
+		{
+			// 400 numbered lines. The length is the point: every centring check
+			// below is vacuous on a document that fits on screen, because then
+			// nothing can scroll and every first-visible-line reads 0.
+			QByteArray text;
+			for (int i = 1; i <= 400; ++i)
+			{
+				text += QByteArray("line ") + QByteArray::number(i) + "\n";
+			}
+			pScratch->Send(SCI_SETTEXT, 0, reinterpret_cast<sptr_t>(text.constData()));
+			pScratch->Send(SCI_EMPTYUNDOBUFFER);
+
+			auto FirstVisibleOf = [](CEditorWidget* pEditor)
+			{
+				return static_cast<int>(pEditor->Send(SCI_GETFIRSTVISIBLELINE));
+			};
+			auto FirstVisible = [pScratch, &FirstVisibleOf]
+			{
+				return FirstVisibleOf(pScratch);
+			};
+
+			const int nOnScreen = static_cast<int>(pScratch->Send(SCI_LINESONSCREEN));
+			Require(nOnScreen > 4 && nOnScreen < 400,
+				QStringLiteral("goto: %1 of 400 lines fit on screen, so scrolling is "
+					"observable").arg(nOnScreen));
+			Require(pScratch->GetLineCount() == 401,
+				QStringLiteral("goto: 400 lines plus the empty one after the last newline, "
+					"got %1").arg(pScratch->GetLineCount()));
+
+			// 1-based, and exact.
+			pScratch->GotoLine(200);
+			Require(pScratch->GetCaretLine() == 200,
+				QStringLiteral("goto: GotoLine(200) puts the caret on line 200, got %1")
+					.arg(pScratch->GetCaretLine()));
+
+			// And it centres, by the ORIGINAL's arithmetic - which is one line
+			// out, because CEditorCtrl::GotoLine passes the 1-based
+			// GetCurrentLine() to SetLineCenterDisplay, which indexes document
+			// lines from 0. Exact centring of line 200 would be 199 - (n-2)/2.
+			// This check encodes the off-by-one ON PURPOSE, so that "fixing" it
+			// fails here and the person doing it reads 6l before deciding the two
+			// frontends should scroll differently.
+			const int nCentred200 = 200 - ((nOnScreen - 2) / 2);
+			Require(FirstVisible() == nCentred200,
+				QStringLiteral("goto: GotoLine centres the target line (first visible %1, "
+					"expected %2)").arg(FirstVisible()).arg(nCentred200));
+
+			// THE ASYMMETRY. GotoPosition does not centre and GotoLine does, and
+			// asserting it relationally rather than against a literal keeps it
+			// true whatever the offscreen viewport turns out to be.
+			const int nLine235 = static_cast<int>(pScratch->Send(SCI_POSITIONFROMLINE, 234));
+			pScratch->Send(SCI_SETFIRSTVISIBLELINE, 0);
+			pScratch->GotoPosition(nLine235);
+			Require(pScratch->GetCaretPosition() == nLine235,
+				QStringLiteral("goto: GotoPosition lands on the offset asked for"));
+			const int nAfterOffset = FirstVisible();
+			pScratch->Send(SCI_SETFIRSTVISIBLELINE, 0);
+			pScratch->GotoLine(235);
+			Require(FirstVisible() > nAfterOffset,
+				QStringLiteral("goto: GotoLine centres where GotoPosition only scrolls into "
+					"view (first visible %1 vs %2)").arg(FirstVisible()).arg(nAfterOffset));
+
+			// An EMPTY line box goes to the top of the document rather than doing
+			// nothing, because "" is 0 and the guard is < 0. This is the check
+			// that fails if the guard is tightened to < 1 to look tidier.
+			Require(pScratch->GetCaretLine() == 235,
+				QStringLiteral("goto: the caret is away from the top before the empty-box "
+					"check, so that check can fail"));
+			pScratch->GotoLine(m_pGotoBar->GetLine());		// the bar's box is empty
+			Require(pScratch->GetCaretLine() == 1,
+				QStringLiteral("goto: an empty line box goes to the top, got line %1")
+					.arg(pScratch->GetCaretLine()));
+
+			// A negative is refused. The digits-only validator means the BAR
+			// cannot produce one, so this covers the editor API rather than the
+			// widget - but it is still mutation-sensitive: without the guard,
+			// SCI_GOTOLINE(-6) clamps to the first line and the caret moves.
+			pScratch->GotoLine(100);
+			pScratch->GotoLine(-5);
+			Require(pScratch->GetCaretLine() == 100,
+				QStringLiteral("goto: a negative line number is refused, got line %1")
+					.arg(pScratch->GetCaretLine()));
+
+			// Scroll to Caret moves the VIEW and not the caret. Both halves
+			// matter: a no-op would pass the first on its own.
+			pScratch->GotoLine(300);
+			const int nCaretBefore = pScratch->GetCaretPosition();
+			pScratch->Send(SCI_SETFIRSTVISIBLELINE, 0);
+			pScratch->ScrollToCaret();
+			Require(pScratch->GetCaretPosition() == nCaretBefore,
+				QStringLiteral("goto: Scroll to Caret leaves the caret alone"));
+			Require(FirstVisible() == 300 - ((nOnScreen - 2) / 2),
+				QStringLiteral("goto: Scroll to Caret brings the caret back into view "
+					"(first visible %1)").arg(FirstVisible()));
+
+			// WITH LINES HIDDEN, which is the only state where
+			// SetFirstVisibleLine's document-to-visible mapping is not the
+			// identity function. Everything above runs on a fully expanded
+			// document, where visible line n IS document line n - so deleting
+			// SCI_VISIBLEFROMDOCLINE changed no result and the mutation went
+			// UNCAUGHT. The checks were measuring an identity and could not have
+			// said otherwise.
+			//
+			// Folding, not wrapping. Word wrap was the first attempt and it is
+			// the wrong tool: SCI_VISIBLEFROMDOCLINE counts lines HIDDEN BY
+			// FOLDS, and wrap rows are display rows it does not touch, so the
+			// wrapped version asserted 182 != 182 and failed its own guard.
+			//
+			// Scroll to Caret is the one public path that can meet hidden lines
+			// at all, because both goto paths expand folds before they scroll.
+			// A user who has folded a file, scrolled away, and pressed Scroll to
+			// Caret is doing nothing unusual.
+			{
+				CEditorWidget* pFolded = qobject_cast<CEditorWidget*>(m_pTabs->widget(0));
+				if (pFolded != nullptr && pFolded != pScratch)
+				{
+					pFolded->Send(SCI_COLOURISE, 0, -1);
+
+					// ONE fold, not SCI_FOLDALL. Contracting everything collapses
+					// this 521-line file to 12 visible lines - fewer than fit on
+					// screen - so nothing can scroll, first-visible is pinned at 0
+					// and the mapping is unobservable. Measured, after the
+					// all-folds version failed its own guard.
+					const int nHalf = (nOnScreen - 2) / 2;
+					const int nDocLines = pFolded->GetLineCount();
+					for (int line = 0; line < nDocLines; ++line)
+					{
+						if ((pFolded->Send(SCI_GETFOLDLEVEL, static_cast<uptr_t>(line))
+							& SC_FOLDLEVELHEADERFLAG) == 0)
+						{
+							continue;
+						}
+						// Big enough that the two line spaces diverge by a useful
+						// margin; small enough that most of the file stays
+						// scrollable.
+						if (pFolded->Send(SCI_GETLASTCHILD, static_cast<uptr_t>(line), -1)
+							- line < 5)
+						{
+							continue;
+						}
+						pFolded->Send(SCI_TOGGLEFOLD, static_cast<uptr_t>(line));
+						break;
+					}
+					Require(pFolded->Send(SCI_GETALLLINESVISIBLE) == 0,
+						QStringLiteral("goto: one block is folded, so lines are hidden"));
+
+					const int nVisibleTotal = static_cast<int>(pFolded->Send(
+						SCI_VISIBLEFROMDOCLINE, static_cast<uptr_t>(nDocLines)));
+
+					// A caret line deep enough to scroll, visible, whose centred
+					// start sits behind hidden lines, and near enough the top of
+					// the folded document that Scintilla will not clamp the
+					// scroll - a clamped result would compare equal for the wrong
+					// reason.
+					int nCaretLine = -1;
+					int nMapped = -1;
+					int nRaw = -1;
+					for (int line = nDocLines - 1; line >= 1 && nCaretLine < 0; --line)
+					{
+						if (pFolded->Send(SCI_GETLINEVISIBLE, static_cast<uptr_t>(line)) == 0)
+						{
+							continue;
+						}
+						const int nStart = line - nHalf;
+						if (nStart < 1)
+						{
+							continue;
+						}
+						const int nAt = static_cast<int>(pFolded->Send(SCI_VISIBLEFROMDOCLINE,
+							static_cast<uptr_t>(nStart)));
+						if (nAt != nStart && nAt + nOnScreen <= nVisibleTotal)
+						{
+							nCaretLine = line;
+							nMapped = nAt;
+							nRaw = nStart;
+						}
+					}
+					Require(nCaretLine > 0,
+						QStringLiteral("goto: found a folded line where the visible and "
+							"document line spaces differ, so the mapping check can fail"));
+					if (nCaretLine > 0)
+					{
+						pFolded->Send(SCI_GOTOLINE, static_cast<uptr_t>(nCaretLine - 1));
+						pFolded->Send(SCI_SETFIRSTVISIBLELINE, 0);
+						pFolded->ScrollToCaret();
+						Require(FirstVisibleOf(pFolded) == nMapped,
+							QStringLiteral("goto: scrolling counts VISIBLE lines, not document "
+								"lines (first visible %1, expected %2, unmapped would be %3)")
+								.arg(FirstVisibleOf(pFolded)).arg(nMapped).arg(nRaw));
+					}
+					pFolded->Send(SCI_FOLDALL, SC_FOLDACTION_EXPAND);
+					pFolded->Send(SCI_GOTOPOS, 0);
+					m_pTabs->setCurrentIndex(m_pTabs->indexOf(pScratch));
+				}
+			}
+
+			// Folds. Both goto paths expand first, and this is the check that
+			// says so: collapse a document, confirm something is genuinely
+			// hidden, then jump into it.
+			//
+			// On a REAL tab, not the scratch one. An untitled document has no
+			// language and so no lexer, and without a lexer there are no fold
+			// levels to contract - the first version of this check ran on the
+			// scratch document, folded nothing, and was caught by its own guard
+			// rather than by anything downstream. That guard is why it is
+			// written as an else-Require and not an if.
+			int nGotoFoldChecked = 0;
+			for (int i = 0; i < GetTabCount() && nGotoFoldChecked == 0; ++i)
+			{
+				CEditorWidget* pFoldable = qobject_cast<CEditorWidget*>(m_pTabs->widget(i));
+				if (pFoldable == nullptr || pFoldable == pScratch)
+				{
+					continue;
+				}
+				pFoldable->Send(SCI_COLOURISE, 0, -1);
+				pFoldable->Send(SCI_FOLDALL, SC_FOLDACTION_CONTRACT);
+				if (pFoldable->Send(SCI_GETALLLINESVISIBLE) != 0)
+				{
+					continue;			// nothing in this file folds
+				}
+				// The first line the fold actually hid.
+				sptr_t nHidden = -1;
+				const sptr_t nLines = pFoldable->Send(SCI_GETLINECOUNT);
+				for (sptr_t line = 0; line < nLines && nHidden < 0; ++line)
+				{
+					if (pFoldable->Send(SCI_GETLINEVISIBLE, static_cast<uptr_t>(line)) == 0)
+					{
+						nHidden = line;
+					}
+				}
+				Require(nHidden >= 0, QStringLiteral("goto: found a hidden line to jump to"));
+				if (nHidden >= 0)
+				{
+					pFoldable->GotoLine(static_cast<int>(nHidden) + 1);		// 1-based
+					Require(pFoldable->Send(SCI_GETLINEVISIBLE,
+							static_cast<uptr_t>(nHidden)) != 0,
+						QStringLiteral("goto: jumping into a collapsed fold expands it"));
+					Require(pFoldable->GetCaretLine() == static_cast<int>(nHidden) + 1,
+						QStringLiteral("goto: and the caret arrives on the line asked for, "
+							"got %1").arg(pFoldable->GetCaretLine()));
+					++nGotoFoldChecked;
+				}
+				pFoldable->Send(SCI_FOLDALL, SC_FOLDACTION_EXPAND);
+				pFoldable->Send(SCI_GOTOPOS, 0);
+			}
+			Require(nGotoFoldChecked == 1,
+				QStringLiteral("goto: the expand-on-jump check ran on a document that "
+					"actually folds"));
+			m_pTabs->setCurrentIndex(m_pTabs->indexOf(pScratch));
+
+			// Paragraphs, in opposite directions - which is what fails if the two
+			// Scintilla messages are swapped.
+			pScratch->Send(SCI_SETTEXT, 0,
+				reinterpret_cast<sptr_t>("alpha\n\nbeta\n\ngamma\n"));
+			pScratch->Send(SCI_GOTOPOS, 0);
+			pScratch->GotoNextParagraph();
+			const int nAfterDown = pScratch->GetCaretPosition();
+			Require(nAfterDown > 0,
+				QStringLiteral("goto: next paragraph moves forward, to %1").arg(nAfterDown));
+			pScratch->GotoPreviousParagraph();
+			Require(pScratch->GetCaretPosition() < nAfterDown,
+				QStringLiteral("goto: previous paragraph moves back, to %1")
+					.arg(pScratch->GetCaretPosition()));
+
+			//--------------------------------------------------------------
+			// The bar
+			//--------------------------------------------------------------
+			pScratch->Send(SCI_SETTEXT, 0, reinterpret_cast<sptr_t>(text.constData()));
+			pScratch->Send(SCI_GOTOPOS, 77);
+			OnShowGoto();
+			Require(!m_pGotoBar->isHidden(), QStringLiteral("goto: the bar opens"));
+			Require(m_pGotoBar->GetLineRangeText().contains(QStringLiteral("401")),
+				QStringLiteral("goto: the readout carries this document's line count, got '%1'")
+					.arg(m_pGotoBar->GetLineRangeText()));
+			// The offset box opens on where the caret already is, which is what
+			// makes it a readout as well as an input.
+			Require(m_pGotoBar->GetOffset() == 77,
+				QStringLiteral("goto: the offset box opens on the caret position, got %1")
+					.arg(m_pGotoBar->GetOffset()));
+
+			// Everything document-derived follows the TAB, not just the first
+			// document the bar saw.
+			const int nScratchTab = m_pTabs->indexOf(pScratch);
+			CEditorWidget* pOther = qobject_cast<CEditorWidget*>(m_pTabs->widget(0));
+			if (pOther != nullptr && nScratchTab != 0)
+			{
+				// Both asserted, because two documents with the same length - or
+				// the same caret position - would let a bar that never
+				// recalculates pass the checks below.
+				pOther->Send(SCI_GOTOPOS, 13);
+				Require(pOther->GetLineCount() != pScratch->GetLineCount(),
+					QStringLiteral("goto: the two tabs differ in length (%1 vs %2), so the "
+						"readout check can fail").arg(pOther->GetLineCount())
+						.arg(pScratch->GetLineCount()));
+				Require(pOther->GetCaretPosition() != pScratch->GetCaretPosition(),
+					QStringLiteral("goto: the two tabs differ in caret position (%1 vs %2), "
+						"so the offset check can fail").arg(pOther->GetCaretPosition())
+						.arg(pScratch->GetCaretPosition()));
+
+				m_pTabs->setCurrentIndex(0);
+				Require(m_pGotoBar->GetLineRangeText().contains(
+						QString::number(pOther->GetLineCount())),
+					QStringLiteral("goto: switching tabs updates the readout to %1, got '%2'")
+						.arg(pOther->GetLineCount()).arg(m_pGotoBar->GetLineRangeText()));
+				// The offset field too, not only the labels. It shipped showing
+				// the PREVIOUS document's caret offset - a number with no
+				// meaning in the document now in front of the user. Found in
+				// review.
+				Require(m_pGotoBar->GetOffset() == pOther->GetCaretPosition(),
+					QStringLiteral("goto: switching tabs refreshes the offset box to %1, "
+						"got %2").arg(pOther->GetCaretPosition())
+						.arg(m_pGotoBar->GetOffset()));
+				m_pTabs->setCurrentIndex(nScratchTab);
+			}
+
+			//--------------------------------------------------------------
+			// What a box's text means, including the numbers int cannot hold
+			//--------------------------------------------------------------
+			Require(CGotoBar::ParseTarget(QString()) == 0,
+				QStringLiteral("goto: an empty box is 0, which is the top"));
+			Require(CGotoBar::ParseTarget(QStringLiteral("42")) == 42,
+				QStringLiteral("goto: a number is itself"));
+			// QString::toInt OVERFLOWS TO ZERO, so without ParseTarget these two
+			// would be indistinguishable from an empty box and would jump to the
+			// TOP - the opposite end from the one asked for. Found in review.
+			const int nMax = std::numeric_limits<int>::max();
+			Require(CGotoBar::ParseTarget(QStringLiteral("99999999999")) == nMax,
+				QStringLiteral("goto: a number too big for an int means the end, not 0"));
+			Require(CGotoBar::ParseTarget(QStringLiteral("2147483648")) == nMax,
+				QStringLiteral("goto: and that starts exactly one past INT_MAX"));
+
+			// End to end, which is the half that matters: an overflowing line
+			// number must land where a merely-large one lands.
+			pScratch->GotoLine(CGotoBar::ParseTarget(QStringLiteral("999999")));
+			const int nLargeLine = pScratch->GetCaretLine();
+			pScratch->Send(SCI_GOTOPOS, 0);
+			pScratch->GotoLine(CGotoBar::ParseTarget(QStringLiteral("99999999999")));
+			Require(pScratch->GetCaretLine() == nLargeLine,
+				QStringLiteral("goto: an overflowing line number lands where a large one "
+					"does (line %1, expected %2)")
+					.arg(pScratch->GetCaretLine()).arg(nLargeLine));
+			Require(nLargeLine > 1,
+				QStringLiteral("goto: and that is not line 1, so the check can fail"));
+
+			// End to end through the menu action, as the Replace regression
+			// taught: the shortcut being right is only half of it.
+			QAction* pGotoAction = nullptr;
+			for (QAction* pAction : menuBar()->findChildren<QAction*>())
+			{
+				QString strPlain = pAction->text();
+				strPlain.remove(QLatin1Char('&'));
+				if (strPlain.startsWith(QStringLiteral("Go to Line")))
+				{
+					pGotoAction = pAction;
+				}
+			}
+			Require(pGotoAction != nullptr,
+				QStringLiteral("goto: the Search menu carries a Go to Line action"));
+			if (pGotoAction != nullptr)
+			{
+				Require(!pGotoAction->shortcut().isEmpty(),
+					QStringLiteral("goto: Go to Line has a shortcut"));
+				m_pGotoBar->hide();
+				pGotoAction->trigger();
+				Require(!m_pGotoBar->isHidden(),
+					QStringLiteral("goto: the menu action opens the bar"));
+			}
+
+			// And the close path hides it, which is the bar's only way out
+			// besides Escape - and the one that needs no keyboard.
+			OnHideGoto();
+			Require(m_pGotoBar->isHidden(), QStringLiteral("goto: the bar closes"));
+
+			pScratch->Send(SCI_SETSAVEPOINT);
+			OnCloseTab(m_pTabs->indexOf(pScratch));
+		}
+	}
+
+	//----------------------------------------------------------------------
 	// Menu shortcuts. Added because Replace shipped bound to a key the
 	// operating system eats: QKeySequence::Replace resolves to Cmd+H on macOS,
 	// which is Hide Application, so the menu item was unreachable by keyboard
@@ -1870,9 +2430,17 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 
 		QList<QKeySequence> seen;
 		int nWithShortcut = 0;
+		// EVERY sequence an action answers to, not just shortcut(), which
+		// returns the primary one. An action can carry several - Find Next
+		// carries two on macOS, Preferences carries two everywhere - and the
+		// single-shortcut version of this loop was blind to all but the first.
+		// It therefore could not see the very defect it exists to catch: a
+		// SECONDARY binding landing on a reserved or already-taken key would
+		// have passed silently.
 		for (QAction* pAction : menuBar()->findChildren<QAction*>())
 		{
-			const QKeySequence key = pAction->shortcut();
+			for (const QKeySequence& key : pAction->shortcuts())
+			{
 			if (key.isEmpty())
 			{
 				continue;
@@ -1908,9 +2476,72 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 				QStringLiteral("shortcut: %1 is bound twice, most recently by '%2'")
 					.arg(key.toString(QKeySequence::NativeText), pAction->text()));
 			seen.append(key);
+			}
 		}
 		Require(nWithShortcut >= 8,
 			QStringLiteral("shortcut: found %1 bound actions to check").arg(nWithShortcut));
+
+		// An action on a standard key must answer to EVERY binding Qt lists for
+		// it, not just the first. This is what shipped wrong: Find Next was
+		// given QKeySequence::FindNext through the single-sequence overload, so
+		// on macOS it took F3 and left Cmd+G - which Qt lists, and which is the
+		// platform convention - bound to nothing.
+		//
+		// Written against keyBindings() rather than against "F3 and Cmd+G", so
+		// it states the rule on every platform instead of encoding one
+		// platform's answer.
+		const struct { const char* _Name; QKeySequence::StandardKey _Key; } standard[] = {
+			{ "Find Next", QKeySequence::FindNext },
+			{ "Find Previous", QKeySequence::FindPrevious },
+		};
+		for (const auto& entry : standard)
+		{
+			QAction* pFound = nullptr;
+			for (QAction* pAction : menuBar()->findChildren<QAction*>())
+			{
+				QString strPlain = pAction->text();
+				strPlain.remove(QLatin1Char('&'));
+				if (strPlain == QLatin1String(entry._Name))
+				{
+					pFound = pAction;
+				}
+			}
+			Require(pFound != nullptr,
+				QStringLiteral("shortcut: found the '%1' action")
+					.arg(QLatin1String(entry._Name)));
+			if (pFound != nullptr)
+			{
+				// The rule is not "every binding is installed" - that was the
+				// first version and Linux failed it, correctly. Qt lists Ctrl+G
+				// for Find Next there, and Go to Line deliberately owns Ctrl+G
+				// on every platform but macOS.
+				//
+				// The real invariant is that no binding Qt lists is left doing
+				// NOTHING: each is either installed on this action or claimed by
+				// another one. That is what the shipped defect violated - Cmd+G
+				// was neither.
+				for (const QKeySequence& key : QKeySequence::keyBindings(entry._Key))
+				{
+					if (pFound->shortcuts().contains(key))
+					{
+						continue;
+					}
+					QString strOwner;
+					for (QAction* pOther : menuBar()->findChildren<QAction*>())
+					{
+						if (pOther != pFound && pOther->shortcuts().contains(key))
+						{
+							strOwner = pOther->text();
+						}
+					}
+					Require(!strOwner.isEmpty(),
+						QStringLiteral("shortcut: Qt lists %1 for '%2', which neither has it "
+							"nor any other action - so the key does nothing")
+							.arg(key.toString(QKeySequence::NativeText),
+								QLatin1String(entry._Name)));
+				}
+			}
+		}
 
 		// And Replace specifically has one, since that is the regression.
 		QAction* pReplaceAction = nullptr;
@@ -2185,6 +2816,13 @@ int CMainWindow::RenderScreenshots(const QStringList& files, const QString& strD
 		OnShowFind();
 		m_pFindBar->Activate(FirstWordOf(pEditor));
 		OnPatternChanged();
+		// And the goto bar below it, for the same reason: D10 asks for a
+		// screenshot of the shallow visible tail, and a feature that never
+		// appears in one has not been shown to anybody. Both bars at once is
+		// also the arrangement the MFC cannot produce - they are pages of one
+		// tab control there - so the picture doubles as the evidence for that
+		// divergence.
+		OnShowGoto();
 	}
 
 	show();
