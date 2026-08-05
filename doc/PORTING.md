@@ -2604,6 +2604,14 @@ mutations to prove the checks distinguish them.
 **Self-test: 776 → 840 checks on defaults, 780 → 844 configured.** The markers
 and the pane are both in the main screenshot.
 
+> ⚠️ **The check count is platform-dependent, and always has been.** These
+> figures — and every count published in §6 — are the **macOS** ones. Linux
+> reports fewer: the last green run before this section was **773/777** on
+> `ubuntu-latest` against **776/780** on `macos-latest`, because the
+> reserved-key loop iterates an empty list off macOS. This section widens the
+> gap with the reachability check above, which is macOS-only by design. Compare
+> like with like when re-deriving.
+
 Reproduce:
 
 ```bash

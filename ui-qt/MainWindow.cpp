@@ -3778,7 +3778,14 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 			seen.append(key);
 			}
 		}
-		// EVERY ACTION MUST HAVE A BINDING THAT ACTUALLY ARRIVES.
+		// EVERY ACTION MUST HAVE A BINDING THAT ACTUALLY ARRIVES - ON macOS.
+		//
+		// SCOPED TO macOS, because the premise is a macOS hardware behaviour
+		// and not a universal one. Linux CI failed the first version on
+		// 'Find Next', which legitimately holds F3 alone there: Go to Line owns
+		// Ctrl+G on Linux (§6m), the filter removes it from Find Next, and a
+		// bare F3 is perfectly reachable on a PC keyboard. The check was right
+		// about the binding and wrong about the platform.
 		//
 		// On macOS the function keys are brightness, Mission Control and the
 		// rest by default, so a bare F-key never reaches the application unless
@@ -3792,6 +3799,7 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 		// action must carry a modifier that is not Shift. It would have caught
 		// both instances, and it is the third time this port has learned that a
 		// shortcut which RESOLVES is not a shortcut that ARRIVES.
+#ifdef Q_OS_MACOS
 		for (QAction* pAction : menuBar()->findChildren<QAction*>())
 		{
 			if (pAction->shortcuts().isEmpty())
@@ -3831,6 +3839,7 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 					"key, so it can be reached on a Mac")
 					.arg(pAction->text()));
 		}
+#endif
 
 		Require(nWithShortcut >= 8,
 			QStringLiteral("shortcut: found %1 bound actions to check").arg(nWithShortcut));
