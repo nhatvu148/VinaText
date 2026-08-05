@@ -2563,10 +2563,45 @@ by one, in the markers *and* in the pane.
   message-pane check already used `trigger()`; this one did not, and failed
   until it did.
 
+### The third instance of the shortcut bug, and the check that ends it
+
+The bindings shipped as Ctrl+F2 / F2 / Shift+F2 — Notepad++'s, Visual Studio's,
+Qt Creator's — with the note *"F2 is free on macOS in a way Cmd+something rarely
+is"*. **That reasoned about collisions and ignored reachability.** On a Mac the
+function keys are brightness and Mission Control by default, so a bare F2 never
+arrives. Confirmed by a person pressing it, one PR after §6n fixed Find Next for
+exactly the same reason.
+
+Each command now carries **two** bindings: a Cmd/Ctrl one that always arrives
+(Cmd+Shift+B, and Cmd+Shift+[ / Cmd+Shift+] mirroring the paragraph commands on
+Cmd+[ / Cmd+]) and the F-key the convention expects, which still works wherever
+the F-keys are standard.
+
+**And the rule is now checked, not remembered.** Every menu action must have at
+least one binding carrying a modifier other than Shift — Shift does not rescue a
+function key, since Shift+F3 needs Fn exactly as F3 does. Re-introducing either
+historical bug fails it:
+
+```
+'Next Book&mark' has a binding that does not need a function key ...   <- this PR
+'Find &Next'     has a binding that does not need a function key ...   <- PR #47
+```
+
+**It found a third, pre-existing one immediately.** `File → Exit` carries
+`Qt::Key_Exit` — the key no Mac has, already recorded in this port's notes as
+the second instance. It turns out to be *reachable* anyway, because macOS merges
+the item into the application menu and supplies Cmd+Q: `menuRole()` is **1**,
+`TextHeuristicRole`, and Qt decides by **matching the English word "Exit"**. So
+`tr("E&xit")` returning *"Thoát"* would stop the merge and take Cmd+Q with it —
+in a Vietnamese editor. The role is now stated outright rather than inferred
+from a translated string, and the check exempts merged roles rather than
+matching text, which the duplicate-shortcut check below already learned to
+distrust.
+
 **10 mutations, 10 caught**, including both mask defects re-introduced as
 mutations to prove the checks distinguish them.
 
-**Self-test: 776 → 820 checks on defaults, 780 → 824 configured.** The markers
+**Self-test: 776 → 840 checks on defaults, 780 → 844 configured.** The markers
 and the pane are both in the main screenshot.
 
 Reproduce:
@@ -2587,7 +2622,7 @@ grep -n "SC_SETMARGINTYPE_MAKER\|SC_MARKER_BOOKMARK" src/EditorCommonDef.h
 # 832 lines become 153 across two files
 wc -l src/BookmarkWindow.cpp ui-qt/BookmarkPane.cpp ui-qt/BookmarkPane.h
 
-# 820 checks, up from 776
+# 840 checks, up from 776
 QT_QPA_PLATFORM=offscreen perl -e 'alarm 300; exec @ARGV or die "exec failed: $!"' -- \
   ./qtbuild/ui-qt/vinatext-qt --selftest \
   core/LanguageData.cpp tools/extract_language_data.py \

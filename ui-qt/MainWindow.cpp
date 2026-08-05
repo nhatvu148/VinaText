@@ -195,7 +195,16 @@ void CMainWindow::BuildMenus()
 			OnCloseTab(m_pTabs->currentIndex());
 		}
 	});
-	pFile->addAction(tr("E&xit"), QKeySequence::Quit, this, &QWidget::close);
+	QAction* pExit = pFile->addAction(tr("E&xit"), QKeySequence::Quit, this,
+		&QWidget::close);
+	// EXPLICIT QuitRole, not Qt's text heuristic. On macOS Qt merges this item
+	// into the application menu and supplies Cmd+Q itself - which is why
+	// QKeySequence::Quit resolves to the useless Qt::Key_Exit here rather than
+	// to a real sequence. But the default role is TextHeuristicRole, which
+	// decides by matching the ENGLISH word "Exit": the moment tr() returns
+	// "Thoát" the merge stops happening and Cmd+Q goes with it. Saying the role
+	// outright costs one line and does not depend on the language.
+	pExit->setMenuRole(QAction::QuitRole);
 
 	QMenu* pSearch = menuBar()->addMenu(tr("&Search"));
 
@@ -294,16 +303,37 @@ void CMainWindow::BuildMenus()
 		}
 	});
 	// Bookmarks. src/VinaText.rc has no accelerators for these at all, so the
-	// bindings are this port's: Ctrl+F2 to toggle and F2/Shift+F2 to move
-	// between them is what Notepad++, Visual Studio and Qt Creator all use, and
-	// F2 is free on macOS in a way Cmd+something rarely is.
+	// bindings are this port's - and the first version got them wrong in the
+	// way this port keeps getting them wrong.
+	//
+	// It bound Ctrl+F2 / F2 / Shift+F2, which is what Notepad++, Visual Studio
+	// and Qt Creator use, with the note "F2 is free on macOS in a way
+	// Cmd+something rarely is". That reasoned about COLLISIONS and ignored
+	// REACHABILITY: on a Mac the F-keys are brightness and Mission Control by
+	// default, so a bare F2 never arrives unless the user has changed a system
+	// setting. Confirmed by a person pressing it. It is the same error as
+	// binding Find Next to F3 alone, which PR #47 fixed - one PR earlier.
+	//
+	// So each command gets TWO bindings: a Cmd/Ctrl one that always arrives,
+	// and the F-key the convention expects, which still works for anyone whose
+	// F-keys are standard. setShortcuts, not setShortcut - taking only the
+	// first is how Find Next lost Cmd+G.
+	//
+	// Cmd+Shift+[ and Cmd+Shift+] mirror the paragraph commands on Cmd+[ and
+	// Cmd+], which is the nearest thing this menu has to a convention.
 	pSearch->addSeparator();
-	pSearch->addAction(tr("Toggle &Bookmark"),
-		QKeySequence(Qt::CTRL | Qt::Key_F2), this, &CMainWindow::OnToggleBookmark);
-	pSearch->addAction(tr("Next Book&mark"),
-		QKeySequence(Qt::Key_F2), this, &CMainWindow::OnNextBookmark);
-	pSearch->addAction(tr("Previous Boo&kmark"),
-		QKeySequence(Qt::SHIFT | Qt::Key_F2), this, &CMainWindow::OnPreviousBookmark);
+	QAction* pToggleMark = pSearch->addAction(tr("Toggle &Bookmark"), this,
+		&CMainWindow::OnToggleBookmark);
+	pToggleMark->setShortcuts({ QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_B),
+		QKeySequence(Qt::CTRL | Qt::Key_F2) });
+	QAction* pNextMark = pSearch->addAction(tr("Next Book&mark"), this,
+		&CMainWindow::OnNextBookmark);
+	pNextMark->setShortcuts({ QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_BracketRight),
+		QKeySequence(Qt::Key_F2) });
+	QAction* pPrevMark = pSearch->addAction(tr("Previous Boo&kmark"), this,
+		&CMainWindow::OnPreviousBookmark);
+	pPrevMark->setShortcuts({ QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_BracketLeft),
+		QKeySequence(Qt::SHIFT | Qt::Key_F2) });
 	pSearch->addAction(tr("Clear All Bookmarks"), this, &CMainWindow::OnClearBookmarks);
 
 	// No keyboard shortcut, because the MFC gives it none either - its binding
@@ -3748,6 +3778,60 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 			seen.append(key);
 			}
 		}
+		// EVERY ACTION MUST HAVE A BINDING THAT ACTUALLY ARRIVES.
+		//
+		// On macOS the function keys are brightness, Mission Control and the
+		// rest by default, so a bare F-key never reaches the application unless
+		// the user has changed a system setting. An action whose ONLY binding
+		// is a bare function key is therefore unreachable for most people - and
+		// this has now happened twice: Find Next on F3 alone (fixed in #47) and
+		// the bookmark commands on F2/Shift+F2 alone, which shipped in the
+		// first version of this very PR and was caught by a person pressing it.
+		//
+		// The rule is general, so the check is too: at least one sequence per
+		// action must carry a modifier that is not Shift. It would have caught
+		// both instances, and it is the third time this port has learned that a
+		// shortcut which RESOLVES is not a shortcut that ARRIVES.
+		for (QAction* pAction : menuBar()->findChildren<QAction*>())
+		{
+			if (pAction->shortcuts().isEmpty())
+			{
+				continue;
+			}
+			// Items macOS merges into the application menu are exempt: the
+			// platform supplies their shortcut, which is exactly why Qt
+			// resolves QKeySequence::Quit to Qt::Key_Exit rather than to a real
+			// sequence. Exempted on the ROLE, which is the actual mechanism,
+			// rather than on the text - the duplicate-shortcut check below
+			// already learned that matching "Exit" fails on "E&xit".
+			const QAction::MenuRole role = pAction->menuRole();
+			if (role == QAction::QuitRole || role == QAction::PreferencesRole
+				|| role == QAction::AboutRole || role == QAction::AboutQtRole)
+			{
+				continue;
+			}
+
+			bool bReachable = false;
+			for (const QKeySequence& key : pAction->shortcuts())
+			{
+				if (key.isEmpty())
+				{
+					continue;
+				}
+				const int nModifiers = key[0].keyboardModifiers();
+				// Shift alone does not rescue a function key: Shift+F3 needs Fn
+				// exactly as F3 does.
+				if ((nModifiers & ~Qt::ShiftModifier) != 0)
+				{
+					bReachable = true;
+				}
+			}
+			Require(bReachable,
+				QStringLiteral("shortcut: '%1' has a binding that does not need a function "
+					"key, so it can be reached on a Mac")
+					.arg(pAction->text()));
+		}
+
 		Require(nWithShortcut >= 8,
 			QStringLiteral("shortcut: found %1 bound actions to check").arg(nWithShortcut));
 
