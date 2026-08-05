@@ -12,6 +12,7 @@
 #include "FindBar.h"
 #include "GotoBar.h"
 #include "EncodingDialog.h"
+#include "WindowListDialog.h"
 #include "AboutDialog.h"
 #include "PreferencesDialog.h"
 #include "MessagePane.h"
@@ -336,6 +337,15 @@ void CMainWindow::BuildMenus()
 		QKeySequence(Qt::CTRL | Qt::Key_Comma) });
 	pPreferences->setMenuRole(QAction::PreferencesRole);
 
+	// The window manager. The MFC gives it a toolbar button and Ctrl+Shift+W
+	// and NO menu item at all (src/VinaText.rc:179, :241, :1374) - ui-qt/ has
+	// no toolbar, so it needs one, and a feature reachable only by a shortcut
+	// is one platform quirk away from not existing.
+	pView->addSeparator();
+	QAction* pWindows = pView->addAction(tr("&Current Windows..."), this,
+		&CMainWindow::OnWindowManager);
+	pWindows->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_W));
+
 	QMenu* pHelp = menuBar()->addMenu(tr("&Help"));
 	pHelp->addAction(tr("&About VinaText"), this, &CMainWindow::OnAbout);
 }
@@ -457,6 +467,70 @@ void CMainWindow::ApplyEncoding(CEncodingDialog::EMode mode, const QString& strE
 	}
 	UpdateStatusBar();
 	UpdateTabLabel(pEditor);
+}
+
+QList<CWindowListDialog::SEntry> CMainWindow::CollectWindowList() const
+{
+	QList<CWindowListDialog::SEntry> entries;
+	for (int i = 0; i < m_pTabs->count(); ++i)
+	{
+		if (CEditorWidget* pEditor = qobject_cast<CEditorWidget*>(m_pTabs->widget(i)))
+		{
+			CWindowListDialog::SEntry entry;
+			entry._Name = pEditor->GetDisplayName();
+			// Empty for an untitled document, and ALSO for one whose file has
+			// gone from disk - the MFC asks PathFileExists rather than the
+			// document, so a deleted file reads "N/A" there too.
+			entry._Path = QFileInfo::exists(pEditor->GetFilePath())
+				? pEditor->GetFilePath() : QString();
+			entry._Modified = pEditor->IsModified();
+			entries.append(entry);
+		}
+	}
+	return entries;
+}
+
+void CMainWindow::OnWindowManager()
+{
+	CWindowListDialog dialog(this);
+	dialog.SetEntries(CollectWindowList());
+
+	connect(&dialog, &CWindowListDialog::ActivateRequested, this, [this](int nRow)
+	{
+		if (nRow >= 0 && nRow < m_pTabs->count())
+		{
+			m_pTabs->setCurrentIndex(nRow);
+		}
+	});
+	connect(&dialog, &CWindowListDialog::SaveRequested, this, [this, &dialog](int nRow)
+	{
+		if (nRow < 0 || nRow >= m_pTabs->count())
+		{
+			return;
+		}
+		// Save acts on the row, so the row has to BE the current tab first -
+		// OnSave works on whatever is current. COpenTabWindows calls
+		// OnFileSave on the document it looked up, which needs no such step.
+		m_pTabs->setCurrentIndex(nRow);
+		OnSave();
+		dialog.SetEntries(CollectWindowList());
+	});
+	connect(&dialog, &CWindowListDialog::CloseRequested, this,
+		[this, &dialog](const QList<int>& rows)
+	{
+		// SelectedRows() hands these back descending, so closing one does not
+		// shift the index of another still to come.
+		for (int nRow : rows)
+		{
+			if (nRow >= 0 && nRow < m_pTabs->count())
+			{
+				OnCloseTab(nRow);
+			}
+		}
+		dialog.SetEntries(CollectWindowList());
+	});
+
+	dialog.exec();
 }
 
 void CMainWindow::OnPreferences()
@@ -3065,6 +3139,106 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 	}
 
 	//----------------------------------------------------------------------
+	// The window manager - src/OpenTabWindows.cpp. A dialog, not a dock pane:
+	// see doc/PORTING.md 6n. LIGHT rigour per D10 - this is the shallow
+	// visible tail, so a check and a screenshot, not a differential test.
+	//----------------------------------------------------------------------
+	{
+		CWindowListDialog dialog(this);
+		dialog.SetEntries(CollectWindowList());
+
+		Require(dialog.RowCount() == GetTabCount(),
+			QStringLiteral("windows: one row per open tab, %1 rows for %2 tabs")
+				.arg(dialog.RowCount()).arg(GetTabCount()));
+		Require(dialog.windowTitle().contains(QString::number(GetTabCount())),
+			QStringLiteral("windows: the title carries the count, got '%1'")
+				.arg(dialog.windowTitle()));
+
+		// Every row names a real tab, in tab order - which is what makes an
+		// index handed back by this dialog safe to use as a tab index.
+		int nMismatched = 0;
+		for (int i = 0; i < dialog.RowCount() && i < GetTabCount(); ++i)
+		{
+			CEditorWidget* pEditor = qobject_cast<CEditorWidget*>(m_pTabs->widget(i));
+			if (pEditor != nullptr
+				&& !dialog.RowText(i, 0).startsWith(pEditor->GetDisplayName()))
+			{
+				++nMismatched;
+			}
+		}
+		Require(nMismatched == 0,
+			QStringLiteral("windows: every row names its tab, in tab order; %1 did not")
+				.arg(nMismatched));
+
+		// A saved document shows its path; an untitled one shows N/A. Both
+		// asserted, and the presence of both is asserted too - a run with only
+		// one kind would let a hard-coded answer pass.
+		CEditorWidget* pFresh = NewUntitled();
+		dialog.SetEntries(CollectWindowList());
+		const int nUntitledRow = m_pTabs->indexOf(pFresh);
+		Require(dialog.RowText(nUntitledRow, 1) == QStringLiteral("N/A"),
+			QStringLiteral("windows: an untitled document shows N/A, got '%1'")
+				.arg(dialog.RowText(nUntitledRow, 1)));
+		Require(dialog.RowText(0, 1) != QStringLiteral("N/A"),
+			QStringLiteral("windows: a document on disk shows its path, got '%1'")
+				.arg(dialog.RowText(0, 1)));
+
+		// Copy Full Path takes the path, and refuses the one that is not a
+		// path. The MFC guards with PathFileExists for the same reason.
+		Require(dialog.SelectRowForTest(0), QStringLiteral("windows: selected a saved row"));
+		dialog.TriggerForTest(QStringLiteral("copy"));
+		Require(dialog.CopiedPathForTest() == dialog.RowText(0, 1),
+			QStringLiteral("windows: Copy Full Path copied '%1'")
+				.arg(dialog.CopiedPathForTest()));
+		const QString strCopiedBefore = dialog.CopiedPathForTest();
+		Require(dialog.SelectRowForTest(nUntitledRow),
+			QStringLiteral("windows: selected the untitled row"));
+		dialog.TriggerForTest(QStringLiteral("copy"));
+		Require(dialog.CopiedPathForTest() == strCopiedBefore,
+			QStringLiteral("windows: and copies NOTHING for a document with no path, got "
+				"'%1'").arg(dialog.CopiedPathForTest()));
+
+		// Activate switches tabs. Checked against a row that is NOT already
+		// current, or it would pass without doing anything.
+		const int nOther = (m_pTabs->currentIndex() == 0) ? 1 : 0;
+		Require(m_pTabs->currentIndex() != nOther,
+			QStringLiteral("windows: the activate target is not already current"));
+		int nActivated = -1;
+		connect(&dialog, &CWindowListDialog::ActivateRequested, this,
+			[this, &nActivated](int nRow) { m_pTabs->setCurrentIndex(nRow); nActivated = nRow; });
+		Require(dialog.SelectRowForTest(nOther), QStringLiteral("windows: selected it"));
+		dialog.TriggerForTest(QStringLiteral("activate"));
+		Require(nActivated == nOther && m_pTabs->currentIndex() == nOther,
+			QStringLiteral("windows: Activate switched to tab %1, current is %2")
+				.arg(nOther).arg(m_pTabs->currentIndex()));
+
+		// Selected rows come back DESCENDING, which is what stops a caller
+		// closing by index from invalidating the indices it has not reached.
+		if (dialog.RowCount() >= 3)
+		{
+			// THREE rows, not one. A single-row selection is sorted both ways,
+			// so the first version of this check could not fail and the
+			// mutation reversing the comparator went straight through it.
+			Require(dialog.SelectRowsForTest({ 0, 2, 1 }),
+				QStringLiteral("windows: selected three rows out of order"));
+			const QList<int> rows = dialog.SelectedRows();
+			Require(rows.size() == 3,
+				QStringLiteral("windows: all three come back, got %1").arg(rows.size()));
+			QList<int> sorted = rows;
+			std::sort(sorted.begin(), sorted.end(), std::greater<int>());
+			Require(rows == sorted && rows.first() > rows.last(),
+				QStringLiteral("windows: selected rows come back highest-first (%1), so "
+					"closing by index stays valid")
+					.arg(QStringList{ QString::number(rows.at(0)),
+						QString::number(rows.at(1)),
+						QString::number(rows.at(2)) }.join(QLatin1Char(','))));
+		}
+
+		pFresh->Send(SCI_SETSAVEPOINT);
+		OnCloseTab(m_pTabs->indexOf(pFresh));
+	}
+
+	//----------------------------------------------------------------------
 	// Menu shortcuts. Added because Replace shipped bound to a key the
 	// operating system eats: QKeySequence::Replace resolves to Cmd+H on macOS,
 	// which is Hide Application, so the menu item was unreachable by keyboard
@@ -3482,6 +3656,26 @@ int CMainWindow::RenderScreenshots(const QStringList& files, const QString& strD
 
 	show();
 	QApplication::processEvents();
+
+	// The window manager, in its own picture. It is MODAL, so it cannot appear
+	// in the main shot - and D10 asks for a screenshot of the shallow visible
+	// tail, which a feature that never appears in one has not had.
+	{
+		CWindowListDialog windows(this);
+		windows.SetEntries(CollectWindowList());
+		windows.show();
+		QApplication::processEvents();
+		const QString strWindows = QStringLiteral("%1/vinatext-windows.png").arg(strDirectory);
+		if (windows.grab().save(strWindows))
+		{
+			qInfo("wrote %s", qPrintable(strWindows));
+		}
+		else
+		{
+			qWarning("could not write %s", qPrintable(strWindows));
+		}
+		windows.close();
+	}
 
 	int nFailures = 0;
 	const struct { EEditorTheme _Theme; const char* _Name; } shots[] = {

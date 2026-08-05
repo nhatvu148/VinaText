@@ -19,6 +19,7 @@
 
 #include "EditorData.h"
 #include "EncodingDialog.h"
+#include "WindowListDialog.h"
 
 #include <QColor>
 #include <QMainWindow>
@@ -74,6 +75,11 @@ private:
 	// section and doc/PORTING.md 6m.
 	void BuildEncodingMenu(QMenu* pMenu, CEncodingDialog::EMode mode);
 	void OnChooseEncoding(CEncodingDialog::EMode mode);
+
+	// The window manager - COpenTabWindows. A dialog, not a dock pane; see
+	// ui-qt/WindowListDialog.h and doc/PORTING.md 6n.
+	void OnWindowManager();
+	QList<CWindowListDialog::SEntry> CollectWindowList() const;
 	void ApplyEncoding(CEncodingDialog::EMode mode, const QString& strEncoding);
 	// Re-applies the current settings to every open editor.
 	void ReapplySettings();
