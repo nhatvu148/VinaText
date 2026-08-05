@@ -22,6 +22,8 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QSet>
+
+#include <optional>
 #include <QTextCodec>
 #include <QFontDatabase>
 
@@ -659,14 +661,28 @@ bool CEditorWidget::SaveFile(const QString& strPath, QString& strErrorOut)
 		reinterpret_cast<sptr_t>(utf8.data()));
 	utf8.truncate(static_cast<int>(nLength));
 
+	// ENCODE BEFORE OPENING. The open carries Truncate, so it empties the file
+	// the instant it succeeds - and this used to run first, which meant any
+	// failure between it and the write left the user with a ZERO-BYTE file
+	// where their document had been. Nothing could fail there when it was
+	// written; the encoder can now, and a save that cannot produce bytes must
+	// not have destroyed the old ones getting there.
+	const std::optional<QByteArray> encoded = EncodeForSave(QString::fromUtf8(utf8));
+	if (!encoded.has_value())
+	{
+		strErrorOut = tr("Cannot write %1: the encoding '%2' is not available in this "
+			"build, and saving in a different one would write bytes you did not ask "
+			"for.").arg(strPath, GetEncodingName());
+		return false;
+	}
+
 	QFile file(strPath);
 	if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate))
 	{
 		strErrorOut = tr("Cannot write %1: %2").arg(strPath, file.errorString());
 		return false;
 	}
-	const QByteArray encoded = EncodeForSave(QString::fromUtf8(utf8));
-	if (file.write(encoded) != encoded.size() || !file.flush())
+	if (file.write(*encoded) != encoded->size() || !file.flush())
 	{
 		strErrorOut = tr("Cannot write %1: %2").arg(strPath, file.errorString());
 		return false;
@@ -686,7 +702,7 @@ bool CEditorWidget::SaveFile(const QString& strPath, QString& strErrorOut)
 	return true;
 }
 
-QByteArray CEditorWidget::EncodeForSave(const QString& strText) const
+std::optional<QByteArray> CEditorWidget::EncodeForSave(const QString& strText) const
 {
 	if (!m_CodecName.isEmpty())
 	{
@@ -706,12 +722,18 @@ QByteArray CEditorWidget::EncodeForSave(const QString& strText) const
 			QTextCodec::ConverterState state(QTextCodec::IgnoreHeader);
 			return pCodec->fromUnicode(strText.constData(), strText.size(), &state);
 		}
-		// A codec that existed when it was chosen and does not now. Falling
-		// through to the builtin path would write DIFFERENT BYTES under the
-		// name the user picked, so this is worth being loud about rather than
-		// silently re-encoding.
-		qWarning("save: codec '%s' is unavailable; writing as %s instead",
-			m_CodecName.constData(), QStringConverter::nameForEncoding(m_Encoding));
+		// A codec that existed when it was chosen and does not now. THE SAVE
+		// FAILS rather than falling through to the builtin encoding.
+		//
+		// Falling through wrote different bytes under the name the user picked,
+		// and the label went on reporting the codec - found in review. Clearing
+		// the name so the label matched was the suggested fix, but that only
+		// makes the mislabelling honest AFTER the fact: the file still contains
+		// an encoding nobody chose. Refusing is the one outcome that cannot
+		// lose information, and the user can pick another encoding.
+		qWarning("save: codec '%s' is unavailable; refusing to write",
+			m_CodecName.constData());
+		return std::nullopt;
 	}
 	QStringEncoder encoder(m_Encoding, m_bHasBom
 		? QStringConverter::Flag::WriteBom

@@ -25,6 +25,8 @@
 #include <QStringList>
 #include <QStringConverter>
 
+#include <optional>
+
 class CEditorWidget final : public ScintillaEditBase
 {
 	Q_OBJECT
@@ -157,6 +159,11 @@ public:
 	// For the self-test: drives OnCharAdded without synthesising a key event,
 	// which offscreen cannot deliver to Scintilla reliably.
 	void OnCharAddedForTest(int nChar) { OnCharAdded(nChar); }
+	// Forces the stored codec name, so the self-test can drive the
+	// codec-went-away path. SetSaveEncoding refuses names that do not resolve,
+	// so there is no other way to reach it - and without a seam it would be
+	// one more branch documented as uncovered instead of checked.
+	void SetCodecNameForTest(const QByteArray& name) { m_CodecName = name; }
 
 	sptr_t Send(unsigned int iMessage, uptr_t wParam = 0, sptr_t lParam = 0) const
 	{
@@ -208,7 +215,9 @@ private:
 	// and saving it as UTF-8 would be data loss the user never asked for, so the
 	// encoding and the byte-order mark are properties of the document, not
 	// assumptions.
-	QByteArray EncodeForSave(const QString& strText) const;
+	// Empty when the document names a codec this build no longer has. The
+	// caller must then REFUSE the save - see the .cpp.
+	std::optional<QByteArray> EncodeForSave(const QString& strText) const;
 	// The other direction, and the only place the two encoding paths are
 	// chosen between. Both go through here so they cannot drift apart.
 	QString DecodeBytes(const QByteArray& raw) const;

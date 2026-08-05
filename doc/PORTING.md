@@ -2253,9 +2253,44 @@ flagged 13 encodings that are simply **aliases** of it (`ibm-1208`, `utf8`, …)
 and are labelled correctly. The comparison is against the **resolved** encoding
 instead — a check that cries wolf on correct behaviour gets deleted, not obeyed.
 
-**11 mutations, 9 caught, 2 impossible.**
+### A third round, and the finding sat on top of a worse one again
 
-**Self-test: 656 → 735 checks on defaults, 660 → 739 configured.**
+The review then found that when a chosen codec is **unavailable at save time**,
+`EncodeForSave` fell through to the builtin encoding while `GetEncodingLabel()`
+went on naming the codec — the same silent mislabelling as the `System` case.
+True. The suggested fix was to clear `m_CodecName` so the label matched.
+
+**That fix is too weak, and reading the function to apply it found something
+worse.** Relabelling only makes the mislabelling honest *after the fact*: the
+file still contains an encoding nobody chose. And `SaveFile` opened with
+`QIODevice::Truncate` **before** calling `EncodeForSave` — so the file was
+emptied before the bytes existed. Nothing could fail in between when that was
+written; the moment the encoder could, a refused save would have left a
+**zero-byte file where the document had been.**
+
+Both fixed:
+
+- **The save refuses.** `EncodeForSave` returns `std::optional` and yields
+  nothing when the named codec is gone. Refusing is the only outcome that cannot
+  lose information; the user can pick another encoding.
+- **The encode happens before the open.** A save that cannot produce bytes must
+  not have destroyed the old ones getting there.
+
+**And this one is covered rather than documented as unreachable.**
+`SetSaveEncoding` refuses names that do not resolve, so the branch has no
+natural route — a test seam (`SetCodecNameForTest`, following the existing
+`OnCharAddedForTest` precedent) reaches it, which turned a third
+"uncovered, said so" branch into two real checks. Both mutations reproduce the
+defects:
+
+```
+gone codec falls through   -> a save REFUSES when the chosen codec is gone ... FAIL
+truncate before encoding   -> the file on disk is UNTOUCHED ... FAIL
+```
+
+**13 mutations, 11 caught, 2 impossible.**
+
+**Self-test: 656 → 740 checks on defaults, 660 → 744 configured.**
 
 Reproduce:
 
@@ -2279,7 +2314,7 @@ grep -cE "^void CEditorDoc::On[Uu]pdateFileSave" src/EditorDoc.cpp   # 5 dead ha
 #   QTextCodec:       805 names, windows-1258 among them
 grep -rn "QTextCodec" thirdparty/scintilla/qt/ScintillaEditBase/*.cpp | head -3   # already a dependency
 
-# 735 checks, up from 656
+# 740 checks, up from 656
 QT_QPA_PLATFORM=offscreen perl -e 'alarm 300; exec @ARGV or die "exec failed: $!"' -- \
   ./qtbuild/ui-qt/vinatext-qt --selftest \
   core/LanguageData.cpp tools/extract_language_data.py \

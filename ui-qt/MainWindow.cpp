@@ -2854,6 +2854,43 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 					QStringLiteral("encoding: and left the document on UTF-8, got '%1'")
 						.arg(pEnc->GetEncodingName()));
 
+				//------------------------------------------------------
+				// A CODEC THAT WENT AWAY between choosing it and saving.
+				//
+				// Reachable only through a test seam, because SetSaveEncoding
+				// refuses names that do not resolve - so without one this would
+				// be a third branch documented as uncovered. Found in review:
+				// it used to fall through and write the BUILTIN encoding while
+				// the label went on naming the codec.
+				//------------------------------------------------------
+				{
+					const QByteArray intact = ReadAll(strPath);
+					Require(!intact.isEmpty(),
+						QStringLiteral("encoding: the file has content before the "
+							"gone-codec check, so truncation would be visible"));
+
+					pEnc->SetCodecNameForTest(QByteArray("no-such-codec-exists"));
+					QString strGoneError;
+					Require(!pEnc->SaveFile(strPath, strGoneError),
+						QStringLiteral("encoding: a save REFUSES when the chosen codec is "
+							"gone, rather than writing some other encoding"));
+					Require(strGoneError.contains(QStringLiteral("not available")),
+						QStringLiteral("encoding: and says why, got '%1'").arg(strGoneError));
+
+					// THE FILE MUST STILL BE THERE. SaveFile opened with
+					// Truncate BEFORE encoding, so a refused save emptied the
+					// document it was supposed to write - a zero-byte file
+					// where the user's text had been. The encode now happens
+					// first, and this is the check that says so.
+					Require(ReadAll(strPath) == intact,
+						QStringLiteral("encoding: and the file on disk is UNTOUCHED - not "
+							"truncated to nothing on the way to failing"));
+
+					// Back to something real, so the tab can be closed cleanly.
+					Require(pEnc->SetSaveEncoding(QStringLiteral("UTF-8")),
+						QStringLiteral("encoding: recovered to UTF-8 after the gone codec"));
+				}
+
 				pEnc->Send(SCI_SETSAVEPOINT);
 				OnCloseTab(m_pTabs->indexOf(pEnc));
 			}
