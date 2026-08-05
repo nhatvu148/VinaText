@@ -13,6 +13,7 @@
 #include "GotoBar.h"
 #include "EncodingDialog.h"
 #include "WindowListDialog.h"
+#include "BookmarkPane.h"
 #include "AboutDialog.h"
 #include "PreferencesDialog.h"
 #include "MessagePane.h"
@@ -85,6 +86,17 @@ CMainWindow::CMainWindow(CEditorData& data, QWidget* pParent)
 	// it when there is a saved layout, which is the order the user expects.
 	resizeDocks({ m_pMessagePane }, { 120 }, Qt::Vertical);
 
+	// The second dock pane, and the last one D10 keeps. Created before
+	// BuildMenus so the View menu can take its toggleViewAction, exactly as
+	// CMessagePane is.
+	m_pBookmarkPane = new CBookmarkPane(this);
+	addDockWidget(Qt::BottomDockWidgetArea, m_pBookmarkPane);
+	// Tabbed with the message pane rather than stacked: two bottom docks each
+	// wanting height leaves the editor squeezed, and these are both
+	// consult-occasionally panes.
+	tabifyDockWidget(m_pMessagePane, m_pBookmarkPane);
+	m_pBookmarkPane->hide();
+
 	BuildMenus();
 	BuildStatusBar();
 
@@ -129,6 +141,8 @@ CMainWindow::CMainWindow(CEditorData& data, QWidget* pParent)
 	connect(m_pGotoBar, &CGotoBar::GotoLineRequested, this, &CMainWindow::OnGotoLine);
 	connect(m_pGotoBar, &CGotoBar::GotoOffsetRequested, this, &CMainWindow::OnGotoOffset);
 	connect(m_pGotoBar, &CGotoBar::CloseRequested, this, &CMainWindow::OnHideGoto);
+	connect(m_pBookmarkPane, &CBookmarkPane::BookmarkActivated,
+		this, &CMainWindow::OnBookmarkActivated);
 
 	// Say where the settings came from. On macOS and Linux the file usually does
 	// not exist - it is written by the Windows build - so "using defaults" is
@@ -279,6 +293,19 @@ void CMainWindow::BuildMenus()
 			pEditor->GotoPreviousParagraph();
 		}
 	});
+	// Bookmarks. src/VinaText.rc has no accelerators for these at all, so the
+	// bindings are this port's: Ctrl+F2 to toggle and F2/Shift+F2 to move
+	// between them is what Notepad++, Visual Studio and Qt Creator all use, and
+	// F2 is free on macOS in a way Cmd+something rarely is.
+	pSearch->addSeparator();
+	pSearch->addAction(tr("Toggle &Bookmark"),
+		QKeySequence(Qt::CTRL | Qt::Key_F2), this, &CMainWindow::OnToggleBookmark);
+	pSearch->addAction(tr("Next Book&mark"),
+		QKeySequence(Qt::Key_F2), this, &CMainWindow::OnNextBookmark);
+	pSearch->addAction(tr("Previous Boo&kmark"),
+		QKeySequence(Qt::SHIFT | Qt::Key_F2), this, &CMainWindow::OnPreviousBookmark);
+	pSearch->addAction(tr("Clear All Bookmarks"), this, &CMainWindow::OnClearBookmarks);
+
 	// No keyboard shortcut, because the MFC gives it none either - its binding
 	// is the MIDDLE MOUSE BUTTON ("Goto To Caret\tMiddle Mouse"). A menu item is
 	// the entry point that survives having no third button, and it is one more
@@ -312,6 +339,7 @@ void CMainWindow::BuildMenus()
 	// Qt supplies the show/hide action, already checkable and already bound to
 	// the pane's visibility in both directions.
 	pView->addAction(m_pMessagePane->toggleViewAction());
+	pView->addAction(m_pBookmarkPane->toggleViewAction());
 
 	pView->addSeparator();
 	QAction* pWrap = pView->addAction(tr("&Word Wrap"), this, [this](bool bOn)
@@ -559,6 +587,122 @@ void CMainWindow::OnWindowManager()
 	dialog.exec();
 }
 
+void CMainWindow::RefreshBookmarks()
+{
+	// Rebuilt from the markers every time, across every open document. That is
+	// the divergence from src/BookmarkWindow.cpp, which maintains a parallel
+	// list and updates it only on add and delete - so a line inserted above a
+	// bookmark leaves the Windows pane naming a number the marker no longer
+	// sits on. Scintilla moves markers; a derived list cannot drift.
+	QList<CBookmarkPane::SEntry> entries;
+	for (int i = 0; i < m_pTabs->count(); ++i)
+	{
+		CEditorWidget* pEditor = qobject_cast<CEditorWidget*>(m_pTabs->widget(i));
+		if (pEditor == nullptr)
+		{
+			continue;
+		}
+		for (int nLine : pEditor->BookmarkedLines())
+		{
+			CBookmarkPane::SEntry entry;
+			entry._File = pEditor->GetDisplayName();
+			entry._Path = pEditor->GetFilePath();
+			entry._Line = nLine;
+			entry._Text = pEditor->TextOfLine(nLine);
+			entries.append(entry);
+		}
+	}
+	m_pBookmarkPane->SetEntries(entries);
+}
+
+void CMainWindow::OnToggleBookmark()
+{
+	CEditorWidget* pEditor = GetCurrentEditor();
+	if (pEditor == nullptr)
+	{
+		return;
+	}
+	// NO PathFileExists GUARD. CEditorView::OnOptionsAddBookmark refuses to
+	// bookmark a document that is not on disk, so an unsaved buffer cannot be
+	// marked at all on Windows. Nothing about a marker needs a file, the pane
+	// shows the display name for exactly this case, and refusing would be a
+	// restriction with no reason behind it.
+	const int nLine = pEditor->GetCaretLine();
+	ToggleBookmarkAt(pEditor, nLine);
+}
+
+void CMainWindow::ToggleBookmarkAt(CEditorWidget* pEditor, int nLine)
+{
+	pEditor->ToggleBookmark(nLine);
+	RefreshBookmarks();
+	LogMessage(pEditor->IsLineBookmarked(nLine)
+		? tr("Added a bookmark at %1, line %2").arg(pEditor->GetDisplayName()).arg(nLine)
+		: tr("Removed the bookmark at %1, line %2")
+			.arg(pEditor->GetDisplayName()).arg(nLine));
+}
+
+void CMainWindow::OnNextBookmark()
+{
+	if (CEditorWidget* pEditor = GetCurrentEditor())
+	{
+		if (pEditor->NextBookmark() == 0)
+		{
+			statusBar()->showMessage(tr("No bookmarks in this document"), 3000);
+		}
+		UpdateStatusBar();
+	}
+}
+
+void CMainWindow::OnPreviousBookmark()
+{
+	if (CEditorWidget* pEditor = GetCurrentEditor())
+	{
+		if (pEditor->PreviousBookmark() == 0)
+		{
+			statusBar()->showMessage(tr("No bookmarks in this document"), 3000);
+		}
+		UpdateStatusBar();
+	}
+}
+
+void CMainWindow::OnClearBookmarks()
+{
+	// This document's, not every document's. CEditorCtrl::DeleteAllBookMark is
+	// also per-document; the pane spans all of them, so the menu item says
+	// which it means by living next to the other per-document commands.
+	if (CEditorWidget* pEditor = GetCurrentEditor())
+	{
+		pEditor->ClearBookmarks();
+		RefreshBookmarks();
+	}
+}
+
+void CMainWindow::OnBookmarkActivated(const QString& strPath, const QString& strFile,
+	int nLine)
+{
+	// Find the tab by path, falling back to the display name for a document
+	// that has never been saved and therefore has no path to match on.
+	for (int i = 0; i < m_pTabs->count(); ++i)
+	{
+		CEditorWidget* pEditor = qobject_cast<CEditorWidget*>(m_pTabs->widget(i));
+		if (pEditor == nullptr)
+		{
+			continue;
+		}
+		const bool bMatch = strPath.isEmpty()
+			? pEditor->GetDisplayName() == strFile
+			: pEditor->GetFilePath() == strPath;
+		if (bMatch)
+		{
+			m_pTabs->setCurrentIndex(i);
+			pEditor->GotoLine(nLine);
+			pEditor->setFocus();
+			UpdateStatusBar();
+			return;
+		}
+	}
+}
+
 void CMainWindow::OnPreferences()
 {
 	CPreferencesDialog dialog(m_Data.GetSettings(), this);
@@ -706,6 +850,11 @@ void CMainWindow::RestoreDockState()
 
 CEditorWidget* CMainWindow::AddTab(CEditorWidget* pEditor)
 {
+	// Margin clicks toggle bookmarks. Wired here rather than at each creation
+	// site so a tab made by any route gets it - and through ToggleBookmarkAt,
+	// which the menu command also uses, so the two cannot drift.
+	connect(pEditor, &CEditorWidget::BookmarkToggleRequested, this,
+		[this, pEditor](int nLine) { ToggleBookmarkAt(pEditor, nLine); });
 	const int nIndex = m_pTabs->addTab(pEditor, pEditor->GetDisplayName());
 	m_pTabs->setTabToolTip(nIndex, pEditor->GetFilePath());
 	m_pTabs->setCurrentIndex(nIndex);
@@ -1424,7 +1573,19 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 			// is asserted once at the end.
 			if (nHeaderLine >= 0)
 			{
-				const int nX = static_cast<int>(pEditor->Send(SCI_GETMARGINWIDTHN, 0)) + 8;
+				// x is computed from the ACTUAL margin widths, not from
+				// "margin 0 plus a bit". The original assumed margin 1 had
+				// width 0 and so landed in the fold margin by luck; the moment
+				// bookmarks gave margin 1 a width, the click started landing in
+				// the SYMBOL margin and this check failed - correctly. It was
+				// the only thing that noticed the layout had moved.
+				const int nMargin0 = static_cast<int>(pEditor->Send(SCI_GETMARGINWIDTHN, 0));
+				const int nMargin1 = static_cast<int>(pEditor->Send(SCI_GETMARGINWIDTHN, 1));
+				const int nMargin2 = static_cast<int>(pEditor->Send(SCI_GETMARGINWIDTHN, 2));
+				Require(nMargin2 > 0,
+					QStringLiteral("%1: the fold margin has width, so a click can reach it")
+						.arg(strName));
+				const int nX = nMargin0 + nMargin1 + (nMargin2 / 2);
 				const int nY = static_cast<int>(pEditor->Send(SCI_POINTYFROMPOSITION, 0,
 					pEditor->Send(SCI_POSITIONFROMLINE, static_cast<uptr_t>(nHeaderLine)))) + 2;
 				const QPointF at(nX, nY);
@@ -3340,6 +3501,185 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 	}
 
 	//----------------------------------------------------------------------
+	// Bookmarks - src/BookmarkWindow.cpp and CEditorCtrl's marker calls.
+	// See doc/PORTING.md 6o.
+	//----------------------------------------------------------------------
+	{
+		CEditorWidget* pMarks = GetCurrentEditor();
+		Require(pMarks != nullptr, QStringLiteral("bookmarks: got a document"));
+		if (pMarks != nullptr)
+		{
+			pMarks->ClearBookmarks();
+			RefreshBookmarks();
+			Require(!pMarks->HasBookmarks(),
+				QStringLiteral("bookmarks: none to start with"));
+			Require(m_pBookmarkPane->RowCount() == 0,
+				QStringLiteral("bookmarks: and the pane is empty, got %1 rows")
+					.arg(m_pBookmarkPane->RowCount()));
+
+			// THE MARGIN HAS WIDTH. It was 0 until this change, so a marker set
+			// on it would have been invisible - the check that would have
+			// caught shipping the markers without the margin.
+			Require(pMarks->Send(SCI_GETMARGINWIDTHN, 1) > 0,
+				QStringLiteral("bookmarks: the symbol margin has width, so a marker on it "
+					"can be seen"));
+			Require((pMarks->Send(SCI_GETMARGINMASKN, 1) & (1 << 3)) != 0,
+				QStringLiteral("bookmarks: and admits the bookmark marker"));
+
+			// Toggle on, off, on.
+			pMarks->ToggleBookmark(5);
+			Require(pMarks->IsLineBookmarked(5),
+				QStringLiteral("bookmarks: toggled one on at line 5"));
+			Require(pMarks->HasBookmarks(),
+				QStringLiteral("bookmarks: and the document reports having some"));
+			pMarks->ToggleBookmark(5);
+			Require(!pMarks->IsLineBookmarked(5),
+				QStringLiteral("bookmarks: toggled it off again"));
+			pMarks->ToggleBookmark(5);
+
+			// A MASK, NOT AN EQUALITY. CEditorCtrl::IsLineHasBookMark tests
+			// `== 8 || == 9`, so a bookmark sharing a line with marker 1 - mask
+			// 10 - reports as absent. ui-qt has no breakpoints, so marker 1 is
+			// set directly here to reach the state that exposes it.
+			pMarks->Send(SCI_MARKERADD, 4, 1);		// marker 1 on line 5
+			Require(pMarks->Send(SCI_MARKERGET, 4) == 10,
+				QStringLiteral("bookmarks: line 5 now carries mask %1, which the MFC's "
+					"equality test does not admit")
+					.arg(static_cast<int>(pMarks->Send(SCI_MARKERGET, 4))));
+			Require(pMarks->IsLineBookmarked(5),
+				QStringLiteral("bookmarks: and it is STILL bookmarked, because the test "
+					"masks rather than compares"));
+			pMarks->Send(SCI_MARKERDELETE, 4, 1);
+
+			// Enumeration, ascending, and the pane built from it.
+			pMarks->ToggleBookmark(12);
+			pMarks->ToggleBookmark(2);
+			const QList<int> lines = pMarks->BookmarkedLines();
+			Require(lines == QList<int>({ 2, 5, 12 }),
+				QStringLiteral("bookmarks: enumerated ascending, got %1")
+					.arg(QStringList{ QString::number(lines.value(0)),
+						QString::number(lines.value(1)),
+						QString::number(lines.value(2)) }.join(QLatin1Char(','))));
+			RefreshBookmarks();
+			Require(m_pBookmarkPane->RowCount() == 3,
+				QStringLiteral("bookmarks: the pane shows three, got %1")
+					.arg(m_pBookmarkPane->RowCount()));
+			Require(m_pBookmarkPane->RowText(0, 0) == QStringLiteral("2"),
+				QStringLiteral("bookmarks: first row is line 2, got '%1'")
+					.arg(m_pBookmarkPane->RowText(0, 0)));
+			Require(m_pBookmarkPane->RowText(0, 2) == pMarks->TextOfLine(2),
+				QStringLiteral("bookmarks: and carries that line's text"));
+
+			// THE MARKERS ARE THE TRUTH. Inserting a line above a bookmark
+			// moves the marker, and a list DERIVED from the markers follows it.
+			// src/BookmarkWindow.cpp stores line numbers and updates them only
+			// on add and delete, so the Windows pane would still say 2 here.
+			pMarks->Send(SCI_GOTOPOS, 0);
+			pMarks->Send(SCI_ADDTEXT, 1, reinterpret_cast<sptr_t>("\n"));
+			const QList<int> moved = pMarks->BookmarkedLines();
+			Require(moved == QList<int>({ 3, 6, 13 }),
+				QStringLiteral("bookmarks: an inserted line moved every marker down one, "
+					"got %1").arg(QStringList{ QString::number(moved.value(0)),
+						QString::number(moved.value(1)),
+						QString::number(moved.value(2)) }.join(QLatin1Char(','))));
+			RefreshBookmarks();
+			Require(m_pBookmarkPane->RowText(0, 0) == QStringLiteral("3"),
+				QStringLiteral("bookmarks: and the pane followed, got '%1'")
+					.arg(m_pBookmarkPane->RowText(0, 0)));
+			pMarks->Send(SCI_UNDO);
+			pMarks->Send(SCI_SETSAVEPOINT);
+
+			// Navigation, which on Windows calls the BREAKPOINT functions -
+			// OnOptionsFindNextBookmark is FindNextBreakPoint - and would move
+			// to breakpoints, or in ui-qt to nothing at all.
+			pMarks->GotoLine(1);
+			Require(pMarks->NextBookmark() == 2,
+				QStringLiteral("bookmarks: next from line 1 is 2"));
+			Require(pMarks->NextBookmark() == 5,
+				QStringLiteral("bookmarks: then 5"));
+			Require(pMarks->PreviousBookmark() == 2,
+				QStringLiteral("bookmarks: and back to 2"));
+			// BOTH directions wrap, which the MFC's do not. Checking only one
+			// left the other's wrap untested - a mutation removing NextBookmark's
+			// fallback went straight through, because every assertion up to here
+			// used PreviousBookmark for the wrap case.
+			Require(pMarks->PreviousBookmark() == 12,
+				QStringLiteral("bookmarks: previous from the first wraps to the last"));
+			Require(pMarks->NextBookmark() == 2,
+				QStringLiteral("bookmarks: and next from the last wraps to the first"));
+
+			// A REAL MARGIN CLICK, through the shipped signal and the shipped
+			// toggle - not a direct call to ToggleBookmark.
+			const int nBeforeClick = pMarks->BookmarkedLines().size();
+			const int nMarginX = static_cast<int>(pMarks->Send(SCI_GETMARGINWIDTHN, 0)) + 4;
+			const int nMarginY = static_cast<int>(pMarks->Send(SCI_POINTYFROMPOSITION, 0,
+				pMarks->Send(SCI_POSITIONFROMLINE, 7))) + 2;
+			const QPointF at(nMarginX, nMarginY);
+			QMouseEvent press(QEvent::MouseButtonPress, at, at,
+				Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+			QMouseEvent release(QEvent::MouseButtonRelease, at, at,
+				Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+			QApplication::sendEvent(pMarks->viewport(), &press);
+			QApplication::sendEvent(pMarks->viewport(), &release);
+			Require(pMarks->BookmarkedLines().size() == nBeforeClick + 1,
+				QStringLiteral("bookmarks: clicking the symbol margin added one, %1 -> %2")
+					.arg(nBeforeClick).arg(pMarks->BookmarkedLines().size()));
+			Require(pMarks->IsLineBookmarked(8),
+				QStringLiteral("bookmarks: on the line clicked"));
+			QApplication::sendEvent(pMarks->viewport(), &press);
+			QApplication::sendEvent(pMarks->viewport(), &release);
+			Require(!pMarks->IsLineBookmarked(8),
+				QStringLiteral("bookmarks: and clicking again removed it"));
+
+			// Clicking a pane row jumps to the bookmark, through the pane's own
+			// signal.
+			RefreshBookmarks();
+			m_pTabs->setCurrentIndex(m_pTabs->count() - 1);
+			Require(GetCurrentEditor() != pMarks,
+				QStringLiteral("bookmarks: moved to a different tab first"));
+			Require(m_pBookmarkPane->ActivateRowForTest(1),
+				QStringLiteral("bookmarks: activated the second pane row"));
+			Require(GetCurrentEditor() == pMarks,
+				QStringLiteral("bookmarks: which switched back to the right document"));
+			Require(pMarks->GetCaretLine() == 5,
+				QStringLiteral("bookmarks: and put the caret on line 5, got %1")
+					.arg(pMarks->GetCaretLine()));
+
+			// Clear All empties both the document and the pane.
+			pMarks->ClearBookmarks();
+			RefreshBookmarks();
+			Require(!pMarks->HasBookmarks(),
+				QStringLiteral("bookmarks: Clear All removed them"));
+			Require(m_pBookmarkPane->RowCount() == 0,
+				QStringLiteral("bookmarks: and emptied the pane"));
+
+			// The pane is a real dock: show and hide through the same action
+			// the View menu uses, as §6k established for the message pane.
+			// trigger(), NOT setChecked(). Qt connects toggleViewAction to the
+			// dock through QAction::triggered, so setChecked moves the tick and
+			// leaves the pane where it was - measured: checked went 0 -> 1 with
+			// hidden staying 1. It fails loudly here; in product code it would
+			// be a menu item whose tick disagreed with the screen. §6k's
+			// message-pane check already used trigger(); this one did not, and
+			// the check caught it.
+			QAction* pToggle = m_pBookmarkPane->toggleViewAction();
+			Require(m_pBookmarkPane->isHidden(),
+				QStringLiteral("bookmarks: the pane starts hidden"));
+			pToggle->trigger();
+			Require(!m_pBookmarkPane->isHidden(),
+				QStringLiteral("bookmarks: the View action shows the pane"));
+			Require(pToggle->isChecked(),
+				QStringLiteral("bookmarks: and the menu item ticks with it"));
+			pToggle->trigger();
+			Require(m_pBookmarkPane->isHidden(),
+				QStringLiteral("bookmarks: and hides it again"));
+			Require(!m_pBookmarkPane->objectName().isEmpty(),
+				QStringLiteral("bookmarks: the pane has an objectName, which saveState "
+					"keys the layout on"));
+		}
+	}
+
+	//----------------------------------------------------------------------
 	// Menu shortcuts. Added because Replace shipped bound to a key the
 	// operating system eats: QKeySequence::Replace resolves to Cmd+H on macOS,
 	// which is Hide Application, so the menu item was unreachable by keyboard
@@ -3753,6 +4093,19 @@ int CMainWindow::RenderScreenshots(const QStringList& files, const QString& strD
 		// tab control there - so the picture doubles as the evidence for that
 		// divergence.
 		OnShowGoto();
+	}
+
+	// Bookmarks in the picture: a few markers in the margin and the pane
+	// showing them. A marker margin nobody can see in a screenshot is the
+	// thing this change exists to fix.
+	if (CEditorWidget* pShot = GetCurrentEditor())
+	{
+		pShot->ToggleBookmark(3);
+		pShot->ToggleBookmark(9);
+		pShot->ToggleBookmark(17);
+		RefreshBookmarks();
+		m_pBookmarkPane->show();
+		m_pBookmarkPane->raise();
 	}
 
 	show();

@@ -86,6 +86,16 @@ namespace
 	// this is that constant, not a magic number.
 	const int CURSOR_HAND = 8;
 
+	// Marker NUMBERS, matching src/EditorCommonDef.h's SC_MARKER_*. Only the
+	// bookmark is used here - breakpoints and the instruction pointer belong to
+	// the debugger, which D10 defers - but the numbers are kept because the two
+	// frontends share a margin and must not disagree about which bit is which.
+	const int MARKER_BOOKMARK = 3;
+	// ...and the MASK for it, which is a different thing and the source of two
+	// defects in src/Editor.cpp. See CEditorWidget's bookmark section.
+	const int MARKER_BOOKMARK_MASK = 1 << MARKER_BOOKMARK;
+	const int SYMBOL_MARGIN_WIDTH = 16;
+
 	// Matches SC_DEFAUFT_TAB_WIDTH in src/EditorCommonDef.h (sic).
 	const int DEFAULT_TAB_WIDTH = 4;
 
@@ -103,7 +113,27 @@ CEditorWidget::CEditorWidget(const CEditorData& data, QWidget* pParent)
 	Send(SCI_SETCODEPAGE, SC_CP_UTF8);
 	Send(SCI_SETTABWIDTH, DEFAULT_TAB_WIDTH);
 	Send(SCI_SETMARGINTYPEN, MARGIN_LINE_NUMBERS, SC_MARGIN_NUMBER);
-	Send(SCI_SETMARGINWIDTHN, MARGIN_SYMBOLS, 0);	// bookmarks/breakpoints: Phase 5
+	// The symbol margin, which carried width 0 and a "Phase 5" note until
+	// bookmarks arrived. Its mask admits ONLY the bookmark: src/Editor.cpp
+	// admits four markers because it also has breakpoints and an instruction
+	// pointer, and D10 defers both, so accepting them here would reserve space
+	// for markers nothing can set.
+	Send(SCI_SETMARGINTYPEN, MARGIN_SYMBOLS, SC_MARGIN_SYMBOL);
+	Send(SCI_SETMARGINMASKN, MARGIN_SYMBOLS, MARKER_BOOKMARK_MASK);
+	Send(SCI_SETMARGINWIDTHN, MARGIN_SYMBOLS, SYMBOL_MARGIN_WIDTH);
+	// Clicking the margin toggles a bookmark. CEditorCtrl makes this margin
+	// sensitive too (src/Editor.cpp:258).
+	Send(SCI_SETMARGINSENSITIVEN, MARGIN_SYMBOLS, 1);
+	connect(this, &ScintillaEditBase::marginClicked, this,
+		&CEditorWidget::OnMarginClicked);
+	// SC_MARK_BOOKMARK is a built-in shape, so no RGBA image and no icon
+	// resource is needed - which is why this was cheaper than PORTING.md 6j's
+	// three remaining SCI_REGISTERRGBAIMAGE calls suggested.
+	Send(SCI_MARKERDEFINE, MARKER_BOOKMARK, SC_MARK_BOOKMARK);
+	// RGB(255,0,0) on RGB(255,255,255), as src/Editor.cpp:255-256 sets them.
+	// Scintilla takes colours as BGR, so red is 0x0000FF.
+	Send(SCI_MARKERSETFORE, MARKER_BOOKMARK, 0x0000FF);
+	Send(SCI_MARKERSETBACK, MARKER_BOOKMARK, 0xFFFFFF);
 
 	// Folding. The margin is only given width for languages that have a lexer -
 	// CEditorCtrl does the same (src/Editor.cpp:354), and an always-visible empty
@@ -1506,6 +1536,141 @@ void CEditorWidget::GotoNextParagraph()
 void CEditorWidget::ScrollToCaret()
 {
 	SetLineCenterDisplay(GetCaretLine());
+}
+
+void CEditorWidget::OnMarginClicked(Scintilla::Position position,
+	Scintilla::KeyMod modifiers, int nMargin)
+{
+	Q_UNUSED(modifiers);
+	if (nMargin != MARGIN_SYMBOLS)
+	{
+		return;
+	}
+	const int nLine = static_cast<int>(Send(SCI_LINEFROMPOSITION,
+		static_cast<uptr_t>(position))) + 1;
+	emit BookmarkToggleRequested(nLine);
+}
+
+//////////////////////////////////////////////////////////////////////////
+// Bookmarks
+//
+// Every mask/number distinction here is one src/Editor.cpp gets wrong. See the
+// header, and doc/PORTING.md 6o.
+
+bool CEditorWidget::IsLineBookmarked(int nLine) const
+{
+	if (nLine < 1)
+	{
+		return false;
+	}
+	// A BIT TEST, not an equality. SCI_MARKERGET returns every marker on the
+	// line as one mask, so CEditorCtrl::IsLineHasBookMark's `== 8 || == 9`
+	// answers correctly only when the bookmark is alone or sits with marker 0.
+	// A bookmark alongside a DISABLED breakpoint is mask 10 and reports as no
+	// bookmark. Its own comment says "check mask for markerbit 0"; the bookmark
+	// is bit 3.
+	const sptr_t nMask = Send(SCI_MARKERGET, static_cast<uptr_t>(nLine - 1));
+	return (nMask & MARKER_BOOKMARK_MASK) != 0;
+}
+
+void CEditorWidget::ToggleBookmark(int nLine)
+{
+	if (nLine < 1)
+	{
+		return;
+	}
+	if (IsLineBookmarked(nLine))
+	{
+		Send(SCI_MARKERDELETE, static_cast<uptr_t>(nLine - 1), MARKER_BOOKMARK);
+	}
+	else
+	{
+		Send(SCI_MARKERADD, static_cast<uptr_t>(nLine - 1), MARKER_BOOKMARK);
+	}
+}
+
+void CEditorWidget::ClearBookmarks()
+{
+	// A marker NUMBER here, which is what this one wants and what the MFC
+	// correctly passes.
+	Send(SCI_MARKERDELETEALL, MARKER_BOOKMARK);
+}
+
+bool CEditorWidget::HasBookmarks() const
+{
+	// A MASK. CEditorCtrl::HasBookmarks passes SC_SETMARGINTYPE_MAKER, which is
+	// 1 - the margin's number, used where a marker mask belongs. Mask 1 is
+	// marker 0, the enabled breakpoint, so on Windows this function answers a
+	// question about breakpoints and is named for bookmarks.
+	return Send(SCI_MARKERNEXT, 0, MARKER_BOOKMARK_MASK) >= 0;
+}
+
+QList<int> CEditorWidget::BookmarkedLines() const
+{
+	QList<int> lines;
+	sptr_t nLine = Send(SCI_MARKERNEXT, 0, MARKER_BOOKMARK_MASK);
+	while (nLine >= 0)
+	{
+		lines.append(static_cast<int>(nLine) + 1);		// 1-based, as shown
+		nLine = Send(SCI_MARKERNEXT, static_cast<uptr_t>(nLine + 1),
+			MARKER_BOOKMARK_MASK);
+	}
+	return lines;
+}
+
+int CEditorWidget::NextBookmark()
+{
+	const int nFrom = GetCaretLine();		// 1-based
+	sptr_t nLine = Send(SCI_MARKERNEXT, static_cast<uptr_t>(nFrom), MARKER_BOOKMARK_MASK);
+	if (nLine < 0)
+	{
+		// Wrap. The MFC does not - its FindNextBreakPoint simply stops at the
+		// last one - but a bookmark ring that dead-ends is a worse answer than
+		// one that comes round, and every editor with this feature wraps.
+		nLine = Send(SCI_MARKERNEXT, 0, MARKER_BOOKMARK_MASK);
+	}
+	if (nLine < 0)
+	{
+		return 0;
+	}
+	GotoLine(static_cast<int>(nLine) + 1);
+	return static_cast<int>(nLine) + 1;
+}
+
+int CEditorWidget::PreviousBookmark()
+{
+	const int nFrom = GetCaretLine();		// 1-based
+	sptr_t nLine = Send(SCI_MARKERPREVIOUS, static_cast<uptr_t>(nFrom - 2),
+		MARKER_BOOKMARK_MASK);
+	if (nLine < 0)
+	{
+		nLine = Send(SCI_MARKERPREVIOUS, static_cast<uptr_t>(GetLineCount()),
+			MARKER_BOOKMARK_MASK);
+	}
+	if (nLine < 0)
+	{
+		return 0;
+	}
+	GotoLine(static_cast<int>(nLine) + 1);
+	return static_cast<int>(nLine) + 1;
+}
+
+QString CEditorWidget::TextOfLine(int nLine) const
+{
+	if (nLine < 1 || nLine > GetLineCount())
+	{
+		return QString();
+	}
+	const sptr_t nLength = Send(SCI_LINELENGTH, static_cast<uptr_t>(nLine - 1));
+	if (nLength <= 0)
+	{
+		return QString();
+	}
+	QByteArray buffer(static_cast<int>(nLength) + 1, '\0');
+	Send(SCI_GETLINE, static_cast<uptr_t>(nLine - 1),
+		reinterpret_cast<sptr_t>(buffer.data()));
+	buffer.truncate(static_cast<int>(nLength));
+	return QString::fromUtf8(buffer).trimmed();
 }
 
 //////////////////////////////////////////////////////////////////////////
