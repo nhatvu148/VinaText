@@ -31,6 +31,8 @@ qt_add_executable(vinatext-qt
     EncodingDialog.h
     WindowListDialog.cpp
     WindowListDialog.h
+    BookmarkPane.cpp
+    BookmarkPane.h
     PreferencesDialog.cpp
     PreferencesDialog.h
     AboutDialog.cpp

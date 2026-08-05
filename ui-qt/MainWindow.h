@@ -20,6 +20,7 @@
 #include "EditorData.h"
 #include "EncodingDialog.h"
 #include "WindowListDialog.h"
+#include "BookmarkPane.h"
 
 #include <QColor>
 #include <QMainWindow>
@@ -86,6 +87,18 @@ private:
 	// modal, so a self-test cannot reach them through exec(). Found in review;
 	// it is the same hole 6m found in the encoding menus.
 	void ConnectWindowList(CWindowListDialog* pDialog);
+
+	// Bookmarks. The pane is rebuilt from the markers rather than kept in step
+	// with them - see ui-qt/BookmarkPane.h and doc/PORTING.md 6o.
+	void RefreshBookmarks();
+	void OnToggleBookmark();
+	// The one place a bookmark is toggled, so the margin click and the menu
+	// command cannot drift apart - the lesson from §6n's ConnectWindowList.
+	void ToggleBookmarkAt(CEditorWidget* pEditor, int nLine);
+	void OnNextBookmark();
+	void OnPreviousBookmark();
+	void OnClearBookmarks();
+	void OnBookmarkActivated(const QString& strPath, const QString& strFile, int nLine);
 	void ApplyEncoding(CEncodingDialog::EMode mode, const QString& strEncoding);
 	// Re-applies the current settings to every open editor.
 	void ReapplySettings();
@@ -139,6 +152,7 @@ private:
 
 	CEditorData&		m_Data;
 	CMessagePane*			m_pMessagePane = nullptr;
+	CBookmarkPane*			m_pBookmarkPane = nullptr;
 	QTabWidget*			m_pTabs = nullptr;
 	CFindBar*			m_pFindBar = nullptr;
 	CGotoBar*			m_pGotoBar = nullptr;

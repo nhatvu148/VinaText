@@ -2481,6 +2481,166 @@ wc -l src/OpenTabWindows.cpp ui-qt/WindowListDialog.cpp ui-qt/WindowListDialog.h
 
 ---
 
+## 6o. Bookmarks — a marker number is not a marker mask
+
+The last dock pane D10 keeps, after §6n corrected the inventory. §6k's framework
+carried it with nothing new required: a `QDockWidget`, an `objectName`
+`saveState` keys on, a `toggleViewAction`, geometry through the existing
+`SaveDockState`.
+
+**The cheap part was the marker.** `SC_MARK_BOOKMARK` is a built-in Scintilla
+shape, so no RGBA image and no icon resource — which is why this cost less than
+§6j's three remaining `SCI_REGISTERRGBAIMAGE` calls implied. Margin 1 carried
+width 0 and a "bookmarks/breakpoints: Phase 5" note; it now has width, a mask
+admitting only the bookmark, and click-to-toggle.
+
+### Four defects in the MFC's bookmark code, and none reproduced
+
+Scintilla's own `Scintilla.iface` draws the line these all cross:
+
+```
+MarkerAdd(line, int markerNumber)       <- a NUMBER
+MarkerDelete(line, int markerNumber)    <- a NUMBER
+MarkerDeleteAll(int markerNumber)       <- a NUMBER
+MarkerGet(line)                         <- returns a MASK
+MarkerNext(lineStart, int markerMask)   <- a MASK
+```
+
+`src/Editor.cpp` passes the marker number to all five.
+
+| where | what it does | consequence |
+|---|---|---|
+| `IsLineHasBookMark` | `nMarker == 8 \|\| nMarker == 9` | `SCI_MARKERGET` returns *every* marker on the line. A bookmark sharing a line with a **disabled** breakpoint is mask 10 and reports as **no bookmark**. Its own comment says "check mask for markerbit 0"; the bookmark is bit 3. |
+| `HasBookmarks` | `SCI_MARKERNEXT(0, SC_SETMARGINTYPE_MAKER)` | that constant is **1** — the *margin's* number used where a marker mask belongs. Mask 1 is marker 0, the enabled breakpoint. The function is named for bookmarks and answers about breakpoints. |
+| `FindNextBreakPoint` / `FindPreviousBreakPoint` | same constant as a mask | navigates **enabled breakpoints only**, never disabled ones and never bookmarks. |
+| `OnOptionsFindNextBookmark` / `...PrevBookmark` | call `FindNextBreakPoint` / `FindPreviousBreakPoint` | **Find Next Bookmark moves between breakpoints.** Not a subtle confusion — the wrong function outright. |
+
+**None of these is reproduced, and the reason is not taste.** `ui-qt/` has no
+breakpoints — D10 defers the debugger — so transcribing them faithfully would
+give: navigation that moves to nothing, a `HasBookmarks` that is always false,
+and a Clear All that is permanently disabled. The feature would not work at all.
+That is the line this port has drawn before: reproduce quirks that are merely
+different (§6l's off-by-one centring, §6j's unsorted list), fix what is
+outright broken (§6j's zero-width-match hang).
+
+The mask defects are unobservable in `ui-qt/` *today* for the same reason — with
+no breakpoints, a line's mask is only ever 0 or 8. The self-test reaches the
+state anyway by setting marker 1 directly, so the check that distinguishes a
+mask test from an equality **can** fail.
+
+### The markers are the truth
+
+`src/BookmarkWindow.cpp` keeps a parallel `std::vector<BOOKMARK_LINE_DATA>`,
+appending on add and removing on delete. **Scintilla moves its markers as the
+document is edited, and nothing updates those stored line numbers.** Insert a
+line above a bookmark on Windows and the pane still names the old one.
+
+The Qt pane is rebuilt from `SCI_MARKERNEXT` across every open document, so it
+cannot drift. A check inserts a line and asserts all three bookmarks moved down
+by one, in the markers *and* in the pane.
+
+### Two smaller departures
+
+- **No `PathFileExists` guard.** `CEditorView::OnOptionsAddBookmark` refuses to
+  bookmark a document that is not on disk, so an unsaved buffer cannot be marked
+  at all. Nothing about a marker needs a file, and the pane shows the display
+  name for exactly that case.
+- **Navigation wraps, both ways.** The MFC's dead-ends at the last marker.
+  Checking only one direction left the other's wrap untested and a mutation
+  removing `NextBookmark`'s fallback went straight through — both are asserted
+  now.
+
+### What the checks caught in their own right
+
+- **The fold-margin click check failed**, correctly. It computed its x as
+  "margin 0 width + 8", which only landed in the fold margin while margin 1 had
+  **zero width**. Giving the symbol margin width moved the layout and the click
+  started landing in the wrong margin. It was the only thing that noticed. The x
+  is computed from the actual widths now.
+- **`setChecked` does not show a dock.** Qt connects `toggleViewAction` through
+  `QAction::triggered`, not `toggled`, so `setChecked` moved the tick and left
+  the pane hidden — measured: checked `0 → 1`, hidden stayed `1`. §6k's
+  message-pane check already used `trigger()`; this one did not, and failed
+  until it did.
+
+### The third instance of the shortcut bug, and the check that ends it
+
+The bindings shipped as Ctrl+F2 / F2 / Shift+F2 — Notepad++'s, Visual Studio's,
+Qt Creator's — with the note *"F2 is free on macOS in a way Cmd+something rarely
+is"*. **That reasoned about collisions and ignored reachability.** On a Mac the
+function keys are brightness and Mission Control by default, so a bare F2 never
+arrives. Confirmed by a person pressing it, one PR after §6n fixed Find Next for
+exactly the same reason.
+
+Each command now carries **two** bindings: a Cmd/Ctrl one that always arrives
+(Cmd+Shift+B, and Cmd+Shift+[ / Cmd+Shift+] mirroring the paragraph commands on
+Cmd+[ / Cmd+]) and the F-key the convention expects, which still works wherever
+the F-keys are standard.
+
+**And the rule is now checked, not remembered.** Every menu action must have at
+least one binding carrying a modifier other than Shift — Shift does not rescue a
+function key, since Shift+F3 needs Fn exactly as F3 does. Re-introducing either
+historical bug fails it:
+
+```
+'Next Book&mark' has a binding that does not need a function key ...   <- this PR
+'Find &Next'     has a binding that does not need a function key ...   <- PR #47
+```
+
+**It found a third, pre-existing one immediately.** `File → Exit` carries
+`Qt::Key_Exit` — the key no Mac has, already recorded in this port's notes as
+the second instance. It turns out to be *reachable* anyway, because macOS merges
+the item into the application menu and supplies Cmd+Q: `menuRole()` is **1**,
+`TextHeuristicRole`, and Qt decides by **matching the English word "Exit"**. So
+`tr("E&xit")` returning *"Thoát"* would stop the merge and take Cmd+Q with it —
+in a Vietnamese editor. The role is now stated outright rather than inferred
+from a translated string, and the check exempts merged roles rather than
+matching text, which the duplicate-shortcut check below already learned to
+distrust.
+
+**10 mutations, 10 caught**, including both mask defects re-introduced as
+mutations to prove the checks distinguish them.
+
+**Self-test: 776 → 840 checks on defaults, 780 → 844 configured.** The markers
+and the pane are both in the main screenshot.
+
+> ⚠️ **The check count is platform-dependent, and always has been.** These
+> figures — and every count published in §6 — are the **macOS** ones. Linux
+> reports fewer: the last green run before this section was **773/777** on
+> `ubuntu-latest` against **776/780** on `macos-latest`, because the
+> reserved-key loop iterates an empty list off macOS. This section widens the
+> gap with the reachability check above, which is macOS-only by design. Compare
+> like with like when re-deriving.
+
+Reproduce:
+
+```bash
+# what Scintilla says each call takes
+grep -nE "Marker(Add|Delete|DeleteAll|Get|Next)=" thirdparty/scintilla/include/Scintilla.iface
+
+# the four defects
+sed -n '3345,3364p' src/Editor.cpp          # IsLineHasBookMark, HasBookmarks
+sed -n '3216,3232p' src/Editor.cpp          # Find*BreakPoint, mask = margin number
+sed -n '3606,3616p' src/EditorView.cpp     # the two BOOKMARK handlers, calling
+                                           # the two BREAKPOINT functions
+
+# the constant that is a margin number, used as a marker mask
+grep -n "SC_SETMARGINTYPE_MAKER\|SC_MARKER_BOOKMARK" src/EditorCommonDef.h
+
+# 832 lines become 153 across two files
+wc -l src/BookmarkWindow.cpp ui-qt/BookmarkPane.cpp ui-qt/BookmarkPane.h
+
+# 840 checks, up from 776
+QT_QPA_PLATFORM=offscreen perl -e 'alarm 300; exec @ARGV or die "exec failed: $!"' -- \
+  ./qtbuild/ui-qt/vinatext-qt --selftest \
+  core/LanguageData.cpp tools/extract_language_data.py \
+  qtbuild/fixtures/crlf-bom.cpp qtbuild/fixtures/utf16.py \
+  qtbuild/fixtures/latin1.md qtbuild/fixtures/no-trailing-newline.py \
+  qtbuild/fixtures/tags.xml qtbuild/fixtures/urls.md
+```
+
+---
+
 ## 7. How to reproduce these numbers
 
 ```bash

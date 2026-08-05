@@ -124,6 +124,39 @@ public:
 	// without moving it. CEditorCtrl::SetLineCenterDisplay(GetCurrentLine()).
 	void ScrollToCaret();
 
+	//////////////////////////////////////////////////////////////////////
+	// Bookmarks
+	//
+	// MARKER NUMBER versus MARKER MASK, which is the whole story here.
+	// Scintilla's own interface file draws the line:
+	//
+	//   MarkerAdd(line, int markerNumber)      <- a NUMBER
+	//   MarkerDelete(line, int markerNumber)   <- a NUMBER
+	//   MarkerDeleteAll(int markerNumber)      <- a NUMBER
+	//   MarkerGet(line)                        <- returns a MASK
+	//   MarkerNext(lineStart, int markerMask)  <- a MASK
+	//
+	// src/Editor.cpp uses the number in all five, and the two that want a
+	// mask are wrong as a result. Those defects are NOT reproduced here -
+	// see doc/PORTING.md 6o for each one and why fixing beat transcribing.
+	//
+	// Lines are 1-based on this API, as everywhere else in this class;
+	// Scintilla's are 0-based, and the conversion happens at the boundary.
+	void ToggleBookmark(int nLine);
+	bool IsLineBookmarked(int nLine) const;
+	void ClearBookmarks();
+	bool HasBookmarks() const;
+	// Wrap around the document, so the last bookmark leads back to the
+	// first. Returns the line landed on, or 0 when there are none at all.
+	int NextBookmark();
+	int PreviousBookmark();
+	// Every bookmarked line, ascending. THE MARKERS ARE THE TRUTH: Scintilla
+	// moves them as the document is edited, so a list derived from them is
+	// correct after an edit and a stored copy is not. src/BookmarkWindow.cpp
+	// keeps a parallel std::vector and updates it only on add and delete.
+	QList<int> BookmarkedLines() const;
+	QString TextOfLine(int nLine) const;
+
 	// Find. Searches from the caret, wrapping once; leaves the match selected and
 	// visible. Returns false when the pattern is not in the document at all.
 	struct SFindOptions
@@ -170,7 +203,19 @@ public:
 		return send(iMessage, wParam, lParam);
 	}
 
+signals:
+	// Clicking the symbol margin asks the window to toggle a bookmark there.
+	// The widget does not toggle it itself: the pane has to be rebuilt
+	// afterwards and only the window can see the other documents.
+	void BookmarkToggleRequested(int nLine);
+
 private slots:
+	// The symbol margin is sensitive, so Scintilla notifies on a click. The
+	// FOLD margin deliberately has no handler - SC_AUTOMATICFOLD_CLICK means
+	// Editor::NotifyMarginClick returns before it would build a notification,
+	// so one would be dead code (measured; see the constructor).
+	void OnMarginClicked(Scintilla::Position position, Scintilla::KeyMod modifiers,
+		int nMargin);
 	// CEditorView's SCN_CHARADDED case (src/EditorView.cpp:6157-6172), reduced to
 	// the autocomplete half.
 	void OnCharAdded(int nChar);
