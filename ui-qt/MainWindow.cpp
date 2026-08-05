@@ -2786,6 +2786,50 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 							QStringLiteral("encoding: and the BOM came back, because a detour "
 								"through a codepage must not destroy it permanently"));
 
+						// A BOM BELONGS TO ONE ENCODING, not to "the bytes start
+						// with something". Reinterpreting a UTF-8-with-BOM file
+						// as Latin-1 must not leave the document claiming a
+						// mark: Latin-1 has no such concept, and the EF BB BF
+						// is now three ordinary characters of text.
+						//
+						// Found in review. The test is written before the fix,
+						// so its failure is the evidence the defect was real.
+						QString strLatinError;
+						Require(pBom->ReloadWithEncoding(QStringLiteral("ISO-8859-1"),
+								strLatinError),
+							QStringLiteral("encoding: reinterpreted the BOM'd file as Latin-1 "
+								"(%1)").arg(strLatinError));
+						Require(!pBom->GetEncodingLabel().contains(QStringLiteral("BOM")),
+							QStringLiteral("encoding: Latin-1 does not claim a byte-order "
+								"mark, got '%1'").arg(pBom->GetEncodingLabel()));
+						// NOT a byte check here, and the reason is worth stating:
+						// reinterpreted as Latin-1 those EF BB BF bytes are
+						// three ORDINARY CHARACTERS of text, and writing them
+						// back is correct - measured, the file is 10 bytes in
+						// and 10 bytes out, because Latin-1 ignores WriteBom.
+						// A byte assertion here would fail on correct
+						// behaviour. The label is the whole defect.
+						//
+						// The encoding where the flag really does inject bytes
+						// is a Unicode one:
+						QFile reseed(strBomPath);
+						Require(reseed.open(QIODevice::WriteOnly),
+							QStringLiteral("encoding: re-seeded the BOM'd file"));
+						reseed.write("\xEF\xBB\xBF");
+						reseed.write(strText.toUtf8());
+						reseed.close();
+						Require(pBom->ReloadWithEncoding(QStringLiteral("UTF-8"), strErr),
+							QStringLiteral("encoding: back to UTF-8 (%1)").arg(strErr));
+						Require(pBom->ReloadWithEncoding(QStringLiteral("UTF-16LE"), strErr),
+							QStringLiteral("encoding: reinterpreted the UTF-8 BOM'd file as "
+								"UTF-16LE (%1)").arg(strErr));
+						Require(pBom->SaveFile(strBomPath, strErr),
+							QStringLiteral("encoding: saved it as UTF-16LE (%1)").arg(strErr));
+						Require(!ReadAll(strBomPath).startsWith("\xFF\xFE"),
+							QStringLiteral("encoding: and did NOT inject a UTF-16 mark the "
+								"file never had - the UTF-8 mark it did have belongs to a "
+								"different encoding"));
+
 						pBom->Send(SCI_SETSAVEPOINT);
 						OnCloseTab(m_pTabs->indexOf(pBom));
 					}

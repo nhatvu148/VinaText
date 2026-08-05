@@ -1318,8 +1318,22 @@ bool CEditorWidget::ReloadWithEncoding(const QString& strCodecName, QString& str
 	// A BOM belongs to the bytes, not to the choice: re-reading as UTF-16 a
 	// file that has no BOM must not then WRITE one back. So the mark is
 	// re-derived from what is actually there.
+	//
+	// AND IT HAS TO BELONG TO **THIS** ENCODING. has_value() alone was the
+	// first version and it asked only "do these bytes start with some mark
+	// anybody would recognise" - so reinterpreting a UTF-8-with-BOM file left
+	// the document claiming one whatever it was now being read as. Two
+	// consequences, both measured:
+	//
+	//   as Latin-1   the label read "Latin-1 BOM", which is meaningless - the
+	//                EF BB BF are three ordinary characters now. Bytes were
+	//                unharmed, because Latin-1 ignores WriteBom.
+	//   as UTF-16LE  the save INJECTED an FF FE the file never had, because
+	//                that encoder does honour it.
+	//
+	// Comparing against the resolved encoding asks the right question.
 	m_bHasBom = m_CodecName.isEmpty()
-		&& QStringConverter::encodingForData(raw).has_value();
+		&& QStringConverter::encodingForData(raw) == m_Encoding;
 
 	const QString strText = DecodeBytes(raw);
 	if (strText.isNull())

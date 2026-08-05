@@ -2288,9 +2288,33 @@ gone codec falls through   -> a save REFUSES when the chosen codec is gone ... F
 truncate before encoding   -> the file on disk is UNTOUCHED ... FAIL
 ```
 
-**13 mutations, 11 caught, 2 impossible.**
+### A fourth round: a BOM belongs to one encoding, not to "the bytes"
 
-**Self-test: 656 → 740 checks on defaults, 660 → 744 configured.**
+`ReloadWithEncoding` re-derived the byte-order mark with
+`encodingForData(raw).has_value()` — which asks only *"do these bytes start with
+a mark anybody would recognise"*. So reinterpreting a UTF-8-with-BOM file left
+the document claiming a mark whatever it was now being read as. Two
+consequences, and **measuring them split the finding in two**:
+
+| reinterpreted as | what happens | harm |
+|---|---|---|
+| Latin-1 | label reads **"Latin-1 BOM"** | label only — measured 10 bytes in, 10 out, because Latin-1 **ignores** `WriteBom`, and those `EF BB BF` are three ordinary characters now |
+| UTF-16LE | save writes **`FF FE`** | real: bytes injected that the file never had |
+
+The review called the byte half a *"could also cause"*. It is an actual — and
+the *other* half, which reads like the obvious one, turns out to be
+label-only. **A byte assertion on the Latin-1 case would have failed on correct
+behaviour**, so the check deliberately asserts only the label there and moves
+the byte assertion to the encoding where the flag is honoured.
+
+The fix is the one suggested: compare against the **resolved** encoding rather
+than asking whether any mark exists. Both checks were written *before* it, so
+their failure is the evidence the defect was real, and reverting to
+`has_value()` reproduces both.
+
+**14 mutations, 12 caught, 2 impossible.**
+
+**Self-test: 656 → 747 checks on defaults, 660 → 751 configured.**
 
 Reproduce:
 
@@ -2314,7 +2338,7 @@ grep -cE "^void CEditorDoc::On[Uu]pdateFileSave" src/EditorDoc.cpp   # 5 dead ha
 #   QTextCodec:       805 names, windows-1258 among them
 grep -rn "QTextCodec" thirdparty/scintilla/qt/ScintillaEditBase/*.cpp | head -3   # already a dependency
 
-# 740 checks, up from 656
+# 747 checks, up from 656
 QT_QPA_PLATFORM=offscreen perl -e 'alarm 300; exec @ARGV or die "exec failed: $!"' -- \
   ./qtbuild/ui-qt/vinatext-qt --selftest \
   core/LanguageData.cpp tools/extract_language_data.py \
