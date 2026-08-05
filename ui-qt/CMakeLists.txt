@@ -27,6 +27,8 @@ qt_add_executable(vinatext-qt
     FindBar.h
     GotoBar.cpp
     GotoBar.h
+    EncodingDialog.cpp
+    EncodingDialog.h
     PreferencesDialog.cpp
     PreferencesDialog.h
     AboutDialog.cpp

@@ -21,6 +21,10 @@
 
 #include <QFile>
 #include <QFileInfo>
+#include <QSet>
+
+#include <optional>
+#include <QTextCodec>
 #include <QFontDatabase>
 
 namespace
@@ -622,6 +626,10 @@ bool CEditorWidget::LoadFile(const QString& strPath, QString& strErrorOut)
 		QStringConverter::encodingForData(raw);
 	m_bHasBom = detected.has_value();
 	m_Encoding = detected.value_or(QStringConverter::Utf8);
+	// Detection only ever yields a QStringConverter encoding, so a freshly
+	// loaded document is always on the builtin path. A codec is something the
+	// user asks for afterwards, never something guessed.
+	m_CodecName.clear();
 
 	QStringDecoder decoder(m_Encoding);
 	QString strText = decoder.decode(raw);
@@ -653,14 +661,28 @@ bool CEditorWidget::SaveFile(const QString& strPath, QString& strErrorOut)
 		reinterpret_cast<sptr_t>(utf8.data()));
 	utf8.truncate(static_cast<int>(nLength));
 
+	// ENCODE BEFORE OPENING. The open carries Truncate, so it empties the file
+	// the instant it succeeds - and this used to run first, which meant any
+	// failure between it and the write left the user with a ZERO-BYTE file
+	// where their document had been. Nothing could fail there when it was
+	// written; the encoder can now, and a save that cannot produce bytes must
+	// not have destroyed the old ones getting there.
+	const std::optional<QByteArray> encoded = EncodeForSave(QString::fromUtf8(utf8));
+	if (!encoded.has_value())
+	{
+		strErrorOut = tr("Cannot write %1: the encoding '%2' is not available in this "
+			"build, and saving in a different one would write bytes you did not ask "
+			"for.").arg(strPath, GetEncodingName());
+		return false;
+	}
+
 	QFile file(strPath);
 	if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate))
 	{
 		strErrorOut = tr("Cannot write %1: %2").arg(strPath, file.errorString());
 		return false;
 	}
-	const QByteArray encoded = EncodeForSave(QString::fromUtf8(utf8));
-	if (file.write(encoded) != encoded.size() || !file.flush())
+	if (file.write(*encoded) != encoded->size() || !file.flush())
 	{
 		strErrorOut = tr("Cannot write %1: %2").arg(strPath, file.errorString());
 		return false;
@@ -680,12 +702,56 @@ bool CEditorWidget::SaveFile(const QString& strPath, QString& strErrorOut)
 	return true;
 }
 
-QByteArray CEditorWidget::EncodeForSave(const QString& strText) const
+std::optional<QByteArray> CEditorWidget::EncodeForSave(const QString& strText) const
 {
+	if (!m_CodecName.isEmpty())
+	{
+		if (QTextCodec* pCodec = QTextCodec::codecForName(m_CodecName))
+		{
+			// IgnoreHeader, because the BOM is ours to decide and this path
+			// never has one - see the invariant on m_CodecName. Without it
+			// QTextCodec would write a BOM of its own for the Unicode codecs,
+			// which is the sort of byte a round-trip check exists to catch.
+			//
+			// NO TEST COVERS THIS FLAG, and it cannot be made to: every codec
+			// that would emit a mark is a Unicode one, and SetSaveEncoding
+			// routes all of those to QStringConverter instead, so nothing that
+			// reaches here has a header to ignore. Removing it changes no
+			// result today. It is defensive against the routing changing, and
+			// is recorded as uncovered rather than left looking checked.
+			QTextCodec::ConverterState state(QTextCodec::IgnoreHeader);
+			return pCodec->fromUnicode(strText.constData(), strText.size(), &state);
+		}
+		// A codec that existed when it was chosen and does not now. THE SAVE
+		// FAILS rather than falling through to the builtin encoding.
+		//
+		// Falling through wrote different bytes under the name the user picked,
+		// and the label went on reporting the codec - found in review. Clearing
+		// the name so the label matched was the suggested fix, but that only
+		// makes the mislabelling honest AFTER the fact: the file still contains
+		// an encoding nobody chose. Refusing is the one outcome that cannot
+		// lose information, and the user can pick another encoding.
+		qWarning("save: codec '%s' is unavailable; refusing to write",
+			m_CodecName.constData());
+		return std::nullopt;
+	}
 	QStringEncoder encoder(m_Encoding, m_bHasBom
 		? QStringConverter::Flag::WriteBom
 		: QStringConverter::Flag::Default);
 	return encoder.encode(strText);
+}
+
+QString CEditorWidget::DecodeBytes(const QByteArray& raw) const
+{
+	if (!m_CodecName.isEmpty())
+	{
+		if (QTextCodec* pCodec = QTextCodec::codecForName(m_CodecName))
+		{
+			QTextCodec::ConverterState state(QTextCodec::IgnoreHeader);
+			return pCodec->toUnicode(raw.constData(), raw.size(), &state);
+		}
+	}
+	return QStringDecoder(m_Encoding).decode(raw);
 }
 
 void CEditorWidget::DetectEol(const QByteArray& utf8)
@@ -1111,6 +1177,13 @@ QString CEditorWidget::GetLanguageLabel() const
 
 QString CEditorWidget::GetEncodingLabel() const
 {
+	// A codec chosen by the user is shown under the name they picked. Only the
+	// builtin path gets the tidied-up spellings below, because only it has a
+	// fixed, known set to tidy.
+	if (!m_CodecName.isEmpty())
+	{
+		return QString::fromLatin1(m_CodecName);
+	}
 	const char* szName = "UTF-8";
 	switch (m_Encoding)
 	{
@@ -1120,10 +1193,180 @@ QString CEditorWidget::GetEncodingLabel() const
 	case QStringConverter::Utf32LE:		szName = "UTF-32 LE"; break;
 	case QStringConverter::Utf32BE:		szName = "UTF-32 BE"; break;
 	case QStringConverter::Latin1:		szName = "Latin-1"; break;
-	default:							szName = "UTF-8"; break;
+	// The system codepage, which the MFC's menu calls ANSI. Missing from this
+	// switch it fell into default and every such document read "UTF-8" in the
+	// status bar - a label that names a different encoding from the one about
+	// to be written. Found in review.
+	case QStringConverter::System:		szName = "System"; break;
+	// NOT a silent default. Anything reaching here is an encoding
+	// QStringConverter grew that this switch has not been told about, and
+	// guessing "UTF-8" is how the System case hid. nameForEncoding always has
+	// an answer, so an unknown one is named rather than mislabelled.
+	default:
+		return QString::fromLatin1(QStringConverter::nameForEncoding(m_Encoding))
+			+ (m_bHasBom ? QStringLiteral(" BOM") : QString());
 	}
 	const QString strName = QString::fromLatin1(szName);
 	return m_bHasBom ? strName + QStringLiteral(" BOM") : strName;
+}
+
+//////////////////////////////////////////////////////////////////////////
+// Encoding
+//
+// Two operations, kept apart. See the header, and doc/PORTING.md 6m.
+
+QStringList CEditorWidget::AvailableEncodings()
+{
+	QStringList names;
+	QSet<QString> seen;
+	// QStringConverter's own set first, so the encodings with a proven
+	// round-trip are the ones a user meets at the top of the list, and so a
+	// name that BOTH libraries know resolves to the builtin path.
+	for (int i = 0; i <= static_cast<int>(QStringConverter::LastEncoding); ++i)
+	{
+		const QString strName = QString::fromLatin1(QStringConverter::nameForEncoding(
+			static_cast<QStringConverter::Encoding>(i)));
+		if (!strName.isEmpty() && !seen.contains(strName))
+		{
+			seen.insert(strName);
+			names.append(strName);
+		}
+	}
+	for (const QByteArray& codec : QTextCodec::availableCodecs())
+	{
+		const QString strName = QString::fromLatin1(codec);
+		if (!seen.contains(strName))
+		{
+			seen.insert(strName);
+			names.append(strName);
+		}
+	}
+	return names;
+}
+
+bool CEditorWidget::SetSaveEncoding(const QString& strCodecName)
+{
+	const QByteArray name = strCodecName.toLatin1();
+
+	// A name QStringConverter knows goes to the BUILTIN path even though
+	// QTextCodec would also accept it. That is deliberate: those are the
+	// encodings whose byte-for-byte behaviour this port has tests for, and
+	// routing them through the compatibility module instead would quietly
+	// change which bytes a UTF-8 save produces.
+	if (const std::optional<QStringConverter::Encoding> builtin =
+			QStringConverter::encodingForName(name.constData()))
+	{
+		m_Encoding = *builtin;
+		m_CodecName.clear();
+		return true;
+	}
+
+	QTextCodec* pCodec = QTextCodec::codecForName(name);
+	if (pCodec == nullptr)
+	{
+		return false;
+	}
+	m_CodecName = pCodec->name();
+	// m_bHasBom is deliberately LEFT ALONE. Forcing it false here was the first
+	// version, and mutation testing showed the line was both untested and
+	// wrong: the no-BOM invariant is enforced in EncodeForSave, which passes
+	// IgnoreHeader and never consults m_bHasBom on this path - so clearing it
+	// bought nothing - while it PERMANENTLY destroyed the mark for a document
+	// that went UTF-8 -> some codepage -> UTF-8, because the builtin branch
+	// above has nothing to restore it from. The BOM belongs to the file as it
+	// was read, so it survives a visit to a codepage.
+	return true;
+}
+
+bool CEditorWidget::ReloadWithEncoding(const QString& strCodecName, QString& strErrorOut)
+{
+	// An untitled document has no bytes on disk, so there is nothing to
+	// reinterpret. Refused rather than silently treated as an empty file,
+	// which would throw the user's typing away.
+	if (IsUntitled())
+	{
+		strErrorOut = tr("This document has never been saved, so there is nothing "
+			"on disk to re-read.");
+		return false;
+	}
+
+	const QString strPath = m_strFilePath;
+	QFile file(strPath);
+	if (!file.open(QIODevice::ReadOnly))
+	{
+		strErrorOut = tr("Cannot open %1: %2").arg(strPath, file.errorString());
+		return false;
+	}
+	const QByteArray raw = file.readAll();
+	if (file.error() != QFile::NoError)
+	{
+		strErrorOut = tr("Cannot read %1: %2").arg(strPath, file.errorString());
+		return false;
+	}
+
+	// Resolve the encoding BEFORE touching the document, so an unknown codec
+	// leaves the open file exactly as it was.
+	const QStringConverter::Encoding previousEncoding = m_Encoding;
+	const QByteArray previousCodec = m_CodecName;
+	const bool bPreviousBom = m_bHasBom;
+	if (!SetSaveEncoding(strCodecName))
+	{
+		strErrorOut = tr("%1 is not an encoding this build knows.").arg(strCodecName);
+		return false;
+	}
+
+	// A BOM belongs to the bytes, not to the choice: re-reading as UTF-16 a
+	// file that has no BOM must not then WRITE one back. So the mark is
+	// re-derived from what is actually there.
+	//
+	// AND IT HAS TO BELONG TO **THIS** ENCODING. has_value() alone was the
+	// first version and it asked only "do these bytes start with some mark
+	// anybody would recognise" - so reinterpreting a UTF-8-with-BOM file left
+	// the document claiming one whatever it was now being read as. Two
+	// consequences, both measured:
+	//
+	//   as Latin-1   the label read "Latin-1 BOM", which is meaningless - the
+	//                EF BB BF are three ordinary characters now. Bytes were
+	//                unharmed, because Latin-1 ignores WriteBom.
+	//   as UTF-16LE  the save INJECTED an FF FE the file never had, because
+	//                that encoder does honour it.
+	//
+	// Comparing against the resolved encoding asks the right question.
+	m_bHasBom = m_CodecName.isEmpty()
+		&& QStringConverter::encodingForData(raw) == m_Encoding;
+
+	const QString strText = DecodeBytes(raw);
+	if (strText.isNull())
+	{
+		m_Encoding = previousEncoding;
+		m_CodecName = previousCodec;
+		m_bHasBom = bPreviousBom;
+		strErrorOut = tr("%1 could not decode %2.").arg(strCodecName, strPath);
+		return false;
+	}
+
+	const QByteArray utf8 = strText.toUtf8();
+	Send(SCI_SETTEXT, 0, reinterpret_cast<sptr_t>(utf8.constData()));
+	Send(SCI_EMPTYUNDOBUFFER);
+	// A reinterpretation is not an edit - the file on disk still matches what
+	// is now on screen, so the document is CLEAN. Leaving it modified would
+	// invite the user to "save" a reinterpretation they were only inspecting.
+	//
+	// Redundant with SCI_EMPTYUNDOBUFFER above, which also clears the modified
+	// flag - so a mutation removing THIS line alone is not caught, and the
+	// self-test check covers the property rather than the statement. Kept
+	// because it states the intent, and because LoadFile does both too.
+	Send(SCI_SETSAVEPOINT);
+	Send(SCI_GOTOPOS, 0);
+	DetectEol(utf8);
+	return true;
+}
+
+QString CEditorWidget::GetEncodingName() const
+{
+	return m_CodecName.isEmpty()
+		? QString::fromLatin1(QStringConverter::nameForEncoding(m_Encoding))
+		: QString::fromLatin1(m_CodecName);
 }
 
 QString CEditorWidget::GetEolLabel() const

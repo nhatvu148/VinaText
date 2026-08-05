@@ -25,6 +25,8 @@
 #include <QStringList>
 #include <QStringConverter>
 
+#include <optional>
+
 class CEditorWidget final : public ScintillaEditBase
 {
 	Q_OBJECT
@@ -61,6 +63,41 @@ public:
 	bool IsWordWrap() const;
 	void SetLongLineMarker(bool bEnable);
 	bool IsLongLineMarker() const;
+
+	//////////////////////////////////////////////////////////////////////
+	// Encoding
+	//
+	// THE TWO OPERATIONS ARE NOT THE SAME OPERATION, and the whole design
+	// rests on keeping them apart. src/CodePageMFCDlg.cpp does too - one
+	// dialog with an m_bReopen mode flag, two callers, and even a different
+	// OK button caption ("Reopen File" versus "Save File"):
+	//
+	//   REINTERPRET  re-reads the bytes on disk as a different encoding.
+	//                Nothing is written. The bytes are the truth and the
+	//                text was wrong. Discards unsaved edits, so it asks.
+	//   CONVERT      re-writes the text in a different encoding. The text
+	//                is the truth and the bytes change under it.
+	//
+	// Getting these the wrong way round loses data silently, which is the
+	// failure this port has been most careful about - hence the byte-identical
+	// round-trip checks.
+
+	// The encoding this document will be WRITTEN in, as a codec name.
+	QString GetEncodingName() const;
+
+	// Re-read the file as strCodecName. The caller must have dealt with any
+	// unsaved changes first - this throws them away. Fails on an untitled
+	// document, which has no bytes on disk to reinterpret.
+	bool ReloadWithEncoding(const QString& strCodecName, QString& strErrorOut);
+
+	// Change the encoding used by the next save. Does NOT write anything -
+	// the caller saves, exactly as CEditorDoc::OnFileSaveAsEncoding does.
+	// Returns false if the name is not a codec this build has.
+	bool SetSaveEncoding(const QString& strCodecName);
+
+	// Every codec the running Qt can do, for the picker. QStringConverter's
+	// own set first, then QTextCodec's, deduplicated.
+	static QStringList AvailableEncodings();
 
 	// Status-bar material.
 	QString GetLanguageLabel() const;
@@ -122,6 +159,11 @@ public:
 	// For the self-test: drives OnCharAdded without synthesising a key event,
 	// which offscreen cannot deliver to Scintilla reliably.
 	void OnCharAddedForTest(int nChar) { OnCharAdded(nChar); }
+	// Forces the stored codec name, so the self-test can drive the
+	// codec-went-away path. SetSaveEncoding refuses names that do not resolve,
+	// so there is no other way to reach it - and without a seam it would be
+	// one more branch documented as uncovered instead of checked.
+	void SetCodecNameForTest(const QByteArray& name) { m_CodecName = name; }
 
 	sptr_t Send(unsigned int iMessage, uptr_t wParam = 0, sptr_t lParam = 0) const
 	{
@@ -173,7 +215,12 @@ private:
 	// and saving it as UTF-8 would be data loss the user never asked for, so the
 	// encoding and the byte-order mark are properties of the document, not
 	// assumptions.
-	QByteArray EncodeForSave(const QString& strText) const;
+	// Empty when the document names a codec this build no longer has. The
+	// caller must then REFUSE the save - see the .cpp.
+	std::optional<QByteArray> EncodeForSave(const QString& strText) const;
+	// The other direction, and the only place the two encoding paths are
+	// chosen between. Both go through here so they cannot drift apart.
+	QString DecodeBytes(const QByteArray& raw) const;
 
 	// The selection background, as the active theme resolves it. Cached because
 	// UpdateSelectionPainting runs on every caret move and re-resolving a role
@@ -185,7 +232,23 @@ private:
 	QString						m_strFilePath;
 	const Core::SLanguageInfo*	m_pLanguage = nullptr;
 	EEditorTheme				m_Theme = EEditorTheme::Dark;
+	// The encoding, in two halves, because Qt 6 splits the job.
+	//
+	// m_Encoding is used whenever m_CodecName is EMPTY, and covers everything
+	// QStringConverter can express - the Unicode encodings and Latin-1, which
+	// is exactly the set the byte-identical round-trip fixtures exercise.
+	// m_CodecName names a QTextCodec for anything beyond that (windows-1258
+	// and the other 800), a module already linked because Scintilla's own Qt
+	// binding needs it.
+	//
+	// INVARIANT: nothing written on the codec path carries a byte-order mark.
+	// Enforced in EncodeForSave, which passes QTextCodec::IgnoreHeader and does
+	// not consult m_bHasBom at all - NOT by clearing m_bHasBom, which would
+	// destroy the mark for good on a UTF-8 -> codepage -> UTF-8 round trip.
+	// Only the Unicode encodings have marks and all of those are expressible by
+	// QStringConverter, so the whole BOM story stays on the path with tests.
 	QStringConverter::Encoding	m_Encoding = QStringConverter::Utf8;
+	QByteArray					m_CodecName;
 	bool						m_bHasBom = false;
 	int							m_nUntitledNumber = 0;
 };
