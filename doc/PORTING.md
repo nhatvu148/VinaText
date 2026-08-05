@@ -2418,8 +2418,8 @@ to be present, so a hard-coded answer cannot pass); Copy Full Path copies the
 path and copies **nothing** for a document that has none; Activate switches to a
 row that was **not** already current; and selected rows come back descending.
 
-**8 mutations, 8 caught** — but two of the checks had to be fixed first, both
-found the same way.
+Three of the checks had to be fixed before they meant anything, all found the
+same way.
 
 1. **The descending-order check selected a single row**, and a one-element list
    is sorted both ways, so reversing the comparator went straight through it.
@@ -2441,7 +2441,22 @@ markedly less forgiving. Worth stating precisely: **the Qt CI matrix is
 have caught it — it would have surfaced the first time `ui-qt/` was built with
 MSVC. Raised in review.
 
-**Self-test: 747 → 766 checks on defaults, 751 → 770 configured.** Screenshot: `vinatext-windows.png`,
+**And Save had two problems, both raised in review.** It was the one handler
+with no coverage at all — and it **switched the active tab as a side effect**,
+because the first version called `OnSave`, which works on whatever is current.
+`COpenTabWindows` saves the document it looked up and never touches the active
+view; matching it is one `qobject_cast`. The exception is a document that has
+never been saved, which needs a path: Save As is a modal prompt *about* that
+document, so it is brought to the front first rather than asking the user to
+name a file they cannot see.
+
+The check covers both, on a **scratch file in a temporary directory** — never a
+fixture, because a check that writes to the corpus it reads from has bitten this
+port before (§6k).
+
+**10 mutations, 10 caught.**
+
+**Self-test: 747 → 776 checks on defaults, 751 → 780 configured.** Screenshot: `vinatext-windows.png`,
 rendered separately because the dialog is modal and cannot appear in the main
 one.
 

@@ -507,11 +507,32 @@ void CMainWindow::ConnectWindowList(CWindowListDialog* pDialog)
 		{
 			return;
 		}
-		// Save acts on the row, so the row has to BE the current tab first -
-		// OnSave works on whatever is current. COpenTabWindows calls
-		// OnFileSave on the document it looked up, which needs no such step.
-		m_pTabs->setCurrentIndex(nRow);
-		OnSave();
+		CEditorWidget* pEditor = qobject_cast<CEditorWidget*>(m_pTabs->widget(nRow));
+		if (pEditor == nullptr)
+		{
+			return;
+		}
+
+		// SAVES THE ROW WITHOUT SWITCHING TO IT. The first version called
+		// OnSave, which works on whatever tab is current, so it had to make the
+		// row current first - and saving a background document then silently
+		// moved the user somewhere else. COpenTabWindows saves the document it
+		// looked up and never touches the active view; matching that is one
+		// qobject_cast. Found in review.
+		//
+		// The exception is a document that has never been saved: it needs a
+		// path, and Save As is a modal prompt ABOUT that document, so bringing
+		// it to the front first is the honest thing rather than asking the user
+		// to name a file they cannot see.
+		if (pEditor->IsUntitled())
+		{
+			m_pTabs->setCurrentIndex(nRow);
+			OnSaveAs();
+		}
+		else
+		{
+			SaveEditor(pEditor, pEditor->GetFilePath());
+		}
 		pDialog->SetEntries(CollectWindowList());
 	});
 	connect(pDialog, &CWindowListDialog::CloseRequested, this,
@@ -3221,6 +3242,62 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 		Require(m_pTabs->currentIndex() == nOther,
 			QStringLiteral("windows: Activate switched to tab %1, current is %2")
 				.arg(nOther).arg(m_pTabs->currentIndex()));
+
+		// SAVE, which was not covered at all - Activate and Close were, and the
+		// gap was raised in review. On a scratch file in a temporary directory,
+		// never a fixture: a check that writes to the corpus it reads from has
+		// bitten this port before.
+		{
+			QTemporaryDir saveDir;
+			Require(saveDir.isValid(),
+				QStringLiteral("windows: got a directory to save into"));
+			if (saveDir.isValid())
+			{
+				const QString strPath = saveDir.filePath(QStringLiteral("bg.txt"));
+				QFile seed(strPath);
+				Require(seed.open(QIODevice::WriteOnly),
+					QStringLiteral("windows: seeded a file to save"));
+				seed.write("original\n");
+				seed.close();
+
+				Require(OpenFile(strPath), QStringLiteral("windows: opened it"));
+				CEditorWidget* pBg = GetCurrentEditor();
+				const int nBgRow = m_pTabs->indexOf(pBg);
+				Require(pBg != nullptr, QStringLiteral("windows: it is current"));
+				pBg->Send(SCI_SETTEXT, 0, reinterpret_cast<sptr_t>("edited\n"));
+				Require(pBg->IsModified(), QStringLiteral("windows: and modified"));
+
+				// Make it a BACKGROUND row - the whole point of the check.
+				m_pTabs->setCurrentIndex(0);
+				const int nCurrentBefore = m_pTabs->currentIndex();
+				Require(nCurrentBefore != nBgRow,
+					QStringLiteral("windows: the row to save is not the current tab"));
+
+				dialog.SetEntries(CollectWindowList());
+				Require(dialog.SelectRowForTest(nBgRow),
+					QStringLiteral("windows: selected the background row"));
+				dialog.TriggerForTest(QStringLiteral("save"));
+
+				Require(!pBg->IsModified(),
+					QStringLiteral("windows: Save wrote the background document"));
+				QFile written(strPath);
+				QByteArray onDisk;
+				if (written.open(QIODevice::ReadOnly)) { onDisk = written.readAll(); }
+				Require(onDisk == QByteArray("edited\n"),
+					QStringLiteral("windows: and the bytes reached the file, got '%1'")
+						.arg(QString::fromUtf8(onDisk)));
+				// AND IT DID NOT MOVE THE USER. Saving a background row used to
+				// switch the active tab to it as a side effect, which
+				// COpenTabWindows does not do - it saves the document it looked
+				// up and never touches the active view.
+				Require(m_pTabs->currentIndex() == nCurrentBefore,
+					QStringLiteral("windows: and left the active tab alone (%1, was %2)")
+						.arg(m_pTabs->currentIndex()).arg(nCurrentBefore));
+
+				pBg->Send(SCI_SETSAVEPOINT);
+				OnCloseTab(m_pTabs->indexOf(pBg));
+			}
+		}
 
 		// And Close, which was not covered at all. Closes the untitled scratch
 		// row through the dialog and checks BOTH that the tab went and that the
