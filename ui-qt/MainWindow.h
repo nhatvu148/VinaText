@@ -80,6 +80,12 @@ private:
 	// ui-qt/WindowListDialog.h and doc/PORTING.md 6n.
 	void OnWindowManager();
 	QList<CWindowListDialog::SEntry> CollectWindowList() const;
+	// The three handlers, and the one place they are wired up. Both
+	// OnWindowManager and the self-test call this, so the checks exercise the
+	// SHIPPED handlers rather than a re-implementation of them - the dialog is
+	// modal, so a self-test cannot reach them through exec(). Found in review;
+	// it is the same hole 6m found in the encoding menus.
+	void ConnectWindowList(CWindowListDialog* pDialog);
 	void ApplyEncoding(CEncodingDialog::EMode mode, const QString& strEncoding);
 	// Re-applies the current settings to every open editor.
 	void ReapplySettings();

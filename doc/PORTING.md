@@ -2418,12 +2418,30 @@ to be present, so a hard-coded answer cannot pass); Copy Full Path copies the
 path and copies **nothing** for a document that has none; Activate switches to a
 row that was **not** already current; and selected rows come back descending.
 
-**5 mutations, 5 caught** — but only after one was fixed. The descending-order
-check first selected a **single** row, and a one-element list is sorted both
-ways, so reversing the comparator went straight through it. It selects three
-rows out of order now.
+**8 mutations, 8 caught** — but two of the checks had to be fixed first, both
+found the same way.
 
-**Self-test: 747 → 763 checks on defaults, 751 → 767 configured.** Screenshot: `vinatext-windows.png`,
+1. **The descending-order check selected a single row**, and a one-element list
+   is sorted both ways, so reversing the comparator went straight through it.
+   Three rows out of order now.
+2. **The checks re-implemented the handlers instead of exercising them.** The
+   Activate check connected a throwaway lambda of its own and moved the tab
+   widget directly, so the handlers in `OnWindowManager` were never covered —
+   the dialog is modal, so a self-test cannot reach them through `exec()`.
+   Raised in review, and it is the same hole §6m found in the encoding menus.
+   `ConnectWindowList` is now the single wiring point that `OnWindowManager`
+   and the self-test share, and Close — previously untested altogether — is
+   covered through it too.
+
+**And two standard includes were missing.** `std::sort` and `std::greater` are
+used with neither `<algorithm>` nor `<functional>` included; it compiles only
+because libc++ and libstdc++ pull them in through Qt headers, and MSVC's STL is
+markedly less forgiving. Worth stating precisely: **the Qt CI matrix is
+`[ubuntu-latest, macos-latest]` with no Windows job**, so no CI job could ever
+have caught it — it would have surfaced the first time `ui-qt/` was built with
+MSVC. Raised in review.
+
+**Self-test: 747 → 766 checks on defaults, 751 → 770 configured.** Screenshot: `vinatext-windows.png`,
 rendered separately because the dialog is modal and cannot appear in the main
 one.
 

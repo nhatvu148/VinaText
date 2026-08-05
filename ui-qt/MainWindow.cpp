@@ -42,6 +42,8 @@
 #include <QSet>
 #include <QTextCodec>
 
+#include <algorithm>
+#include <functional>
 #include <limits>
 #include <QWidget>
 
@@ -490,19 +492,16 @@ QList<CWindowListDialog::SEntry> CMainWindow::CollectWindowList() const
 	return entries;
 }
 
-void CMainWindow::OnWindowManager()
+void CMainWindow::ConnectWindowList(CWindowListDialog* pDialog)
 {
-	CWindowListDialog dialog(this);
-	dialog.SetEntries(CollectWindowList());
-
-	connect(&dialog, &CWindowListDialog::ActivateRequested, this, [this](int nRow)
+	connect(pDialog, &CWindowListDialog::ActivateRequested, this, [this](int nRow)
 	{
 		if (nRow >= 0 && nRow < m_pTabs->count())
 		{
 			m_pTabs->setCurrentIndex(nRow);
 		}
 	});
-	connect(&dialog, &CWindowListDialog::SaveRequested, this, [this, &dialog](int nRow)
+	connect(pDialog, &CWindowListDialog::SaveRequested, this, [this, pDialog](int nRow)
 	{
 		if (nRow < 0 || nRow >= m_pTabs->count())
 		{
@@ -513,10 +512,10 @@ void CMainWindow::OnWindowManager()
 		// OnFileSave on the document it looked up, which needs no such step.
 		m_pTabs->setCurrentIndex(nRow);
 		OnSave();
-		dialog.SetEntries(CollectWindowList());
+		pDialog->SetEntries(CollectWindowList());
 	});
-	connect(&dialog, &CWindowListDialog::CloseRequested, this,
-		[this, &dialog](const QList<int>& rows)
+	connect(pDialog, &CWindowListDialog::CloseRequested, this,
+		[this, pDialog](const QList<int>& rows)
 	{
 		// SelectedRows() hands these back descending, so closing one does not
 		// shift the index of another still to come.
@@ -527,9 +526,15 @@ void CMainWindow::OnWindowManager()
 				OnCloseTab(nRow);
 			}
 		}
-		dialog.SetEntries(CollectWindowList());
+		pDialog->SetEntries(CollectWindowList());
 	});
+}
 
+void CMainWindow::OnWindowManager()
+{
+	CWindowListDialog dialog(this);
+	dialog.SetEntries(CollectWindowList());
+	ConnectWindowList(&dialog);
 	dialog.exec();
 }
 
@@ -3198,19 +3203,40 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 			QStringLiteral("windows: and copies NOTHING for a document with no path, got "
 				"'%1'").arg(dialog.CopiedPathForTest()));
 
+		// THROUGH THE SHIPPED HANDLERS. The first version connected a throwaway
+		// lambda of its own and moved m_pTabs directly, so the handlers in
+		// OnWindowManager were never covered - only a re-implementation of
+		// them was. Found in review, and it is the same hole 6m found in the
+		// encoding menus. ConnectWindowList is now the single wiring point that
+		// OnWindowManager and this check share.
+		ConnectWindowList(&dialog);
+
 		// Activate switches tabs. Checked against a row that is NOT already
 		// current, or it would pass without doing anything.
 		const int nOther = (m_pTabs->currentIndex() == 0) ? 1 : 0;
 		Require(m_pTabs->currentIndex() != nOther,
 			QStringLiteral("windows: the activate target is not already current"));
-		int nActivated = -1;
-		connect(&dialog, &CWindowListDialog::ActivateRequested, this,
-			[this, &nActivated](int nRow) { m_pTabs->setCurrentIndex(nRow); nActivated = nRow; });
 		Require(dialog.SelectRowForTest(nOther), QStringLiteral("windows: selected it"));
 		dialog.TriggerForTest(QStringLiteral("activate"));
-		Require(nActivated == nOther && m_pTabs->currentIndex() == nOther,
+		Require(m_pTabs->currentIndex() == nOther,
 			QStringLiteral("windows: Activate switched to tab %1, current is %2")
 				.arg(nOther).arg(m_pTabs->currentIndex()));
+
+		// And Close, which was not covered at all. Closes the untitled scratch
+		// row through the dialog and checks BOTH that the tab went and that the
+		// list refreshed itself afterwards - the MFC calls InitiateList for
+		// exactly that reason.
+		const int nBeforeClose = GetTabCount();
+		pFresh->Send(SCI_SETSAVEPOINT);		// or ConfirmClose blocks on a prompt
+		Require(dialog.SelectRowsForTest({ m_pTabs->indexOf(pFresh) }),
+			QStringLiteral("windows: selected the scratch row to close"));
+		dialog.TriggerForTest(QStringLiteral("close"));
+		Require(GetTabCount() == nBeforeClose - 1,
+			QStringLiteral("windows: Close Tab(s) closed one tab, %1 -> %2")
+				.arg(nBeforeClose).arg(GetTabCount()));
+		Require(dialog.RowCount() == GetTabCount(),
+			QStringLiteral("windows: and the list refreshed itself, %1 rows for %2 tabs")
+				.arg(dialog.RowCount()).arg(GetTabCount()));
 
 		// Selected rows come back DESCENDING, which is what stops a caller
 		// closing by index from invalidating the indices it has not reached.
@@ -3234,8 +3260,6 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 						QString::number(rows.at(2)) }.join(QLatin1Char(','))));
 		}
 
-		pFresh->Send(SCI_SETSAVEPOINT);
-		OnCloseTab(m_pTabs->indexOf(pFresh));
 	}
 
 	//----------------------------------------------------------------------

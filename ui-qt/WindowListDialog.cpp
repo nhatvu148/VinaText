@@ -18,6 +18,15 @@
 #include <QTreeWidget>
 #include <QVBoxLayout>
 
+// std::sort and std::greater. NOT reachable transitively by contract - this is
+// the first use of either under ui-qt/, it compiles today only because libc++
+// and libstdc++ happen to pull them in through Qt headers, and MSVC's STL is
+// markedly less forgiving. The Qt CI matrix is [ubuntu, macos] with no Windows
+// job, so NO CI JOB WOULD CATCH THIS - it would surface the day ui-qt/ is first
+// built with MSVC. Found in review.
+#include <algorithm>
+#include <functional>
+
 namespace
 {
 	// COpenTabWindows::InitiateList, which writes "N/A" when PathFileExists
