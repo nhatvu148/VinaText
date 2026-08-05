@@ -2349,6 +2349,138 @@ QT_QPA_PLATFORM=offscreen perl -e 'alarm 300; exec @ARGV or die "exec failed: $!
 
 ---
 
+## 6n. The window manager — and there are eight dock panes, not nine
+
+### The brief is wrong about what this is
+
+`OpenTabWindows` is listed in the brief's §3d among **"9 dock panes"**, and D10
+keeps it as one of three. It is not a dock pane:
+
+```
+class COpenTabWindows : public CDlgBase          // src/OpenTabWindows.h:14
+
+void CMainFrame::OnWindowManager()               // src/MainFrm.cpp:692
+{
+    COpenTabWindows dlg;
+    dlg.DoModal();                               // <- modal dialog
+}
+```
+
+**Eight** classes derive from `CDockPaneBase`, and this is not one of them:
+`CBookmarkWindow`, `CBreakpointWindow`, `CBuildPane`, `CFileExplorerWindow`,
+`CMessagePane`, `CPathResultWindow`, `CSearchAndReplaceWindow`,
+`CSearchResultWindow`.
+
+So the corrections are:
+
+- **§3d's "9 dock panes" is 8.** The ninth name is a dialog.
+- **D10's "3 dock panes: MessageWindow, OpenTabWindows, BookmarkWindow"** is
+  really **two panes and one dialog** — and with `MessagePane` done (§6k), the
+  only dock pane left in D10's kept set is `BookmarkWindow`.
+- **D10's "6 of the 9 dock panes" deferred is 6 of 8.**
+
+Same family as "~40 dialogs is 30" and "15 menu actions was 14": a plausible
+number that nobody re-derived. This one cost nothing because it was checked
+before the code was written — the task description said "the second dock pane"
+and the framework from §6k turned out to be entirely irrelevant.
+
+**The pattern this actually follows is the dialog one** — `CAboutDialog`,
+`CPreferencesDialog`, `CEncodingDialog`. No `QDockWidget`, no `toggleViewAction`,
+no `SaveDockState`.
+
+### What it does, and the one entry point it did not have
+
+Two columns (File Name, Full Path), four operations — Activate, Save,
+Close Tab(s), Copy Full Path — double-click to activate, Ctrl+A to select all,
+Ctrl+Shift+C to copy the path, and a title carrying the count.
+
+**In the MFC it has no menu item at all.** `grep -c "MENUITEM.*ID_CURRENT_WINDOWS"`
+is **0**; it is reachable only from two toolbar buttons (`src/VinaText.rc:179`,
+`:241`) and the Ctrl+Shift+W accelerator (`:1374`). `ui-qt/` has no toolbar, so
+it gets a View menu entry — a feature whose only route is one key combination is
+one platform quirk away from not existing, which this port has now learned three
+times.
+
+Two deliberate departures, both small:
+
+- **A modified document is marked** with the asterisk the tab bar already uses.
+  The MFC offers a Save button with no way of telling whether it would do
+  anything.
+- **Selected rows are returned highest-first.** The MFC closes documents *by
+  path*, so index invalidation cannot arise there; `ui-qt/` closes by tab index,
+  where it very much can.
+
+### Checks
+
+One row per tab and in tab order; the title carries the count; an untitled
+document reads `N/A` while a saved one shows its path (with both kinds asserted
+to be present, so a hard-coded answer cannot pass); Copy Full Path copies the
+path and copies **nothing** for a document that has none; Activate switches to a
+row that was **not** already current; and selected rows come back descending.
+
+Three of the checks had to be fixed before they meant anything, all found the
+same way.
+
+1. **The descending-order check selected a single row**, and a one-element list
+   is sorted both ways, so reversing the comparator went straight through it.
+   Three rows out of order now.
+2. **The checks re-implemented the handlers instead of exercising them.** The
+   Activate check connected a throwaway lambda of its own and moved the tab
+   widget directly, so the handlers in `OnWindowManager` were never covered —
+   the dialog is modal, so a self-test cannot reach them through `exec()`.
+   Raised in review, and it is the same hole §6m found in the encoding menus.
+   `ConnectWindowList` is now the single wiring point that `OnWindowManager`
+   and the self-test share, and Close — previously untested altogether — is
+   covered through it too.
+
+**And two standard includes were missing.** `std::sort` and `std::greater` are
+used with neither `<algorithm>` nor `<functional>` included; it compiles only
+because libc++ and libstdc++ pull them in through Qt headers, and MSVC's STL is
+markedly less forgiving. Worth stating precisely: **the Qt CI matrix is
+`[ubuntu-latest, macos-latest]` with no Windows job**, so no CI job could ever
+have caught it — it would have surfaced the first time `ui-qt/` was built with
+MSVC. Raised in review.
+
+**And Save had two problems, both raised in review.** It was the one handler
+with no coverage at all — and it **switched the active tab as a side effect**,
+because the first version called `OnSave`, which works on whatever is current.
+`COpenTabWindows` saves the document it looked up and never touches the active
+view; matching it is one `qobject_cast`. The exception is a document that has
+never been saved, which needs a path: Save As is a modal prompt *about* that
+document, so it is brought to the front first rather than asking the user to
+name a file they cannot see.
+
+The check covers both, on a **scratch file in a temporary directory** — never a
+fixture, because a check that writes to the corpus it reads from has bitten this
+port before (§6k).
+
+**10 mutations, 10 caught.**
+
+**Self-test: 747 → 776 checks on defaults, 751 → 780 configured.** Screenshot: `vinatext-windows.png`,
+rendered separately because the dialog is modal and cannot appear in the main
+one.
+
+Reproduce:
+
+```bash
+# it is a dialog, not a dock pane
+grep -n "class COpenTabWindows" src/OpenTabWindows.h
+sed -n '692,696p' src/MainFrm.cpp
+
+# and there are EIGHT dock panes, not the brief's nine
+grep -rhE "^class C\w+ : public CDockPaneBase" src/*.h | sort
+grep -rhE "^class C\w+ : public CDockPaneBase" src/*.h | wc -l    # 8
+
+# no menu item in the MFC - toolbar and accelerator only
+grep -c "MENUITEM.*ID_CURRENT_WINDOWS" src/VinaText.rc            # 0
+grep -n "ID_CURRENT_WINDOWS" src/VinaText.rc                      # 179, 241, 1374
+
+# 214 lines become 292 across two files
+wc -l src/OpenTabWindows.cpp ui-qt/WindowListDialog.cpp ui-qt/WindowListDialog.h
+```
+
+---
+
 ## 7. How to reproduce these numbers
 
 ```bash

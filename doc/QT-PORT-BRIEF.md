@@ -217,9 +217,15 @@ Qt will not reproduce that, and shouldn't try.
 
 ### 3d. Inventory to port
 
-- **9 dock panes** (not 11): `BookmarkWindow`, `BreakpointWindow`, `BuildWindow`,
-  `MessageWindow`, `OpenTabWindows`, `PathResultWindow`, `SearchResultWindow`,
+- **8 dock panes** (not 11, and not 9): `BookmarkWindow`, `BreakpointWindow`,
+  `BuildWindow`, `MessageWindow`, `PathResultWindow`, `SearchResultWindow`,
   `SearchAndReplaceWindow`, `FileExplorerWindow`.
+  > ⚠️ **Corrected 2026-08-05.** This list said 9 and included `OpenTabWindows`,
+  > which is **not a dock pane** — `COpenTabWindows : CDlgBase`, opened with
+  > `dlg.DoModal()` from `CMainFrame::OnWindowManager`. Exactly eight classes
+  > derive from `CDockPaneBase`; re-derive with
+  > `grep -rhE "^class C\w+ : public CDockPaneBase" src/*.h`.
+  > See [`PORTING.md`](PORTING.md) §6n.
   ~~`TerminalWindow`, `TextReferenceWindow`~~ were never compiled — deleted, see
   [`PORTING.md`](PORTING.md) §2.
 - **~40 `*Dlg.cpp`** dialogs (`.rc`, fixed-pixel → must become `.ui` with layouts)
@@ -472,14 +478,16 @@ Windows exactly as now.
 | `platform/`'s IDE half — `Compiler`, `Debugger`, `SystemInfo`, `HostView`, `HostManager`, `WindowsPrinter` | ~3,500 | Risk 3 already called `Debugger`/`Compiler` "its own project" |
 | viewers and explorer — `FileExplorerCtrl`, `BuildWindow`, `ImageView`, `PdfView`, `MediaView`, `WebView` | ~10,200 | `FileExplorerCtrl` alone is 6,220 |
 | 16 of the 30 dialogs | ~3,170 | path tools, project templates, spell-check, password, gamma |
-| 6 of the 9 dock panes | — | `BuildWindow`, `PathResultWindow`, `SearchResultWindow`, `BreakpointWindow`, `SearchAndReplaceWindow`, `FileExplorerWindow` — named in full, because a category list dropped one |
+| 6 of the 8 dock panes | — | `BuildWindow`, `PathResultWindow`, `SearchResultWindow`, `BreakpointWindow`, `SearchAndReplaceWindow`, `FileExplorerWindow` — named in full, because a category list dropped one. **8, not 9: see §3d's correction.** |
 
 **Kept — what an editor needs:**
 
 - **14 dialogs, 4,594 LOC**: `FindDlg`, `ReplaceDlg`, `GotoDlg`, `CodePageMFCDlg`,
   `AppAboutDlg` (required by D3 for the Qt LGPL attribution), the three settings
   pages, and the six small text-transform dialogs.
-- **3 dock panes**: `MessageWindow` (done), `OpenTabWindows`, `BookmarkWindow`.
+- **2 dock panes and 1 dialog**: `MessageWindow` (done, §6k), `BookmarkWindow`,
+  and `OpenTabWindows` — which is a **modal dialog**, not a pane (done, §6n).
+  With `MessageWindow` shipped, `BookmarkWindow` is the only dock pane left here.
 - `platform/`'s portable half: `OSUtil`, `SingleInstanceApp`, `UnicodeUtils`,
   `MultiThreadWorker`, `GuiUtils`.
 
