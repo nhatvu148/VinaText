@@ -2765,6 +2765,118 @@ QT_QPA_PLATFORM=offscreen perl -e 'alarm 300; exec @ARGV or die "exec failed: $!
 
 ---
 
+## 6q. One running VinaText — the first piece of `platform/`
+
+`CSingleInstanceApp` holds a named Win32 **mutex** and hands the filename over
+as a **global atom** broadcast in a registered window message. None of that
+exists off Windows. `QLocalServer` is the mapping the brief's Phase 5 table
+already names, and it carries the payload directly rather than through the atom
+table.
+
+**Pulled demand-driven, not as a batch.** D10 lists five files as
+`platform/`'s "portable half" — `OSUtil`, `SingleInstanceApp`, `UnicodeUtils`,
+`MultiThreadWorker`, `GuiUtils` — but D9 made extraction demand-driven for
+`core/` and the same argument holds here: `GuiUtils` is MFC redraw helpers Qt
+does not need, `UnicodeUtils` overlaps what `QStringConverter` and `QTextCodec`
+already do, and `MultiThreadWorker` has no consumer in `ui-qt/` yet. This one
+has clear user-visible value, so it is the one that moved. No `platform/`
+directory was created for a single file.
+
+### Three things that had to be got right
+
+**Connect, then listen.** Trying to connect first answers *"is anyone there?"*,
+and when nobody is, a socket file left by a crashed run is debris rather than a
+permanent lock. On Unix that file outlives the process, so without
+`QLocalServer::removeServer` every launch after a crash opens a new window
+forever.
+
+**The headless modes bypass it entirely.** A `--selftest` that handed its file
+list to a running editor and exited would **pass CI by not running**. The check
+sits after `RunSelfTest` and `RenderScreenshots` have returned, so `bHeadless`
+alone would not have been enough.
+
+**Relative paths are made absolute before they travel.** The running instance
+has its own working directory; a relative path resolves against the wrong one
+and silently opens a different file, or none.
+
+### Two deliberate improvements
+
+- **A bare second launch comes to the front.** The MFC notifies the first
+  instance *only* when the command line carries a file
+  (`m_nShellCommand == FileOpen`), so double-clicking its icon while it runs
+  exits silently and nothing happens. Here an empty handoff still raises the
+  window.
+- **`--new-window` is the escape hatch**, standing in for the MFC's three
+  (`MOVE_TO_NEW_WINDOW`, `REOPEN_WITH_ADMIN_RIGHT`, `RESTART_APP`); the latter
+  two belong to features D10 defers.
+
+**Qt Network is LGPLv3 and clears D3.** The GPL-only list names *Qt Network
+**Authorization***, which is a different module.
+
+### Checks
+
+The handoff runs for real, through the shipped code on both ends, **on a
+test-only socket name** — calling `HandOff()` under the real name would connect
+to the user's actual running editor and open the test's files in it.
+
+One check could not fail as first written. The stale-socket case created a
+server and **closed** it, but `QLocalServer::close()` *removes* the socket file,
+so nothing stale was ever left and the mutation deleting `removeServer()` went
+uncaught. Leaving a plain **file** at the socket path is what a killed process
+does, and the check now asserts a plain `listen()` is genuinely blocked by it
+before showing that `Listen()` is not.
+
+### The review found a race, and it was worse than estimated
+
+`Listen()` called `removeServer()` unconditionally, with nothing serialising it
+across processes. Opening several files at once — which a file manager does by
+spawning one process per file — has them all fail `HandOff` (nobody is
+listening *yet*), then all race into `Listen()`, where each one's
+`removeServer()` unlinks the previous winner's live socket.
+
+**Measured rather than reasoned about. Six simultaneous launches left FOUR
+windows**; the review estimated two. After serialising the whole
+connect-then-listen decision under a `QLockFile`, the same six leave **one**,
+three runs running.
+
+A second finding in the same review: `waitForReadyRead` ran on the **GUI
+thread**, so any local process could freeze the editor for a second by
+connecting and saying nothing. The read is signal-driven now, with a one-shot
+deadline that treats silence as "come to the front" — and a short-payload guard,
+because a `QDataStream` list can arrive in pieces and acting on half of one
+would open nothing.
+
+**The lock check had to be made to contend.** Two launches run one after the
+other never touch the lock, so a mutation removing it passed them both. Holding
+the lock in the check and asserting the next call *waits* is what catches it —
+it reports `waited 0ms` without the lock. The real race needs concurrent
+**processes** and is verified outside this suite, by the six-launch run above.
+
+**6 mutations, 6 caught.** Verified end to end with two real processes: the
+second launch exits 0 and one process remains.
+
+**Self-test: 952 → 978 checks on defaults, 956 → 982 configured** (macOS).
+
+Reproduce:
+
+```bash
+# the Win32 mechanism being replaced
+sed -n '/void CSingleInstanceApp::SendMessageToExistedInstance/,/^}/p' src/SingleInstanceApp.cpp
+
+# the MFC only notifies when there is a file to open
+sed -n '209,220p' src/VinaTextApp.cpp
+
+# Qt Network is not on D3's GPL-only list; Qt Network AUTHORIZATION is
+grep -o "Qt Network Authorization" doc/QT-PORT-BRIEF.md
+
+# two processes, one editor
+./qtbuild/ui-qt/vinatext-qt &                      # first
+./qtbuild/ui-qt/vinatext-qt somefile.txt; echo $?  # 0, and exits
+pgrep -f qtbuild/ui-qt/vinatext-qt | wc -l         # 1
+```
+
+---
+
 ## 7. How to reproduce these numbers
 
 ```bash

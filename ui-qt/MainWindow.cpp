@@ -16,6 +16,7 @@
 #include "BookmarkPane.h"
 #include "LineTransforms.h"
 #include "TransformDialog.h"
+#include "SingleInstance.h"
 #include "AboutDialog.h"
 #include "PreferencesDialog.h"
 #include "MessagePane.h"
@@ -42,6 +43,13 @@
 #include <QTabWidget>
 #include <QTemporaryDir>
 #include <QVBoxLayout>
+#include <QDir>
+#include <QEventLoop>
+#include <QElapsedTimer>
+#include <QThread>
+#include <QLocalServer>
+#include <QLocalSocket>
+#include <QLockFile>
 #include <QSet>
 #include <QTextCodec>
 
@@ -4020,6 +4028,202 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 
 			pScratch->Send(SCI_SETSAVEPOINT);
 			OnCloseTab(m_pTabs->indexOf(pScratch));
+		}
+	}
+
+	//----------------------------------------------------------------------
+	// Single instance - CSingleInstanceApp, via QLocalServer. See
+	// doc/PORTING.md 6q.
+	//
+	// ON A TEST-ONLY SOCKET NAME. Calling HandOff() under the real name would
+	// connect to the user's ACTUAL running editor and open these files in it,
+	// which is a self-test with side effects on the machine it runs on.
+	//----------------------------------------------------------------------
+	{
+		const QString strTestName = CSingleInstance::SocketName()
+			+ QStringLiteral("-selftest");
+		Require(strTestName != CSingleInstance::SocketName(),
+			QStringLiteral("instance: the test uses its own socket, not the real one"));
+		Require(!CSingleInstance::SocketName().contains(QLatin1Char('/')),
+			QStringLiteral("instance: the socket name is a name, not a path, got '%1'")
+				.arg(CSingleInstance::SocketName()));
+
+		// Nobody listening yet: a handoff must fail rather than hang, so a
+		// first launch starts normally.
+		QLocalServer::removeServer(strTestName);
+		Require(!CSingleInstance::HandOff(QStringList(), strTestName),
+			QStringLiteral("instance: with nobody listening, the handoff fails and this "
+				"process becomes the instance"));
+
+		CSingleInstance server(nullptr, strTestName);
+		Require(server.Listen(),
+			QStringLiteral("instance: claimed the socket"));
+
+		QStringList received;
+		bool bGotSignal = false;
+		QObject::connect(&server, &CSingleInstance::FilesReceived, this,
+			[&received, &bGotSignal](const QStringList& files)
+		{
+			received = files;
+			bGotSignal = true;
+		});
+
+		// A real handoff, through the shipped code on both ends.
+		QTemporaryDir handoffDir;
+		Require(handoffDir.isValid(), QStringLiteral("instance: got a directory"));
+		const QString strFile = handoffDir.filePath(QStringLiteral("handed.txt"));
+		QFile seed(strFile);
+		Require(seed.open(QIODevice::WriteOnly), QStringLiteral("instance: seeded a file"));
+		seed.write("handed over\n");
+		seed.close();
+
+		Require(CSingleInstance::HandOff({ strFile }, strTestName),
+			QStringLiteral("instance: the handoff was accepted"));
+		// The signal arrives on the event loop, which a self-test does not run.
+		for (int i = 0; i < 50 && !bGotSignal; ++i)
+		{
+			QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+		}
+		Require(bGotSignal, QStringLiteral("instance: the listening side was told"));
+		Require(received == QStringList{ strFile },
+			QStringLiteral("instance: and got the file, expected '%1' got '%2'")
+				.arg(strFile, received.join(QLatin1Char(','))));
+
+		// RELATIVE PATHS ARE MADE ABSOLUTE. The running instance has its own
+		// working directory, so a relative path would resolve against the
+		// wrong one - and silently open a different file, or none.
+		received.clear();
+		bGotSignal = false;
+		const QString strRelative = QDir::current().relativeFilePath(strFile);
+		Require(strRelative != strFile,
+			QStringLiteral("instance: the relative form differs, so this check can fail"));
+		Require(CSingleInstance::HandOff({ strRelative }, strTestName),
+			QStringLiteral("instance: handed over a relative path"));
+		for (int i = 0; i < 50 && !bGotSignal; ++i)
+		{
+			QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+		}
+		Require(received == QStringList{ strFile },
+			QStringLiteral("instance: which arrived ABSOLUTE, got '%1'")
+				.arg(received.join(QLatin1Char(','))));
+
+		// A STALE SOCKET does not lock the editor out forever. On Unix the
+		// file outlives a crashed process; without removeServer every launch
+		// after a crash would open a new window instead of reusing one.
+		// Simulated by leaving a FILE at the socket path, which is what a
+		// killed process leaves behind. QLocalServer::close() would not do:
+		// it removes the file, so closing a server cleanly proves nothing
+		// about a crash - the first version of this check did exactly that
+		// and the mutation removing removeServer() went uncaught.
+		const QString strStale = strTestName + QStringLiteral("-stale");
+		const QString strStalePath = QDir::tempPath() + QLatin1Char('/') + strStale;
+		QFile debris(strStalePath);
+		Require(debris.open(QIODevice::WriteOnly),
+			QStringLiteral("instance: left debris at the socket path"));
+		debris.close();
+		Require(QFile::exists(strStalePath),
+			QStringLiteral("instance: which is really there, so the check can fail"));
+		{
+			// Without removeServer this fails with AddressInUseError, and every
+			// launch after a crash would open a new window instead of reusing
+			// the running editor.
+			QLocalServer blocked;
+			Require(!blocked.listen(strStale),
+				QStringLiteral("instance: and a plain listen() is genuinely blocked by it"));
+		}
+		CSingleInstance revived(nullptr, strStale);
+		Require(revived.Listen(),
+			QStringLiteral("instance: a later launch claims a socket left by a crash"));
+
+		// THE DECISION IS SERIALISED. Connect-then-listen is only safe under a
+		// lock: without it, several launches all fail HandOff (nobody is
+		// listening YET) and then race into Listen(), where each one's
+		// removeServer() unlinks the last winner's live socket. Measured
+		// before the fix: SIX simultaneous launches left FOUR windows.
+		{
+			const QString strRace = strTestName + QStringLiteral("-race");
+			QFile::remove(CSingleInstance::LockPath(strRace));
+			QLocalServer::removeServer(strRace);
+
+			CSingleInstance first(nullptr, strRace);
+			bool bFirstIsServer = false;
+			Require(!first.TakeOverOrHandOff(QStringList(), bFirstIsServer),
+				QStringLiteral("instance: the first launch does not hand off"));
+			Require(bFirstIsServer,
+				QStringLiteral("instance: it becomes the server instead"));
+
+			// A second launch must hand off, NOT become a second server - and
+			// must not unlink the first one's socket on the way.
+			CSingleInstance second(nullptr, strRace);
+			bool bSecondIsServer = false;
+			Require(second.TakeOverOrHandOff(QStringList(), bSecondIsServer),
+				QStringLiteral("instance: the second launch hands off"));
+			Require(!bSecondIsServer,
+				QStringLiteral("instance: and does NOT become a second server"));
+
+			// The first one's socket is still live afterwards, which is the
+			// property removeServer destroyed when it ran unserialised.
+			QLocalSocket probe;
+			probe.connectToServer(strRace);
+			Require(probe.waitForConnected(500),
+				QStringLiteral("instance: and the first one's socket still answers"));
+			probe.abort();
+
+			// THE LOCK IS ACTUALLY CONSULTED. The two launches above run one
+			// after the other, so they never contend and a mutation removing
+			// the lock passes them both - measured. Holding the lock here
+			// makes the next call wait for it, which nothing else would.
+			//
+			// The real race needs concurrent PROCESSES and is verified outside
+			// this suite: six simultaneous launches left four windows before
+			// the fix and one after, three runs running.
+			{
+				const QString strLocked = strTestName + QStringLiteral("-locked");
+				QFile::remove(CSingleInstance::LockPath(strLocked));
+				QLocalServer::removeServer(strLocked);
+				QLockFile held(CSingleInstance::LockPath(strLocked));
+				Require(held.tryLock(1000),
+					QStringLiteral("instance: the test holds the lock"));
+
+				CSingleInstance contender(nullptr, strLocked);
+				bool bContenderIsServer = false;
+				QElapsedTimer waited;
+				waited.start();
+				contender.TakeOverOrHandOff(QStringList(), bContenderIsServer);
+				Require(waited.elapsed() >= 1500,
+					QStringLiteral("instance: a launch WAITS for the lock before deciding "
+						"(waited %1ms)").arg(waited.elapsed()));
+				held.unlock();
+			}
+		}
+
+		// A CONNECTION THAT SAYS NOTHING must not block the GUI thread. The
+		// read is signal-driven with a deadline; a blocking waitForReadyRead
+		// let any local process freeze the editor for a second by connecting
+		// and staying silent. Found in review.
+		{
+			received.clear();
+			bGotSignal = false;
+			QLocalSocket silent;
+			silent.connectToServer(strTestName);
+			Require(silent.waitForConnected(500),
+				QStringLiteral("instance: a silent client connects"));
+			// Waited on ELAPSED TIME, not iterations. processEvents returns
+			// immediately when the queue is empty, so a fixed loop count spins
+			// through in far less than the one-second deadline and the check
+			// fails for the wrong reason - which it did.
+			QElapsedTimer elapsed;
+			elapsed.start();
+			while (!bGotSignal && elapsed.elapsed() < 4000)
+			{
+				QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+				QThread::msleep(10);
+			}
+			Require(bGotSignal,
+				QStringLiteral("instance: silence is treated as 'come to the front'"));
+			Require(received.isEmpty(),
+				QStringLiteral("instance: with no files, got %1").arg(received.size()));
+			silent.abort();
 		}
 	}
 
