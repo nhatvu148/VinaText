@@ -1674,6 +1674,104 @@ QString CEditorWidget::TextOfLine(int nLine) const
 }
 
 //////////////////////////////////////////////////////////////////////////
+// Line transforms
+//
+// See the header for the two defects in src/EditorView.cpp that this
+// deliberately does not reproduce, and doc/PORTING.md 6p.
+
+int CEditorWidget::ApplyLineTransform(const FLineTransform& fTransform)
+{
+	// Scope: the selection expanded to whole lines, or the whole document.
+	// CEditorView branches on GetSelectedText().IsEmpty() for the same choice.
+	const sptr_t nSelStart = Send(SCI_GETSELECTIONSTART);
+	const sptr_t nSelEnd = Send(SCI_GETSELECTIONEND);
+	const bool bHasSelection = nSelEnd > nSelStart;
+
+	const int nLineCount = GetLineCount();
+	int nFirstLine = 1;
+	int nLastLine = nLineCount;
+	if (bHasSelection)
+	{
+		nFirstLine = static_cast<int>(Send(SCI_LINEFROMPOSITION,
+			static_cast<uptr_t>(nSelStart))) + 1;
+		nLastLine = static_cast<int>(Send(SCI_LINEFROMPOSITION,
+			static_cast<uptr_t>(nSelEnd))) + 1;
+	}
+	if (nFirstLine > nLastLine)
+	{
+		return 0;
+	}
+
+	// The byte range being replaced: from the start of the first line to the
+	// END OF THE LAST LINE'S TEXT, not including its line ending.
+	// SCI_GETLINEENDPOSITION excludes the EOL, which is what makes the trailing
+	// newline survivable - the transform never owns the final terminator.
+	const sptr_t nFrom = Send(SCI_POSITIONFROMLINE,
+		static_cast<uptr_t>(nFirstLine - 1));
+	const sptr_t nTo = Send(SCI_GETLINEENDPOSITION,
+		static_cast<uptr_t>(nLastLine - 1));
+
+	// The line ending to join with, as Scintilla reports it for this document.
+	const char* szEol = "\n";
+	switch (Send(SCI_GETEOLMODE))
+	{
+	case SC_EOL_CRLF:	szEol = "\r\n"; break;
+	case SC_EOL_CR:		szEol = "\r"; break;
+	default:			szEol = "\n"; break;
+	}
+	const QByteArray eol(szEol);
+
+	QByteArray replacement;
+	int nIndex = 0;
+	int nEmitted = 0;
+	for (int nLine = nFirstLine; nLine <= nLastLine; ++nLine)
+	{
+		// The line's own text, without its EOL - TextOfLine trims, which is
+		// wrong here, so the bytes are taken directly.
+		const sptr_t nLineFrom = Send(SCI_POSITIONFROMLINE,
+			static_cast<uptr_t>(nLine - 1));
+		const sptr_t nLineTo = Send(SCI_GETLINEENDPOSITION,
+			static_cast<uptr_t>(nLine - 1));
+		QByteArray raw(static_cast<int>(nLineTo - nLineFrom) + 1, '\0');
+		Send(SCI_SETTARGETRANGE, static_cast<uptr_t>(nLineFrom), nLineTo);
+		Send(SCI_GETTARGETTEXT, 0, reinterpret_cast<sptr_t>(raw.data()));
+		raw.truncate(static_cast<int>(nLineTo - nLineFrom));
+
+		SLineContext context;
+		context._Index = nIndex;
+		context._Line = nLine;
+		context._Total = nLastLine - nFirstLine + 1;
+		context._Eol = QString::fromLatin1(eol);
+		const std::optional<QString> result = fTransform(QString::fromUtf8(raw), context);
+		++nIndex;
+		if (!result.has_value())
+		{
+			continue;			// the line is dropped, which "remove lines
+								// containing X" needs
+		}
+		if (nEmitted > 0)
+		{
+			replacement += eol;
+		}
+		replacement += result->toUtf8();
+		++nEmitted;
+	}
+
+	// ONE undo action, so a single Ctrl+Z reverts the whole transform rather
+	// than unpicking it line by line.
+	Send(SCI_BEGINUNDOACTION);
+	Send(SCI_SETTARGETRANGE, static_cast<uptr_t>(nFrom), nTo);
+	// SCI_REPLACETARGET takes a BYTE length, and this passes one - which is the
+	// second defect the header names. The original converted to UTF-8 and then
+	// handed SCI_ADDTEXT a wide-character count, truncating any non-ASCII line.
+	Send(SCI_REPLACETARGET, static_cast<uptr_t>(replacement.size()),
+		reinterpret_cast<sptr_t>(replacement.constData()));
+	Send(SCI_ENDUNDOACTION);
+
+	return nEmitted;
+}
+
+//////////////////////////////////////////////////////////////////////////
 // Find
 
 namespace

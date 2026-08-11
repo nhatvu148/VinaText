@@ -2641,6 +2641,130 @@ QT_QPA_PLATFORM=offscreen perl -e 'alarm 300; exec @ARGV or die "exec failed: $!
 
 ---
 
+## 6p. The text transforms — five dialogs are seventeen commands
+
+### The count in D10 is off by six times
+
+D10 prices this as **"the six small text-transform dialogs"**, and the dialog
+shells really are tiny — 241 lines for five files. But those five classes are
+**generic input forms reused across seventeen commands**: `CEditWithXDlg` alone
+backs ten of them, its caption set by each caller. The work is in
+`src/EditorView.cpp`:
+
+```
+17 handlers, 1174 lines
++ 5 dialog shells, 241
+= 1415 lines, against D10's ~241
+```
+
+Two smaller corrections fall out of the same re-derivation. There are **five**
+transform dialog classes, not six; and `VinaTextSettingDlg` is a **container**
+holding the three settings pages as members, so it is a fourth settings object.
+D10's arithmetic — 5 named + 3 settings + 6 transforms = 14 — reaches the right
+total by two errors that cancel. The kept 14 is **5 named + 4 settings + 5
+transforms**.
+
+### One primitive, seventeen lambdas
+
+Every one of the seventeen repeats the same skeleton: validate, fetch the text
+or the selection, split on the EOL, map a per-line function, rebuild, write
+back. `CEditorWidget::ApplyLineTransform` is that skeleton;
+`ui-qt/LineTransforms.cpp` is a table of what actually differs. **649 lines
+against 1,415.**
+
+**These rewrite whole documents, so the first check written was the identity
+one:** a transform that changes nothing must leave the bytes untouched, across
+all eight fixtures. That single assertion covers EOL drift, trailing-newline
+drift and encoding drift at once — the same technique that has protected the
+save path since §6i.
+
+The callback signature had to widen once. It began as
+`(line, index, docLine)` and split and join did not fit: split emits *several*
+lines and needs the document's ending to do it, join emits *one* and needs to
+know which line is last. A context struct carrying `_Index`, `_Line`, `_Total`
+and `_Eol` fixes both. Better to widen the contract than to have two of
+seventeen work differently.
+
+### Four defects in the original, none reproduced
+
+| where | what | consequence |
+|---|---|---|
+| 4 of the 8 selection sites | append the transformed line, then append it **again** in both branches of an `if/else` | selecting lines and running Remove Before Word **duplicates every one of them** |
+| `ReplaceSelectionWithText` | passes a **wide-char** count to `SCI_ADDTEXT`, which Scintilla documents as taking a **byte** count | `"Tiếng Việt"` is 10 wide chars and 14 UTF-8 bytes, so four are dropped mid-character. **Every selection transform truncates non-ASCII text** |
+| `OnOptionsRemoveFromCharXToYInLine` | its "from the end" branch calls `ReverseFind(m_strFromX[0])` **twice** — the second should be `m_strToY`. Four occurrences, because the error was copy-pasted from the whole-document branch into the selection one | that mode ignores the second input entirely, in both paths |
+| the same command | no guard for a character that is not present; `Find` returns −1 and `Mid(0, -1+1) + Mid(-1)` | **duplicates the prefix** onto the whole line |
+
+The port works in UTF-8 byte space throughout and writes through
+`SCI_REPLACETARGET`, which is byte-correct by construction; a line missing
+either character is left alone, as the word-relative transforms already do.
+
+Three smaller departures, all documented in the table: **join** drops the MFC's
+trailing delimiter (visible junk rather than behaviour), **split** applies to
+the scope like its sixteen siblings rather than to the current line only, and
+the alphabet index still runs `'Z'` into `'['` because wrapping would need a
+scheme the original never chose.
+
+### What the checks caught
+
+The seventeen are checked table-driven, one row each, plus **a count assertion
+that every command in `LineTransforms::All()` has a row** — which immediately
+caught that only **sixteen** had been written. The missing one was
+`OnOptionsRemoveFromCharXToYInLine`, the command carrying two of the four
+defects above.
+
+Two rows could not fail as first written, both found by mutation:
+
+- **Remove Between Characters** was tested on a line containing *neither*
+  character, where dropping the not-found guard changes nothing —
+  `QString::mid(-1)` returns the whole string. A line with **one** present and
+  the other absent tells them apart: without the guard it yields `a[a[bc`.
+- **Split** was tested only on an LF document, where truncating the line ending
+  to its first character is invisible. On a CRLF document the mutation writes a
+  bare CR: `61 0d 62 0d 0a 63`.
+
+**12 mutations, 12 caught.**
+
+**Self-test: 840 → 952 checks on defaults, 844 → 956 configured** (macOS; see
+§6o's note on why Linux differs). Fixture bytes verified unchanged after a full
+run — a check that rewrites the corpus it reads from has bitten this port
+before.
+
+Reproduce:
+
+```bash
+# five dialog classes, seventeen commands - CEditWithXDlg backs ten
+for d in EditWithXDlg InsertAfterWordInLineDlg InsertFromPositionXDlg \
+         RemoveAfterBeforeWordDlg RemoveFromXToYDlg; do
+  printf '%-28s %s\n' "$d" "$(grep -c "C$d dlg" src/EditorView.cpp)"; done
+awk '/^void CEditorView::On/ {fn=$0} /C(EditWithX|InsertAfterWordInLine|InsertFromPositionX|RemoveAfterBeforeWord|RemoveFromXToY)Dlg dlg/ {print fn}' src/EditorView.cpp | wc -l   # 17
+
+# the doubling: an unconditional append followed by a second one
+grep -c "if (lLineStart != lLineEnd)" src/EditorView.cpp                 # 8 sites, 4 double
+
+# the byte/char confusion, against Scintilla's own contract
+grep -nE "fun void AddText=" thirdparty/scintilla/include/Scintilla.iface
+sed -n '/^void CEditorCtrl::ReplaceSelectionWithText/,/^}/p' src/Editor.cpp
+
+# the copy-paste bug: ReverseFind(m_strFromX[0]) where the second should be
+# m_strToY - and FOUR hits, because the error was itself copy-pasted from the
+# whole-document branch into the selection one
+grep -n "ReverseFind(dlg.m_strFromX\[0\])" src/EditorView.cpp            # 4, two pairs
+
+# 1415 lines become 649
+wc -l ui-qt/LineTransforms.cpp ui-qt/LineTransforms.h \
+      ui-qt/TransformDialog.cpp ui-qt/TransformDialog.h
+
+# 952 checks, up from 840
+QT_QPA_PLATFORM=offscreen perl -e 'alarm 300; exec @ARGV or die "exec failed: $!"' -- \
+  ./qtbuild/ui-qt/vinatext-qt --selftest \
+  core/LanguageData.cpp tools/extract_language_data.py \
+  qtbuild/fixtures/crlf-bom.cpp qtbuild/fixtures/utf16.py \
+  qtbuild/fixtures/latin1.md qtbuild/fixtures/no-trailing-newline.py \
+  qtbuild/fixtures/tags.xml qtbuild/fixtures/urls.md
+```
+
+---
+
 ## 7. How to reproduce these numbers
 
 ```bash

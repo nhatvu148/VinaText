@@ -21,6 +21,7 @@
 #include "EncodingDialog.h"
 #include "WindowListDialog.h"
 #include "BookmarkPane.h"
+#include "LineTransforms.h"
 
 #include <QColor>
 #include <QMainWindow>
@@ -87,6 +88,10 @@ private:
 	// modal, so a self-test cannot reach them through exec(). Found in review;
 	// it is the same hole 6m found in the encoding menus.
 	void ConnectWindowList(CWindowListDialog* pDialog);
+
+	// The seventeen text transforms, all through one handler: prompt, build
+	// the per-line function, apply it. The table is in LineTransforms.cpp.
+	void OnLineTransform(const LineTransforms::SCommand& command);
 
 	// Bookmarks. The pane is rebuilt from the markers rather than kept in step
 	// with them - see ui-qt/BookmarkPane.h and doc/PORTING.md 6o.
