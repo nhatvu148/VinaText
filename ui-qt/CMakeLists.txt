@@ -9,7 +9,7 @@
 # D3: Qt MUST be linked dynamically. Never add a static Qt build here.
 #*******************************************************************************
 
-find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Core5Compat)
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Network Core5Compat)
 
 qt_standard_project_setup()
 
@@ -37,6 +37,8 @@ qt_add_executable(vinatext-qt
     TransformDialog.h
     LineTransforms.cpp
     LineTransforms.h
+    SingleInstance.cpp
+    SingleInstance.h
     PreferencesDialog.cpp
     PreferencesDialog.h
     AboutDialog.cpp
@@ -50,7 +52,10 @@ target_link_libraries(vinatext-qt PRIVATE
     VinaText::core
     Scintilla::EditBase
     Lexilla::lexilla
-    Qt6::Widgets)
+    Qt6::Widgets
+    # QLocalServer/QLocalSocket, for the single-instance handoff. Qt Network is
+    # LGPLv3 like the rest and adds no GPL-only module - see D3.
+    Qt6::Network)
 
 # ui-qt/ is new code and is held to the same wall core/ is: a warning here is a
 # mistake, not a legacy artefact. The MFC tree is untouched by this.

@@ -2765,6 +2765,92 @@ QT_QPA_PLATFORM=offscreen perl -e 'alarm 300; exec @ARGV or die "exec failed: $!
 
 ---
 
+## 6q. One running VinaText — the first piece of `platform/`
+
+`CSingleInstanceApp` holds a named Win32 **mutex** and hands the filename over
+as a **global atom** broadcast in a registered window message. None of that
+exists off Windows. `QLocalServer` is the mapping the brief's Phase 5 table
+already names, and it carries the payload directly rather than through the atom
+table.
+
+**Pulled demand-driven, not as a batch.** D10 lists five files as
+`platform/`'s "portable half" — `OSUtil`, `SingleInstanceApp`, `UnicodeUtils`,
+`MultiThreadWorker`, `GuiUtils` — but D9 made extraction demand-driven for
+`core/` and the same argument holds here: `GuiUtils` is MFC redraw helpers Qt
+does not need, `UnicodeUtils` overlaps what `QStringConverter` and `QTextCodec`
+already do, and `MultiThreadWorker` has no consumer in `ui-qt/` yet. This one
+has clear user-visible value, so it is the one that moved. No `platform/`
+directory was created for a single file.
+
+### Three things that had to be got right
+
+**Connect, then listen.** Trying to connect first answers *"is anyone there?"*,
+and when nobody is, a socket file left by a crashed run is debris rather than a
+permanent lock. On Unix that file outlives the process, so without
+`QLocalServer::removeServer` every launch after a crash opens a new window
+forever.
+
+**The headless modes bypass it entirely.** A `--selftest` that handed its file
+list to a running editor and exited would **pass CI by not running**. The check
+sits after `RunSelfTest` and `RenderScreenshots` have returned, so `bHeadless`
+alone would not have been enough.
+
+**Relative paths are made absolute before they travel.** The running instance
+has its own working directory; a relative path resolves against the wrong one
+and silently opens a different file, or none.
+
+### Two deliberate improvements
+
+- **A bare second launch comes to the front.** The MFC notifies the first
+  instance *only* when the command line carries a file
+  (`m_nShellCommand == FileOpen`), so double-clicking its icon while it runs
+  exits silently and nothing happens. Here an empty handoff still raises the
+  window.
+- **`--new-window` is the escape hatch**, standing in for the MFC's three
+  (`MOVE_TO_NEW_WINDOW`, `REOPEN_WITH_ADMIN_RIGHT`, `RESTART_APP`); the latter
+  two belong to features D10 defers.
+
+**Qt Network is LGPLv3 and clears D3.** The GPL-only list names *Qt Network
+**Authorization***, which is a different module.
+
+### Checks
+
+The handoff runs for real, through the shipped code on both ends, **on a
+test-only socket name** — calling `HandOff()` under the real name would connect
+to the user's actual running editor and open the test's files in it.
+
+One check could not fail as first written. The stale-socket case created a
+server and **closed** it, but `QLocalServer::close()` *removes* the socket file,
+so nothing stale was ever left and the mutation deleting `removeServer()` went
+uncaught. Leaving a plain **file** at the socket path is what a killed process
+does, and the check now asserts a plain `listen()` is genuinely blocked by it
+before showing that `Listen()` is not.
+
+**4 mutations, 4 caught.** Verified end to end with two real processes: the
+second launch exits 0 and one process remains.
+
+**Self-test: 952 → 968 checks on defaults, 956 → 972 configured** (macOS).
+
+Reproduce:
+
+```bash
+# the Win32 mechanism being replaced
+sed -n '/void CSingleInstanceApp::SendMessageToExistedInstance/,/^}/p' src/SingleInstanceApp.cpp
+
+# the MFC only notifies when there is a file to open
+sed -n '209,220p' src/VinaTextApp.cpp
+
+# Qt Network is not on D3's GPL-only list; Qt Network AUTHORIZATION is
+grep -o "Qt Network Authorization" doc/QT-PORT-BRIEF.md
+
+# two processes, one editor
+./qtbuild/ui-qt/vinatext-qt &                      # first
+./qtbuild/ui-qt/vinatext-qt somefile.txt; echo $?  # 0, and exits
+pgrep -f qtbuild/ui-qt/vinatext-qt | wc -l         # 1
+```
+
+---
+
 ## 7. How to reproduce these numbers
 
 ```bash

@@ -20,6 +20,8 @@
 #include "MainWindow.h"
 
 #include <QApplication>
+#include "SingleInstance.h"
+
 #include <QCommandLineParser>
 #include <QSettings>
 #include <QTemporaryDir>
@@ -64,6 +66,9 @@ int main(int argc, char* argv[])
 		QStringLiteral("Render the window in both themes into <dir>, then exit"),
 		QStringLiteral("dir"));
 	parser.addOption(screenshotOption);
+	QCommandLineOption newWindowOption(QStringLiteral("new-window"),
+		QStringLiteral("Start a second window instead of reusing a running VinaText."));
+	parser.addOption(newWindowOption);
 	parser.addPositionalArgument(QStringLiteral("file"), QStringLiteral("Files to open"),
 		QStringLiteral("[file...]"));
 	parser.process(app);
@@ -148,6 +153,42 @@ int main(int argc, char* argv[])
 	if (parser.isSet(screenshotOption))
 	{
 		return window.RenderScreenshots(files, parser.value(screenshotOption));
+	}
+
+	// ONE RUNNING VINATEXT. Tried after the headless modes have returned and
+	// before the window is shown: a --selftest that handed its file list to a
+	// running editor and exited would pass CI by not running, and bHeadless
+	// alone would not have stopped it because those two return above.
+	//
+	// --new-window is the escape hatch, standing in for the MFC's three
+	// (MOVE_TO_NEW_WINDOW, REOPEN_WITH_ADMIN_RIGHT, RESTART_APP) - the latter
+	// two belong to features D10 defers.
+	CSingleInstance instance;
+	if (!parser.isSet(newWindowOption))
+	{
+		if (CSingleInstance::HandOff(files))
+		{
+			return 0;
+		}
+		if (instance.Listen())
+		{
+			QObject::connect(&instance, &CSingleInstance::FilesReceived, &window,
+				[&window](const QStringList& received)
+			{
+				for (const QString& strPath : received)
+				{
+					window.OpenFile(strPath);
+				}
+				// Come to the front even with nothing to open, which is what a
+				// bare second launch means. The MFC notifies only when there is
+				// a file, so double-clicking its icon while it runs does
+				// nothing at all - a small, deliberate improvement.
+				window.setWindowState((window.windowState() & ~Qt::WindowMinimized)
+					| Qt::WindowActive);
+				window.raise();
+				window.activateWindow();
+			});
+		}
 	}
 
 	for (const QString& strPath : files)
