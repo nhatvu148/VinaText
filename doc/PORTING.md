@@ -2877,6 +2877,101 @@ pgrep -f qtbuild/ui-qt/vinatext-qt | wc -l         # 1
 
 ---
 
+## 6r. Eight editor settings — behaviours first, controls second
+
+D10 scopes "the three settings pages" at 1,936 lines. **Transcribing them would
+be the wrong work.** `EditorSettingDlg` exposes settings for a compiler, a
+debugger and a file explorer, all deferred, so a faithful port is mostly
+controls that do nothing — exactly what PR #45 refused to build. Its rule
+stands: **a control exists because a behaviour exists.**
+
+So the work was to find the settings `ui-qt` *should honour and does not*. Of
+the MFC's **69**, roughly 18 belong to deferred features and much of the rest is
+compiler flags and antivirus paths. `ui-qt` honoured 10. These eight were
+hard-coded:
+
+| setting | was |
+|---|---|
+| `EditorFontName` / `EditorFontPointSize` | the system fixed font, no choice |
+| `EditorTabWidth` + `UseCustomEditorTabSettings` | `DEFAULT_TAB_WIDTH = 4`, hard-coded |
+| `EnableProcessIndentationTab` | tabs-versus-spaces not honoured |
+| `EditorZoomFactor` | no zoom |
+| `EnableCaretBlink` | Scintilla's default |
+| `EnableMultipleCursor` | **off, while the MFC ships it ON** |
+| `DefaultFileEOL` | detected only; new files had no default |
+| `AutoAddNewLineAtTheEOF` | not honoured |
+
+### Every key came from the MFC's writer, and three do not match
+
+These land in a file **both frontends share**, so a wrong key is not a Qt bug —
+it is a Windows user's setting silently ignored. Read out of
+`CAppSettings::SaveSettingData`, never guessed:
+
+| member | key |
+|---|---|
+| `m_nEditorIndentationWidth` | **`EditorTabWidth`** |
+| `m_bUseUserIndentationSettings` | **`UseCustomEditorTabSettings`** |
+| italic | **`EditorFontIsStalic`** — a typo in the original, which must be matched |
+
+Ninth instance of *the name of a thing is not the name of the thing it uses*.
+
+### The bug this nearly shipped with
+
+`ApplyEditorStyles` set `STYLE_DEFAULT`'s font from `QFontDatabase` and then
+`SCI_STYLECLEARALL`. `ReapplySettings` runs `ApplySettings()` **then**
+`ApplyTheme()` — so **every theme switch threw the user's font away**. The
+comment first written here claimed the theme re-applied it; checking rather than
+asserting is what found otherwise. One helper owns the font now, and both
+callers use it.
+
+### Three checks that could not fail, and one that failed on correct code
+
+- **Tab width.** At the defaults `UseCustomTabSettings` is false *and*
+  `EditorTabWidth` is 4, so the gated expression computes 4 either way. It now
+  drives both states with the two disagreeing.
+- **Auto-newline-at-EOF.** Saving the same document twice does *not* test the
+  double-append guard: `SaveFile` never changes the document, so the second save
+  sees the same newline-less text and appends once again. The text itself has to
+  end in one.
+- **The write key.** A round-trip **cannot** see a wrong write key, because
+  `SaveToFile` preserves keys it does not know — the correct key survives from
+  the seed file and the reload finds it there regardless. The check reads the
+  file *text* instead.
+- And that same preservation made the new key check **fail on correct code**: a
+  file left behind by the mutated run kept `EditorIndentationWidth` for ever
+  after. It removes the file first now. A test writing to the corpus it reads
+  from, in a new disguise.
+
+**Preferences grew to match, and immediately caught me making the #45 mistake.**
+Guarding `setCurrentIndex` for the EOL combo left it at index **0** — a valid
+index — so a stored out-of-range 9 was silently rewritten as CRLF. Setting it
+unconditionally lets Qt give −1, which the preserve-rather-than-write guard can
+see. The font gets the same treatment: a family this machine lacks is **added**
+to the combo rather than dropped, so opening Preferences on a Mac cannot rewrite
+a Windows user's font.
+
+**7 mutations, 7 caught.**
+
+**Self-test: 978 → 1,006 checks on defaults, 982 → 1,010 configured** (macOS).
+10/10 core tests; `src/` untouched.
+
+Reproduce:
+
+```bash
+# the three keys that do not match their member names
+grep -nE '"EditorTabWidth"|"UseCustomEditorTabSettings"|"EditorFontIsStalic"' \
+  src/AppSettings.cpp
+
+# 69 settings in the MFC; ui-qt honoured 10 before this, 20 after
+grep -cE "^\s+(int|BOOL|CString|COLORREF|double|LOGFONT|UINT|bool)\s+m_" src/AppSettings.h  # 69
+grep -c "() const" core/AppSettings.h      # 21 - the 20 settings plus WasLoaded()
+
+# the font is single-sourced: one definition, two callers
+grep -n "ApplyEditorFont" ui-qt/EditorWidget.cpp
+```
+
+---
+
 ## 7. How to reproduce these numbers
 
 ```bash

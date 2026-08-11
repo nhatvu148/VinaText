@@ -31,6 +31,19 @@ namespace Core
 			}
 		}
 
+		// A string setting, which none existed before the font arrived. Same
+		// shape as the others: absent or wrong-typed leaves the default in
+		// place rather than clobbering it with an empty value.
+		void ReadString(const picojson::object& obj, const char* szKey,
+			std::string& strOut)
+		{
+			const auto it = obj.find(szKey);
+			if (it != obj.end() && it->second.is<std::string>())
+			{
+				strOut = it->second.get<std::string>();
+			}
+		}
+
 		void ReadInt(const picojson::object& obj, const char* szKey, int& nOut)
 		{
 			const picojson::object::const_iterator it = obj.find(szKey);
@@ -101,6 +114,18 @@ namespace Core
 		}
 
 		settings["EnableUrlHighlight"] = picojson::value(m_bEnableUrlHighlight);
+		settings["EditorFontName"] = picojson::value(m_strEditorFontName);
+		settings["EditorFontPointSize"] =
+			picojson::value(static_cast<double>(m_nEditorFontPointSize));
+		settings["EditorTabWidth"] = picojson::value(static_cast<double>(m_nEditorTabWidth));
+		settings["UseCustomEditorTabSettings"] = picojson::value(m_bUseCustomTabSettings);
+		settings["EnableProcessIndentationTab"] = picojson::value(m_bProcessIndentationTab);
+		settings["EditorZoomFactor"] =
+			picojson::value(static_cast<double>(m_nEditorZoomFactor));
+		settings["EnableCaretBlink"] = picojson::value(m_bEnableCaretBlink);
+		settings["EnableMultipleCursor"] = picojson::value(m_bEnableMultipleCursor);
+		settings["DefaultFileEOL"] = picojson::value(static_cast<double>(m_nDefaultFileEol));
+		settings["AutoAddNewLineAtTheEOF"] = picojson::value(m_bAutoAddNewLineAtEof);
 		settings["DrawFoldingLineUnderLineStyle"] =
 			picojson::value(m_bDrawFoldingLineUnderLineStyle);
 		settings["DrawCaretLineFrame"] = picojson::value(m_bDrawCaretLineFrame);
@@ -167,6 +192,18 @@ namespace Core
 		// cleanly, find nothing, and silently keep the default - the failure
 		// mode that leaves no trace.
 		ReadBool(settings, "EnableUrlHighlight", m_bEnableUrlHighlight);
+		// The eight new ones. Keys derived from CAppSettings::SaveSettingData -
+		// see the header for the three that do not match their member names.
+		ReadString(settings, "EditorFontName", m_strEditorFontName);
+		ReadInt(settings, "EditorFontPointSize", m_nEditorFontPointSize);
+		ReadInt(settings, "EditorTabWidth", m_nEditorTabWidth);
+		ReadBool(settings, "UseCustomEditorTabSettings", m_bUseCustomTabSettings);
+		ReadBool(settings, "EnableProcessIndentationTab", m_bProcessIndentationTab);
+		ReadInt(settings, "EditorZoomFactor", m_nEditorZoomFactor);
+		ReadBool(settings, "EnableCaretBlink", m_bEnableCaretBlink);
+		ReadBool(settings, "EnableMultipleCursor", m_bEnableMultipleCursor);
+		ReadInt(settings, "DefaultFileEOL", m_nDefaultFileEol);
+		ReadBool(settings, "AutoAddNewLineAtTheEOF", m_bAutoAddNewLineAtEof);
 		ReadBool(settings, "DrawFoldingLineUnderLineStyle", m_bDrawFoldingLineUnderLineStyle);
 		ReadBool(settings, "DrawCaretLineFrame", m_bDrawCaretLineFrame);
 		ReadBool(settings, "EnableHightLightFolder", m_bEnableHightLightFolder);

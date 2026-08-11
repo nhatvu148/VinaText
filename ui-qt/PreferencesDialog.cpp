@@ -13,6 +13,7 @@
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDialogButtonBox>
+#include <QFontDatabase>
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QLabel>
@@ -45,6 +46,79 @@ CPreferencesDialog::CPreferencesDialog(const Core::CAppSettings& current, QWidge
 	pEditorForm->addRow(m_pUrlHighlight);
 	pEditorForm->addRow(m_pCaretLineFrame);
 	pEditorForm->addRow(tr("Long line marker at column"), m_pLongLine);
+
+	// Font. A real family list rather than free text - a typo'd family name
+	// leaves Scintilla to pick something arbitrary with nothing on screen
+	// saying why. Monospaced only, since this is a code editor.
+	m_pFontName = new QComboBox(pEditor);
+	for (const QString& strFamily : QFontDatabase::families())
+	{
+		if (QFontDatabase::isFixedPitch(strFamily))
+		{
+			m_pFontName->addItem(strFamily);
+		}
+	}
+	const QString strCurrentFont =
+		QString::fromStdString(current.EditorFontName());
+	// The stored family may not exist on this machine - a settings file
+	// written on Windows naming Courier New, opened on a Linux box without
+	// it. It is ADDED rather than dropped, so opening Preferences does not
+	// silently rewrite a font the user chose elsewhere. Same rule as the
+	// margin style: a widget's range is not a licence to rewrite stored data.
+	if (m_pFontName->findText(strCurrentFont) < 0)
+	{
+		m_pFontName->insertItem(0, strCurrentFont);
+	}
+	m_pFontName->setCurrentText(strCurrentFont);
+	pEditorForm->addRow(tr("Editor font"), m_pFontName);
+
+	m_pFontSize = new QSpinBox(pEditor);
+	m_pFontSize->setRange(6, 72);
+	m_pFontSize->setValue(current.EditorFontPointSize());
+	pEditorForm->addRow(tr("Font size"), m_pFontSize);
+
+	m_pZoom = new QSpinBox(pEditor);
+	m_pZoom->setRange(-10, 20);
+	m_pZoom->setValue(current.EditorZoomFactor());
+	pEditorForm->addRow(tr("Zoom"), m_pZoom);
+
+	m_pCustomTabs = new QCheckBox(tr("Use a custom tab width"), pEditor);
+	m_pCustomTabs->setChecked(current.UseCustomTabSettings());
+	pEditorForm->addRow(m_pCustomTabs);
+
+	m_pTabWidth = new QSpinBox(pEditor);
+	m_pTabWidth->setRange(1, 16);
+	m_pTabWidth->setValue(current.EditorTabWidth());
+	pEditorForm->addRow(tr("Tab width"), m_pTabWidth);
+
+	m_pUseTabs = new QCheckBox(tr("Indent with tabs rather than spaces"), pEditor);
+	m_pUseTabs->setChecked(current.ProcessIndentationTab());
+	pEditorForm->addRow(m_pUseTabs);
+
+	m_pCaretBlink = new QCheckBox(tr("Blink the caret"), pEditor);
+	m_pCaretBlink->setChecked(current.EnableCaretBlink());
+	pEditorForm->addRow(m_pCaretBlink);
+
+	m_pMultiCursor = new QCheckBox(tr("Multiple cursors"), pEditor);
+	m_pMultiCursor->setChecked(current.EnableMultipleCursor());
+	pEditorForm->addRow(m_pMultiCursor);
+
+	// Line endings for NEW documents. The order is Scintilla's SC_EOL_*, which
+	// core/ stores as a raw number because it cannot include Scintilla.
+	m_pDefaultEol = new QComboBox(pEditor);
+	m_pDefaultEol->addItems({ tr("CRLF (Windows)"), tr("CR (classic Mac)"),
+		tr("LF (Unix)") });
+	// UNCONDITIONALLY, so an out-of-range value leaves the combo at -1 and the
+	// preserve-rather-than-write guard in GetSettings can see it. Guarding this
+	// call instead left the combo at index 0, and 0 is a perfectly valid index,
+	// so a stored 9 was silently rewritten as CRLF - the #45 bug, reproduced in
+	// the code written to avoid it, and caught by the check written for it.
+	m_pDefaultEol->setCurrentIndex(current.DefaultFileEol());
+	pEditorForm->addRow(tr("New files use"), m_pDefaultEol);
+
+	m_pNewlineAtEof = new QCheckBox(tr("Add a newline at end of file on save"), pEditor);
+	m_pNewlineAtEof->setChecked(current.AutoAddNewLineAtEof());
+	pEditorForm->addRow(m_pNewlineAtEof);
 	pLayout->addWidget(pEditor);
 
 	QGroupBox* pAuto = new QGroupBox(tr("Autocomplete"), this);
@@ -133,5 +207,18 @@ Core::CAppSettings CPreferencesDialog::GetSettings() const
 	result.SetEnableHighlightFolder(m_pHighlightFolder->isChecked());
 	result.SetDrawFoldingLineUnderLineStyle(m_pFoldingUnderline->isChecked());
 	result.SetUseFolderMarginClassic(m_pMarginClassic->isChecked());
+
+	result.SetEditorFontName(m_pFontName->currentText().toStdString());
+	result.SetEditorFontPointSize(m_pFontSize->value());
+	result.SetEditorZoomFactor(m_pZoom->value());
+	result.SetUseCustomTabSettings(m_pCustomTabs->isChecked());
+	result.SetEditorTabWidth(m_pTabWidth->value());
+	result.SetProcessIndentationTab(m_pUseTabs->isChecked());
+	result.SetEnableCaretBlink(m_pCaretBlink->isChecked());
+	result.SetEnableMultipleCursor(m_pMultiCursor->isChecked());
+	// Preserve rather than write -1, as the margin style above does.
+	const int nEol = m_pDefaultEol->currentIndex();
+	result.SetDefaultFileEol(nEol >= 0 ? nEol : m_Original.DefaultFileEol());
+	result.SetAutoAddNewLineAtEof(m_pNewlineAtEof->isChecked());
 	return result;
 }

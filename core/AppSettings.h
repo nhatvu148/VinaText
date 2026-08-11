@@ -73,6 +73,24 @@ namespace Core
 		void SetFolderMarginStyle(int n) { m_nFolderMarginStyle = n; }
 		void SetLongLineColumnLimit(int n) { m_nLongLineMaximum = n; }
 
+		// The eight the editor now honours. Every KEY below was read out of
+		// CAppSettings::SaveSettingData rather than guessed from the member
+		// name, and three of them differ - "EditorTabWidth" for
+		// m_nEditorIndentationWidth, "UseCustomEditorTabSettings" for
+		// m_bUseUserIndentationSettings, and "EditorFontIsStalic" for italic,
+		// which is a typo in the original. Guessing any of them would write a
+		// key the WINDOWS build does not read, in a file both frontends share.
+		void SetEditorFontName(const std::string& str) { m_strEditorFontName = str; }
+		void SetEditorFontPointSize(int n) { m_nEditorFontPointSize = n; }
+		void SetEditorTabWidth(int n) { m_nEditorTabWidth = n; }
+		void SetUseCustomTabSettings(bool b) { m_bUseCustomTabSettings = b; }
+		void SetProcessIndentationTab(bool b) { m_bProcessIndentationTab = b; }
+		void SetEditorZoomFactor(int n) { m_nEditorZoomFactor = n; }
+		void SetEnableCaretBlink(bool b) { m_bEnableCaretBlink = b; }
+		void SetEnableMultipleCursor(bool b) { m_bEnableMultipleCursor = b; }
+		void SetDefaultFileEol(int n) { m_nDefaultFileEol = n; }
+		void SetAutoAddNewLineAtEof(bool b) { m_bAutoAddNewLineAtEof = b; }
+
 		// True once a settings file has actually been read, so a frontend can
 		// tell "the user chose the defaults" from "there was nothing to read".
 		bool WasLoaded() const { return m_bLoaded; }
@@ -92,6 +110,20 @@ namespace Core
 		int FolderMarginStyle() const { return m_nFolderMarginStyle; }
 		int LongLineColumnLimit() const { return m_nLongLineMaximum; }
 
+		const std::string& EditorFontName() const { return m_strEditorFontName; }
+		int EditorFontPointSize() const { return m_nEditorFontPointSize; }
+		int EditorTabWidth() const { return m_nEditorTabWidth; }
+		bool UseCustomTabSettings() const { return m_bUseCustomTabSettings; }
+		bool ProcessIndentationTab() const { return m_bProcessIndentationTab; }
+		int EditorZoomFactor() const { return m_nEditorZoomFactor; }
+		bool EnableCaretBlink() const { return m_bEnableCaretBlink; }
+		bool EnableMultipleCursor() const { return m_bEnableMultipleCursor; }
+		// 0 = CRLF, 1 = CR, 2 = LF, matching Scintilla's SC_EOL_* - which
+		// core/ cannot include, so the numbers are spelled out here and the
+		// frontend maps them.
+		int DefaultFileEol() const { return m_nDefaultFileEol; }
+		bool AutoAddNewLineAtEof() const { return m_bAutoAddNewLineAtEof; }
+
 		// The object every setting lives under in that file - JSonWriter nests
 		// everything below its root name (src/FileUtil.cpp, JSonWriter::SaveFile).
 		static const char* RootName() { return "VinaText Setting"; }
@@ -110,6 +142,20 @@ namespace Core
 		bool	m_bDrawCaretLineFrame = true;			// :76
 		bool	m_bEnableHightLightFolder = true;		// :77  (sic - "Hight")
 		bool	m_bEnableAutoComplete = true;			// :81
+
+		// Defaults taken from src/AppSettings.h, not chosen here - a default
+		// that disagrees with the Windows one is a silent behaviour change for
+		// anyone whose settings file predates this.
+		std::string	m_strEditorFontName = "Courier New";	// :80
+		int		m_nEditorFontPointSize = 12;			// :81
+		int		m_nEditorTabWidth = 4;					// :173, SC_DEFAUFT_TAB_WIDTH
+		bool	m_bUseCustomTabSettings = false;		// :112
+		bool	m_bProcessIndentationTab = true;		// :82
+		int		m_nEditorZoomFactor = 0;				// :162
+		bool	m_bEnableCaretBlink = false;			// :96
+		bool	m_bEnableMultipleCursor = true;			// :97  (ui-qt had this OFF)
+		int		m_nDefaultFileEol = 0;					// :150, SC_EOL_CRLF
+		bool	m_bAutoAddNewLineAtEof = false;			// :110
 		bool	m_bAutoCompleteIgnoreNumbers = true;		// :83
 		bool	m_bAutoCompleteIgnoreCase = true;		// :84
 		bool	m_bUseFolderMarginClassic = false;		// :95

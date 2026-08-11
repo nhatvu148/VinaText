@@ -4228,6 +4228,198 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 	}
 
 	//----------------------------------------------------------------------
+	// The eight editor settings. Each is asserted as a BEHAVIOUR reaching
+	// Scintilla, not as a value stored - a control whose setting nothing
+	// reads is exactly what PR #45 refused to build. See doc/PORTING.md 6r.
+	//----------------------------------------------------------------------
+	{
+		CEditorWidget* pCfg = GetCurrentEditor();
+		Require(pCfg != nullptr, QStringLiteral("settings: got a document"));
+		if (pCfg != nullptr)
+		{
+			const Core::CAppSettings& settings = m_Data.GetSettings();
+
+			// Asserted against the SETTINGS OBJECT, not against literals, so
+			// these hold whether the run has a settings file or the shipped
+			// defaults - the pattern §6m established.
+			const int nExpectedTab = settings.UseCustomTabSettings()
+				? settings.EditorTabWidth() : 4;
+			Require(pCfg->Send(SCI_GETTABWIDTH) == nExpectedTab,
+				QStringLiteral("settings: tab width is %1, got %2")
+					.arg(nExpectedTab).arg(pCfg->Send(SCI_GETTABWIDTH)));
+
+			// THE GATE, driven both ways. At the defaults UseCustomTabSettings
+			// is false and EditorTabWidth is 4, so the branch above computes 4
+			// either way and cannot tell whether the gate is consulted - a
+			// mutation ignoring it went straight through. These make the two
+			// disagree.
+			{
+				QString strIgnored;
+				Core::CAppSettings gated = settings;
+				gated.SetEditorTabWidth(8);
+				gated.SetUseCustomTabSettings(false);
+				m_Data.ApplySettings(gated, strIgnored);
+				pCfg->ApplySettings();
+				Require(pCfg->Send(SCI_GETTABWIDTH) == 4,
+					QStringLiteral("settings: with the gate OFF a stored 8 is ignored, "
+						"got %1").arg(pCfg->Send(SCI_GETTABWIDTH)));
+				gated.SetUseCustomTabSettings(true);
+				m_Data.ApplySettings(gated, strIgnored);
+				pCfg->ApplySettings();
+				Require(pCfg->Send(SCI_GETTABWIDTH) == 8,
+					QStringLiteral("settings: and with it ON the 8 is used, got %1")
+						.arg(pCfg->Send(SCI_GETTABWIDTH)));
+				m_Data.ApplySettings(settings, strIgnored);
+				pCfg->ApplySettings();
+			}
+			Require((pCfg->Send(SCI_GETUSETABS) != 0) == settings.ProcessIndentationTab(),
+				QStringLiteral("settings: tabs-versus-spaces follows the setting"));
+			Require(pCfg->Send(SCI_GETZOOM) == settings.EditorZoomFactor(),
+				QStringLiteral("settings: zoom is %1, got %2")
+					.arg(settings.EditorZoomFactor()).arg(pCfg->Send(SCI_GETZOOM)));
+			// Scintilla has no boolean for this: a period of 0 IS "no blink".
+			Require((pCfg->Send(SCI_GETCARETPERIOD) != 0) == settings.EnableCaretBlink(),
+				QStringLiteral("settings: caret blink maps to a period, got %1")
+					.arg(pCfg->Send(SCI_GETCARETPERIOD)));
+			Require((pCfg->Send(SCI_GETMULTIPLESELECTION) != 0)
+					== settings.EnableMultipleCursor(),
+				QStringLiteral("settings: multiple cursors follow the setting"));
+			Require((pCfg->Send(SCI_GETADDITIONALSELECTIONTYPING) != 0)
+					== settings.EnableMultipleCursor(),
+				QStringLiteral("settings: and typing into them, which is what makes them "
+					"useful rather than decorative"));
+
+			// THE FONT SURVIVES A THEME SWITCH. This is the check that would
+			// have caught the bug this section shipped with: ApplyEditorStyles
+			// set STYLE_DEFAULT from QFontDatabase and then SCI_STYLECLEARALL,
+			// and ReapplySettings runs ApplySettings() before ApplyTheme() -
+			// so every theme change threw the user's font away.
+			auto FontOf = [pCfg]
+			{
+				char szName[128] = { 0 };
+				pCfg->Send(SCI_STYLEGETFONT, STYLE_DEFAULT,
+					reinterpret_cast<sptr_t>(szName));
+				return QString::fromUtf8(szName);
+			};
+			const QString strWanted =
+				QString::fromStdString(settings.EditorFontName());
+			Require(FontOf() == strWanted,
+				QStringLiteral("settings: the editor font is '%1', got '%2'")
+					.arg(strWanted, FontOf()));
+			Require(pCfg->Send(SCI_STYLEGETSIZE, STYLE_DEFAULT)
+					== settings.EditorFontPointSize(),
+				QStringLiteral("settings: at %1 point, got %2")
+					.arg(settings.EditorFontPointSize())
+					.arg(pCfg->Send(SCI_STYLEGETSIZE, STYLE_DEFAULT)));
+
+			OnSetTheme(EEditorTheme::Light);
+			Require(FontOf() == strWanted,
+				QStringLiteral("settings: AND IT SURVIVES A THEME SWITCH, got '%1'")
+					.arg(FontOf()));
+			OnSetTheme(EEditorTheme::Dark);
+			Require(FontOf() == strWanted,
+				QStringLiteral("settings: and switching back, got '%1'").arg(FontOf()));
+
+			// ReapplySettings is the path Preferences uses, and it runs
+			// ApplySettings then ApplyTheme - the exact order that lost the
+			// font. Driven here rather than assumed.
+			ReapplySettings();
+			Require(FontOf() == strWanted,
+				QStringLiteral("settings: and a full re-apply, which is what Preferences "
+					"does, got '%1'").arg(FontOf()));
+
+			// AUTO-NEWLINE-AT-EOF, on the SAVE PATH, so it gets the same care
+			// as everything else that writes bytes. It ships OFF, which is why
+			// the byte-identical fixtures above are untouched by it - and the
+			// check drives BOTH states rather than trusting the default.
+			{
+				QTemporaryDir eofDir;
+				Require(eofDir.isValid(), QStringLiteral("settings: got a directory"));
+				const QString strPath = eofDir.filePath(QStringLiteral("eof.txt"));
+				auto Bytes = [&strPath]
+				{
+					QFile f(strPath);
+					return f.open(QIODevice::ReadOnly) ? f.readAll() : QByteArray();
+				};
+
+				CEditorWidget* pEof = NewUntitled();
+				Require(pEof != nullptr, QStringLiteral("settings: got a document"));
+				pEof->Send(SCI_SETEOLMODE, SC_EOL_LF);
+				pEof->Send(SCI_SETTEXT, 0, reinterpret_cast<sptr_t>("no newline"));
+
+				Core::CAppSettings off = m_Data.GetSettings();
+				off.SetAutoAddNewLineAtEof(false);
+				QString strIgnored;
+				m_Data.ApplySettings(off, strIgnored);
+				QString strErr;
+				Require(pEof->SaveFile(strPath, strErr),
+					QStringLiteral("settings: saved with the setting off"));
+				Require(Bytes() == QByteArray("no newline"),
+					QStringLiteral("settings: which added NOTHING, got '%1'")
+						.arg(QString::fromUtf8(Bytes())));
+
+				Core::CAppSettings on = m_Data.GetSettings();
+				on.SetAutoAddNewLineAtEof(true);
+				m_Data.ApplySettings(on, strIgnored);
+				Require(pEof->SaveFile(strPath, strErr),
+					QStringLiteral("settings: saved with it on"));
+				Require(Bytes() == QByteArray("no newline\n"),
+					QStringLiteral("settings: which added exactly one, got '%1'")
+						.arg(QString::fromUtf8(Bytes())));
+				// AND NOT A SECOND ONE. Saving the same document twice does
+				// NOT test this - SaveFile never changes the document, so the
+				// second save sees the same newline-less text and appends once
+				// again, giving the same bytes. The mutation removing the guard
+				// went straight through. The text itself has to end in one.
+				pEof->Send(SCI_SETTEXT, 0,
+					reinterpret_cast<sptr_t>("already ends\n"));
+				Require(pEof->SaveFile(strPath, strErr),
+					QStringLiteral("settings: saved text that already ends in a newline"));
+				Require(Bytes() == QByteArray("already ends\n"),
+					QStringLiteral("settings: and did NOT add another, got '%1'")
+						.arg(QString::fromUtf8(Bytes())));
+
+				m_Data.ApplySettings(off, strIgnored);
+				pEof->Send(SCI_SETSAVEPOINT);
+				OnCloseTab(m_pTabs->indexOf(pEof));
+			}
+
+			// THE DEFAULT EOL applies to a NEW document only. A loaded file's
+			// ending comes from its bytes, and overriding that would silently
+			// re-end every line the next time it was saved.
+			{
+				Core::CAppSettings eol = m_Data.GetSettings();
+				eol.SetDefaultFileEol(1);			// SC_EOL_CR, which nothing else uses
+				QString strIgnored;
+				m_Data.ApplySettings(eol, strIgnored);
+
+				CEditorWidget* pNew = NewUntitled();
+				Require(pNew != nullptr && pNew->Send(SCI_GETEOLMODE) == SC_EOL_CR,
+					QStringLiteral("settings: a new document takes the default EOL, got %1")
+						.arg(pNew == nullptr ? -1 : (int)pNew->Send(SCI_GETEOLMODE)));
+
+				// A LOADED file keeps its own, whatever the default says.
+				CEditorWidget* pLoaded =
+					qobject_cast<CEditorWidget*>(m_pTabs->widget(0));
+				Require(pLoaded != nullptr, QStringLiteral("settings: got a loaded tab"));
+				if (pLoaded != nullptr)
+				{
+					pLoaded->ApplySettings();
+					Require(pLoaded->Send(SCI_GETEOLMODE) != SC_EOL_CR,
+						QStringLiteral("settings: a LOADED document keeps the ending its "
+							"bytes had, not the default"));
+				}
+				if (pNew != nullptr)
+				{
+					pNew->Send(SCI_SETSAVEPOINT);
+					OnCloseTab(m_pTabs->indexOf(pNew));
+				}
+				m_Data.ApplySettings(settings, strIgnored);
+			}
+		}
+	}
+
+	//----------------------------------------------------------------------
 	// Menu shortcuts. Added because Replace shipped bound to a key the
 	// operating system eats: QKeySequence::Replace resolves to Cmd+H on macOS,
 	// which is Hide Application, so the menu item was unreachable by keyboard
@@ -4592,6 +4784,48 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 			Require(out.FolderMarginStyle() == 7,
 				QStringLiteral("preferences: an unknown margin style survives OK, got %1")
 					.arg(out.FolderMarginStyle()));
+		}
+
+		// THE SAME HAZARD, for the eight settings added alongside the editor
+		// behaviours. The font is the one that bites: a settings file written
+		// on Windows names a family this machine may not have, and a combo box
+		// built from the local font list would quietly replace it - through the
+		// file both frontends share, so the WINDOWS user's font would change
+		// because someone opened Preferences on a Mac.
+		{
+			Core::CAppSettings odd = before;
+			odd.SetEditorFontName("A Font This Machine Does Not Have");
+			odd.SetEditorFontPointSize(9);
+			odd.SetEditorTabWidth(3);
+			odd.SetUseCustomTabSettings(true);
+			odd.SetProcessIndentationTab(false);
+			odd.SetEditorZoomFactor(2);
+			odd.SetEnableCaretBlink(true);
+			odd.SetEnableMultipleCursor(false);
+			odd.SetDefaultFileEol(2);
+			odd.SetAutoAddNewLineAtEof(true);
+
+			CPreferencesDialog dialog(odd, this);
+			const Core::CAppSettings out = dialog.GetSettings();
+			Require(out.EditorFontName() == "A Font This Machine Does Not Have",
+				QStringLiteral("preferences: a font this machine lacks SURVIVES, got '%1'")
+					.arg(QString::fromStdString(out.EditorFontName())));
+			Require(out.EditorFontPointSize() == 9 && out.EditorTabWidth() == 3
+					&& out.UseCustomTabSettings() && !out.ProcessIndentationTab()
+					&& out.EditorZoomFactor() == 2 && out.EnableCaretBlink()
+					&& !out.EnableMultipleCursor() && out.DefaultFileEol() == 2
+					&& out.AutoAddNewLineAtEof(),
+				QStringLiteral("preferences: and every other editor setting round-trips "
+					"untouched"));
+
+			// An out-of-range EOL leaves the combo at -1, and writing that back
+			// would give the Windows build a line ending it cannot map.
+			Core::CAppSettings badEol = before;
+			badEol.SetDefaultFileEol(9);
+			CPreferencesDialog eolDialog(badEol, this);
+			Require(eolDialog.GetSettings().DefaultFileEol() == 9,
+				QStringLiteral("preferences: an unknown default EOL survives OK, got %1")
+					.arg(eolDialog.GetSettings().DefaultFileEol()));
 		}
 
 		// An applied change must reach an open document, not merely the file.
