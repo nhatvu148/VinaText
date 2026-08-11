@@ -14,6 +14,8 @@
 #include "EncodingDialog.h"
 #include "WindowListDialog.h"
 #include "BookmarkPane.h"
+#include "LineTransforms.h"
+#include "TransformDialog.h"
 #include "AboutDialog.h"
 #include "PreferencesDialog.h"
 #include "MessagePane.h"
@@ -406,6 +408,17 @@ void CMainWindow::BuildMenus()
 		&CMainWindow::OnWindowManager);
 	pWindows->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_W));
 
+	// The text transforms get their own menu, as the MFC gives them their own
+	// popup rather than scattering them through Edit.
+	QMenu* pTransform = menuBar()->addMenu(tr("&Transform"));
+	for (const LineTransforms::SCommand& command : LineTransforms::All())
+	{
+		pTransform->addAction(tr(command._MenuLabel), this, [this, &command]
+		{
+			OnLineTransform(command);
+		});
+	}
+
 	QMenu* pHelp = menuBar()->addMenu(tr("&Help"));
 	pHelp->addAction(tr("&About VinaText"), this, &CMainWindow::OnAbout);
 }
@@ -615,6 +628,37 @@ void CMainWindow::OnWindowManager()
 	dialog.SetEntries(CollectWindowList());
 	ConnectWindowList(&dialog);
 	dialog.exec();
+}
+
+void CMainWindow::OnLineTransform(const LineTransforms::SCommand& command)
+{
+	CEditorWidget* pEditor = GetCurrentEditor();
+	if (pEditor == nullptr)
+	{
+		return;
+	}
+
+	CTransformDialog dialog(command._Prompt, this);
+	if (dialog.exec() != QDialog::Accepted)
+	{
+		return;
+	}
+
+	QString strError;
+	const CEditorWidget::FLineTransform fTransform = command._Build(dialog, strError);
+	if (!fTransform)
+	{
+		// The MFC shows "[Error] Inputs are empty!" in a message box and
+		// returns. Same shape, with the specific reason rather than one
+		// message for every kind of bad input.
+		QMessageBox::warning(this, tr("Transform"), strError);
+		return;
+	}
+
+	const int nLines = pEditor->ApplyLineTransform(fTransform);
+	LogMessage(tr("%1 - %2 line(s)").arg(tr(command._MenuLabel)).arg(nLines));
+	UpdateStatusBar();
+	UpdateTabLabel(pEditor);
 }
 
 void CMainWindow::RefreshBookmarks()
@@ -3706,6 +3750,276 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 			Require(!m_pBookmarkPane->objectName().isEmpty(),
 				QStringLiteral("bookmarks: the pane has an objectName, which saveState "
 					"keys the layout on"));
+		}
+	}
+
+	//----------------------------------------------------------------------
+	// Line transforms - the engine behind the seventeen text-transform
+	// commands. See doc/PORTING.md 6p.
+	//
+	// THE IDENTITY CHECK IS THE POINT. These rewrite whole documents, so the
+	// first thing asked of the primitive is that a transform which changes
+	// nothing leaves the bytes untouched - across every fixture, which between
+	// them cover CRLF+BOM, UTF-16, Latin-1 and a file with no trailing
+	// newline. It catches EOL drift, trailing-newline drift and encoding
+	// drift in one assertion, which is what protected the save path too.
+	//----------------------------------------------------------------------
+	{
+		auto Identity = [](const QString& strLine, const CEditorWidget::SLineContext&)
+		{
+			return std::optional<QString>(strLine);
+		};
+
+		int nIdentityChecked = 0;
+		for (int i = 0; i < GetTabCount(); ++i)
+		{
+			m_pTabs->setCurrentIndex(i);
+			CEditorWidget* pEditor = GetCurrentEditor();
+			if (pEditor == nullptr)
+			{
+				continue;
+			}
+			const QString strName = pEditor->GetDisplayName();
+
+			auto WholeDocument = [pEditor]
+			{
+				const sptr_t n = pEditor->Send(SCI_GETLENGTH);
+				QByteArray buffer(static_cast<int>(n) + 1, '\0');
+				pEditor->Send(SCI_GETTEXT, static_cast<uptr_t>(n) + 1,
+					reinterpret_cast<sptr_t>(buffer.data()));
+				buffer.truncate(static_cast<int>(n));
+				return buffer;
+			};
+
+			const QByteArray before = WholeDocument();
+			pEditor->Send(SCI_SETSEL, 0, 0);			// no selection: whole document
+			const int nLines = pEditor->ApplyLineTransform(Identity);
+			Require(nLines == pEditor->GetLineCount(),
+				QStringLiteral("transform: %1: identity visited every line, %2 of %3")
+					.arg(strName).arg(nLines).arg(pEditor->GetLineCount()));
+			Require(WholeDocument() == before,
+				QStringLiteral("transform: %1: an identity transform left the document "
+					"BYTE-IDENTICAL").arg(strName));
+			++nIdentityChecked;
+
+			// And it is undoable as ONE action, not one per line.
+			pEditor->ApplyLineTransform([](const QString& strLine,
+				const CEditorWidget::SLineContext&)
+			{
+				return std::optional<QString>(strLine + QStringLiteral("X"));
+			});
+			Require(WholeDocument() != before,
+				QStringLiteral("transform: %1: a real transform did change it").arg(strName));
+			pEditor->Send(SCI_UNDO);
+			Require(WholeDocument() == before,
+				QStringLiteral("transform: %1: and ONE undo put it back, so the whole "
+					"transform is a single undo action").arg(strName));
+			pEditor->Send(SCI_SETSAVEPOINT);
+		}
+		Require(nIdentityChecked >= 6,
+			QStringLiteral("transform: identity ran on %1 documents, covering the encoding "
+				"and line-ending fixtures").arg(nIdentityChecked));
+
+		//--------------------------------------------------------------
+		// All seventeen, table-driven.
+		//
+		// One row each, so coverage is by construction rather than by
+		// seventeen hand-written blocks - and a command added to
+		// LineTransforms::All() without a row here fails the count check at
+		// the end rather than slipping in untested.
+		//--------------------------------------------------------------
+		struct SCase
+		{
+			const char* _Label;			// must match the command's menu label
+			const char* _In1;
+			const char* _In2;
+			bool _Check;
+			const char* _Input;			// lines separated by \n
+			const char* _Expected;		// or nullptr when the input is refused
+		};
+		const SCase cases[] = {
+			{ "Remove Lines Containing...",       "b",   "",    false, "aa\nbb\ncc",   "aa\ncc" },
+			{ "Remove Lines Not Containing...",   "b",   "",    false, "aa\nbb\ncc",   "bb" },
+			{ "Insert At Line Start...",          ">",   "",    false, "a\nb",         ">a\n>b" },
+			{ "Insert At Line End...",            ";",   "",    false, "a\nb",         "a;\nb;" },
+			{ "Insert Line Numbers (prefix)...",  "1",   "",    false, "a\nb",         "1 - a\n2 - b" },
+			{ "Insert Line Numbers (suffix)...",  "1",   "",    false, "a\nb",         "a1\nb2" },
+			{ "Insert Alphabet Index...",         "A",   "",    false, "a\nb",         "A - a\nB - b" },
+			{ "Insert Roman Numerals...",         "4",   "",    false, "a\nb",         "IV - a\nV - b" },
+			{ "Remove Before Word...",            "X",   "",    false, "abXcd\nno",    "Xcd\nno" },
+			{ "Remove After Word...",             "X",   "",    false, "abXcd\nno",    "abX\nno" },
+			{ "Insert Before Word...",            "X",   "[",   false, "abXcd",        "ab[Xcd" },
+			{ "Insert After Word...",             "X",   "]",   false, "abXcd",        "abX]cd" },
+			{ "Remove From Column X To Y...",     "1",   "3",   false, "abcde",        "ade" },
+			{ "Remove From Column X To Y...",     "1",   "3",   true,  "abcde",        "abe" },
+			{ "Insert At Column...",              "2",   "-",   false, "abcd",         "ab-cd" },
+			{ "Insert At Column...",              "1",   "-",   true,  "abcd",         "abc-d" },
+			{ "Remove Between Characters...",     "[",   "]",   false, "a[bcd]e\nno",  "a[]e\nno" },
+			{ "Remove Between Characters...",     "[",   "]",   true,  "a[b]c[d]e",    "a[b]c[]e" },
+			// ONE character present and the other absent. A line missing BOTH
+			// is unchanged either way - QString::mid(-1) returns the whole
+			// string - so it cannot tell the guard from its absence. This one
+			// can: without the guard the prefix is duplicated onto the line,
+			// which is what the MFC does.
+			{ "Remove Between Characters...",     "[",   "]",   false, "a[bc",         "a[bc" },
+			{ "Split Lines On Delimiter...",      ",",   "",    false, "a,b\nc",       "a\nb\nc" },
+			{ "Join Lines With Delimiter...",     "+",   "",    false, "a\nb\n\nc",    "a+b+c" },
+			// Refusals: the input never reaches the document.
+			{ "Insert At Line Start...",          "",    "",    false, "a\nb",         nullptr },
+			{ "Insert Roman Numerals...",         "4000","",    false, "a",            nullptr },
+			{ "Insert Alphabet Index...",         "AB",  "",    false, "a",            nullptr },
+		};
+
+		CEditorWidget* pScratch = NewUntitled();
+		Require(pScratch != nullptr, QStringLiteral("transform: got a scratch document"));
+		if (pScratch != nullptr)
+		{
+			pScratch->Send(SCI_SETEOLMODE, SC_EOL_LF);
+			QSet<QString> covered;
+			for (const SCase& test : cases)
+			{
+				const LineTransforms::SCommand* pCommand = nullptr;
+				for (const LineTransforms::SCommand& c : LineTransforms::All())
+				{
+					if (qstrcmp(c._MenuLabel, test._Label) == 0) { pCommand = &c; }
+				}
+				Require(pCommand != nullptr,
+					QStringLiteral("transform: '%1' is a real command")
+						.arg(QLatin1String(test._Label)));
+				if (pCommand == nullptr) { continue; }
+				covered.insert(QLatin1String(test._Label));
+
+				CTransformDialog dialog(pCommand->_Prompt, this);
+				dialog.SetValuesForTest(QLatin1String(test._In1),
+					QLatin1String(test._In2), test._Check);
+				QString strError;
+				const CEditorWidget::FLineTransform fTransform =
+					pCommand->_Build(dialog, strError);
+
+				if (test._Expected == nullptr)
+				{
+					// A refusal must refuse, AND say why - "some error" is not
+					// "the right error", which §6m learned the hard way.
+					Require(!fTransform,
+						QStringLiteral("transform: '%1' refuses '%2'")
+							.arg(QLatin1String(test._Label), QLatin1String(test._In1)));
+					Require(!strError.isEmpty(),
+						QStringLiteral("transform: '%1' says why it refused")
+							.arg(QLatin1String(test._Label)));
+					continue;
+				}
+
+				Require(static_cast<bool>(fTransform),
+					QStringLiteral("transform: '%1' accepts its input, said '%2'")
+						.arg(QLatin1String(test._Label), strError));
+				if (!fTransform) { continue; }
+
+				const QByteArray input = QByteArray(test._Input);
+				pScratch->Send(SCI_SETTEXT, 0, reinterpret_cast<sptr_t>(input.constData()));
+				pScratch->Send(SCI_EMPTYUNDOBUFFER);
+				pScratch->Send(SCI_SETSEL, 0, 0);
+				pScratch->ApplyLineTransform(fTransform);
+
+				const sptr_t nLen = pScratch->Send(SCI_GETLENGTH);
+				QByteArray got(static_cast<int>(nLen) + 1, '\0');
+				pScratch->Send(SCI_GETTEXT, static_cast<uptr_t>(nLen) + 1,
+					reinterpret_cast<sptr_t>(got.data()));
+				got.truncate(static_cast<int>(nLen));
+				Require(got == QByteArray(test._Expected),
+					QStringLiteral("transform: '%1' on '%2' gives '%3', got '%4'")
+						.arg(QLatin1String(test._Label),
+							QString::fromUtf8(input).replace(QLatin1Char('\n'),
+								QStringLiteral("\\n")),
+							QString::fromUtf8(test._Expected).replace(QLatin1Char('\n'),
+								QStringLiteral("\\n")),
+							QString::fromUtf8(got).replace(QLatin1Char('\n'),
+								QStringLiteral("\\n"))));
+			}
+
+			// EVERY command has a row. Without this a new transform could be
+			// added to the table in LineTransforms.cpp and never be tested.
+			Require(covered.size() == static_cast<int>(LineTransforms::All().size()),
+				QStringLiteral("transform: all %1 commands are covered, %2 have rows")
+					.arg(LineTransforms::All().size()).arg(covered.size()));
+			Require(LineTransforms::All().size() == 17,
+				QStringLiteral("transform: seventeen commands, got %1")
+					.arg(LineTransforms::All().size()));
+
+			// SPLIT ON A CRLF DOCUMENT. Every row above runs on an LF
+			// document, where a mutation truncating the line ending to its
+			// first character changes nothing - "\n".left(1) is "\n". Only a
+			// CRLF document can tell the two apart, and split is the one
+			// transform that writes line endings of its own.
+			{
+				pScratch->Send(SCI_SETEOLMODE, SC_EOL_CRLF);
+				const QByteArray crlfIn("a,b\r\nc");
+				pScratch->Send(SCI_SETTEXT, 0,
+					reinterpret_cast<sptr_t>(crlfIn.constData()));
+				pScratch->Send(SCI_SETSEL, 0, 0);
+				const LineTransforms::SCommand* pSplit = nullptr;
+				for (const LineTransforms::SCommand& c : LineTransforms::All())
+				{
+					if (qstrcmp(c._MenuLabel, "Split Lines On Delimiter...") == 0)
+					{
+						pSplit = &c;
+					}
+				}
+				Require(pSplit != nullptr, QStringLiteral("transform: found split"));
+				if (pSplit != nullptr)
+				{
+					CTransformDialog dlg(pSplit->_Prompt, this);
+					dlg.SetValuesForTest(QStringLiteral(","), QString(), false);
+					QString strErr;
+					pScratch->ApplyLineTransform(pSplit->_Build(dlg, strErr));
+					const sptr_t n = pScratch->Send(SCI_GETLENGTH);
+					QByteArray out(static_cast<int>(n) + 1, '\0');
+					pScratch->Send(SCI_GETTEXT, static_cast<uptr_t>(n) + 1,
+						reinterpret_cast<sptr_t>(out.data()));
+					out.truncate(static_cast<int>(n));
+					Require(out == QByteArray("a\r\nb\r\nc"),
+						QStringLiteral("transform: split writes the document's OWN line "
+							"ending, got '%1'").arg(QString::fromUtf8(out.toHex(' '))));
+				}
+				pScratch->Send(SCI_SETEOLMODE, SC_EOL_LF);
+			}
+
+			// Roman numerals directly, since the table only reaches two values.
+			Require(LineTransforms::ToRoman(1) == QStringLiteral("I")
+					&& LineTransforms::ToRoman(4) == QStringLiteral("IV")
+					&& LineTransforms::ToRoman(9) == QStringLiteral("IX")
+					&& LineTransforms::ToRoman(14) == QStringLiteral("XIV")
+					&& LineTransforms::ToRoman(40) == QStringLiteral("XL")
+					&& LineTransforms::ToRoman(1987) == QStringLiteral("MCMLXXXVII")
+					&& LineTransforms::ToRoman(3999) == QStringLiteral("MMMCMXCIX"),
+				QStringLiteral("transform: Roman numerals, including the subtractive "
+					"pairs and the 3999 ceiling"));
+
+			// The SELECTION path: only the selected lines change, and they are
+			// not duplicated - which is what four of the MFC's eight selection
+			// sites get wrong.
+			const QByteArray sel("a\nb\nc\nd");
+			pScratch->Send(SCI_SETTEXT, 0, reinterpret_cast<sptr_t>(sel.constData()));
+			const sptr_t nL1 = pScratch->Send(SCI_POSITIONFROMLINE, 1);
+			const sptr_t nL2 = pScratch->Send(SCI_GETLINEENDPOSITION, 2);
+			pScratch->Send(SCI_SETSEL, static_cast<uptr_t>(nL1), nL2);
+			pScratch->ApplyLineTransform([](const QString& strLine,
+				const CEditorWidget::SLineContext&)
+			{
+				return std::optional<QString>(strLine.toUpper());
+			});
+			const sptr_t nLen2 = pScratch->Send(SCI_GETLENGTH);
+			QByteArray got2(static_cast<int>(nLen2) + 1, '\0');
+			pScratch->Send(SCI_GETTEXT, static_cast<uptr_t>(nLen2) + 1,
+				reinterpret_cast<sptr_t>(got2.data()));
+			got2.truncate(static_cast<int>(nLen2));
+			Require(got2 == QByteArray("a\nB\nC\nd"),
+				QStringLiteral("transform: a selection transforms ONLY its own lines and "
+					"does not duplicate them, got '%1'")
+					.arg(QString::fromUtf8(got2).replace(QLatin1Char('\n'),
+						QStringLiteral("\\n"))));
+
+			pScratch->Send(SCI_SETSAVEPOINT);
+			OnCloseTab(m_pTabs->indexOf(pScratch));
 		}
 	}
 

@@ -25,6 +25,7 @@
 #include <QStringList>
 #include <QStringConverter>
 
+#include <functional>
 #include <optional>
 
 class CEditorWidget final : public ScintillaEditBase
@@ -156,6 +157,57 @@ public:
 	// keeps a parallel std::vector and updates it only on add and delete.
 	QList<int> BookmarkedLines() const;
 	QString TextOfLine(int nLine) const;
+
+	//////////////////////////////////////////////////////////////////////
+	// Line transforms
+	//
+	// The engine behind the seventeen text-transform commands that
+	// src/EditorView.cpp drives through five generic input dialogs.
+	//
+	// TWO DEFECTS IN THE ORIGINAL ARE NOT REPRODUCED, both in its
+	// selection path and both silent:
+	//
+	//   1. Four of the eight selection sites append each transformed line
+	//      TWICE - an unconditional append followed by a second one in
+	//      both branches of an if/else. Selecting lines and running
+	//      Remove Before Word duplicates every one of them.
+	//   2. CEditorCtrl::ReplaceSelectionWithText passes a WIDE-CHAR count
+	//      to SCI_ADDTEXT, which Scintilla documents as taking a BYTE
+	//      count. "Tiếng Việt" is 10 wide chars and 14 UTF-8 bytes, so
+	//      four are dropped mid-character. Every selection transform
+	//      truncates non-ASCII text.
+	//
+	// This works in UTF-8 byte space throughout and writes back through
+	// SCI_REPLACETARGET, which is byte-correct by construction.
+
+	// What a transform is told about the line it is given. It started as
+	// three loose parameters and grew a struct when split and join did not
+	// fit: split emits SEVERAL lines and needs the document's ending to do
+	// it, and join emits ONE and needs to know which line is last. Better
+	// to widen the contract than to have two of seventeen work differently.
+	struct SLineContext
+	{
+		int _Index = 0;			// 0-based position within the scope
+		int _Line = 0;			// 1-based document line
+		int _Total = 0;			// lines in scope
+		QString _Eol;			// this document's line ending
+	};
+
+	// Returns the replacement for one line, or nothing to drop it entirely -
+	// which is what "remove lines containing X" needs, and what lets join
+	// accumulate silently until its last call.
+	using FLineTransform =
+		std::function<std::optional<QString>(const QString& strLine,
+			const SLineContext& context)>;
+
+	// Applies the transform to the selection expanded to whole lines, or to
+	// the whole document when there is no selection. One undo action, so a
+	// single Ctrl+Z reverts the whole thing. Returns lines affected.
+	//
+	// The trailing newline is PRESERVED: a document that did not end in one
+	// does not gain one, which the original's rebuild-and-append loop gets
+	// wrong. qtbuild/fixtures/no-trailing-newline.py exists for this.
+	int ApplyLineTransform(const FLineTransform& fTransform);
 
 	// Find. Searches from the caret, wrapping once; leaves the match selected and
 	// visible. Returns false when the pattern is not in the document at all.
