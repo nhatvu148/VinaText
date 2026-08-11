@@ -45,7 +45,11 @@
 #include <QVBoxLayout>
 #include <QDir>
 #include <QEventLoop>
+#include <QElapsedTimer>
+#include <QThread>
 #include <QLocalServer>
+#include <QLocalSocket>
+#include <QLockFile>
 #include <QSet>
 #include <QTextCodec>
 
@@ -4130,6 +4134,97 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 		CSingleInstance revived(nullptr, strStale);
 		Require(revived.Listen(),
 			QStringLiteral("instance: a later launch claims a socket left by a crash"));
+
+		// THE DECISION IS SERIALISED. Connect-then-listen is only safe under a
+		// lock: without it, several launches all fail HandOff (nobody is
+		// listening YET) and then race into Listen(), where each one's
+		// removeServer() unlinks the last winner's live socket. Measured
+		// before the fix: SIX simultaneous launches left FOUR windows.
+		{
+			const QString strRace = strTestName + QStringLiteral("-race");
+			QFile::remove(CSingleInstance::LockPath(strRace));
+			QLocalServer::removeServer(strRace);
+
+			CSingleInstance first(nullptr, strRace);
+			bool bFirstIsServer = false;
+			Require(!first.TakeOverOrHandOff(QStringList(), bFirstIsServer),
+				QStringLiteral("instance: the first launch does not hand off"));
+			Require(bFirstIsServer,
+				QStringLiteral("instance: it becomes the server instead"));
+
+			// A second launch must hand off, NOT become a second server - and
+			// must not unlink the first one's socket on the way.
+			CSingleInstance second(nullptr, strRace);
+			bool bSecondIsServer = false;
+			Require(second.TakeOverOrHandOff(QStringList(), bSecondIsServer),
+				QStringLiteral("instance: the second launch hands off"));
+			Require(!bSecondIsServer,
+				QStringLiteral("instance: and does NOT become a second server"));
+
+			// The first one's socket is still live afterwards, which is the
+			// property removeServer destroyed when it ran unserialised.
+			QLocalSocket probe;
+			probe.connectToServer(strRace);
+			Require(probe.waitForConnected(500),
+				QStringLiteral("instance: and the first one's socket still answers"));
+			probe.abort();
+
+			// THE LOCK IS ACTUALLY CONSULTED. The two launches above run one
+			// after the other, so they never contend and a mutation removing
+			// the lock passes them both - measured. Holding the lock here
+			// makes the next call wait for it, which nothing else would.
+			//
+			// The real race needs concurrent PROCESSES and is verified outside
+			// this suite: six simultaneous launches left four windows before
+			// the fix and one after, three runs running.
+			{
+				const QString strLocked = strTestName + QStringLiteral("-locked");
+				QFile::remove(CSingleInstance::LockPath(strLocked));
+				QLocalServer::removeServer(strLocked);
+				QLockFile held(CSingleInstance::LockPath(strLocked));
+				Require(held.tryLock(1000),
+					QStringLiteral("instance: the test holds the lock"));
+
+				CSingleInstance contender(nullptr, strLocked);
+				bool bContenderIsServer = false;
+				QElapsedTimer waited;
+				waited.start();
+				contender.TakeOverOrHandOff(QStringList(), bContenderIsServer);
+				Require(waited.elapsed() >= 1500,
+					QStringLiteral("instance: a launch WAITS for the lock before deciding "
+						"(waited %1ms)").arg(waited.elapsed()));
+				held.unlock();
+			}
+		}
+
+		// A CONNECTION THAT SAYS NOTHING must not block the GUI thread. The
+		// read is signal-driven with a deadline; a blocking waitForReadyRead
+		// let any local process freeze the editor for a second by connecting
+		// and staying silent. Found in review.
+		{
+			received.clear();
+			bGotSignal = false;
+			QLocalSocket silent;
+			silent.connectToServer(strTestName);
+			Require(silent.waitForConnected(500),
+				QStringLiteral("instance: a silent client connects"));
+			// Waited on ELAPSED TIME, not iterations. processEvents returns
+			// immediately when the queue is empty, so a fixed loop count spins
+			// through in far less than the one-second deadline and the check
+			// fails for the wrong reason - which it did.
+			QElapsedTimer elapsed;
+			elapsed.start();
+			while (!bGotSignal && elapsed.elapsed() < 4000)
+			{
+				QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+				QThread::msleep(10);
+			}
+			Require(bGotSignal,
+				QStringLiteral("instance: silence is treated as 'come to the front'"));
+			Require(received.isEmpty(),
+				QStringLiteral("instance: with no files, got %1").arg(received.size()));
+			silent.abort();
+		}
 	}
 
 	//----------------------------------------------------------------------

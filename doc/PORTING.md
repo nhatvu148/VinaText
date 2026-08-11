@@ -2826,10 +2826,36 @@ uncaught. Leaving a plain **file** at the socket path is what a killed process
 does, and the check now asserts a plain `listen()` is genuinely blocked by it
 before showing that `Listen()` is not.
 
-**4 mutations, 4 caught.** Verified end to end with two real processes: the
+### The review found a race, and it was worse than estimated
+
+`Listen()` called `removeServer()` unconditionally, with nothing serialising it
+across processes. Opening several files at once — which a file manager does by
+spawning one process per file — has them all fail `HandOff` (nobody is
+listening *yet*), then all race into `Listen()`, where each one's
+`removeServer()` unlinks the previous winner's live socket.
+
+**Measured rather than reasoned about. Six simultaneous launches left FOUR
+windows**; the review estimated two. After serialising the whole
+connect-then-listen decision under a `QLockFile`, the same six leave **one**,
+three runs running.
+
+A second finding in the same review: `waitForReadyRead` ran on the **GUI
+thread**, so any local process could freeze the editor for a second by
+connecting and saying nothing. The read is signal-driven now, with a one-shot
+deadline that treats silence as "come to the front" — and a short-payload guard,
+because a `QDataStream` list can arrive in pieces and acting on half of one
+would open nothing.
+
+**The lock check had to be made to contend.** Two launches run one after the
+other never touch the lock, so a mutation removing it passed them both. Holding
+the lock in the check and asserting the next call *waits* is what catches it —
+it reports `waited 0ms` without the lock. The real race needs concurrent
+**processes** and is verified outside this suite, by the six-launch run above.
+
+**6 mutations, 6 caught.** Verified end to end with two real processes: the
 second launch exits 0 and one process remains.
 
-**Self-test: 952 → 968 checks on defaults, 956 → 972 configured** (macOS).
+**Self-test: 952 → 978 checks on defaults, 956 → 982 configured** (macOS).
 
 Reproduce:
 

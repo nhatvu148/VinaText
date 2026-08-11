@@ -53,6 +53,23 @@ public:
 	// The socket name, which includes the user so two people on one machine do
 	// not collide. Public for the self-test.
 	static QString SocketName();
+	// The lock that serialises the decide-to-become-server step. Public for
+	// the self-test.
+	static QString LockPath(const QString& strName = QString());
+
+	// Runs the whole connect-then-listen decision under an OS-level lock, and
+	// is the ONLY correct way to use this class.
+	//
+	// Without it, launching several files at once - which a file manager does
+	// by spawning one process per file - has them all fail HandOff (nobody is
+	// listening YET), then all race into Listen(), where each one's
+	// removeServer() unlinks the previous winner's live socket. MEASURED: six
+	// simultaneous launches left FOUR windows. The review that found this
+	// estimated two.
+	//
+	// Returns true when this process should exit because another instance took
+	// the files.
+	bool TakeOverOrHandOff(const QStringList& files, bool& bBecameServer);
 
 signals:
 	// Files another launch wants opened. Empty means "just come to the front",

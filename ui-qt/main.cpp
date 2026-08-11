@@ -166,11 +166,15 @@ int main(int argc, char* argv[])
 	CSingleInstance instance;
 	if (!parser.isSet(newWindowOption))
 	{
-		if (CSingleInstance::HandOff(files))
+		// One call, because connect-then-listen has to happen under a single
+		// lock: six simultaneous launches otherwise leave four windows, each
+		// having unlinked the last winner's socket. See ui-qt/SingleInstance.h.
+		bool bBecameServer = false;
+		if (instance.TakeOverOrHandOff(files, bBecameServer))
 		{
 			return 0;
 		}
-		if (instance.Listen())
+		if (bBecameServer)
 		{
 			QObject::connect(&instance, &CSingleInstance::FilesReceived, &window,
 				[&window](const QStringList& received)

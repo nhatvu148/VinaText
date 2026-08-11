@@ -14,6 +14,8 @@
 #include <QFileInfo>
 #include <QLocalServer>
 #include <QLocalSocket>
+#include <QLockFile>
+#include <QTimer>
 
 namespace
 {
@@ -33,6 +35,12 @@ QString CSingleInstance::SocketName()
 	const QByteArray digest = QCryptographicHash::hash(
 		QDir::homePath().toUtf8(), QCryptographicHash::Sha1).toHex().left(16);
 	return QStringLiteral("vinatext-") + QString::fromLatin1(digest);
+}
+
+QString CSingleInstance::LockPath(const QString& strName)
+{
+	return QDir::tempPath() + QLatin1Char('/')
+		+ (strName.isEmpty() ? SocketName() : strName) + QStringLiteral(".lock");
 }
 
 bool CSingleInstance::HandOff(const QStringList& files, const QString& strName)
@@ -71,6 +79,36 @@ bool CSingleInstance::HandOff(const QStringList& files, const QString& strName)
 	return true;
 }
 
+bool CSingleInstance::TakeOverOrHandOff(const QStringList& files, bool& bBecameServer)
+{
+	bBecameServer = false;
+
+	// THE WHOLE DECISION UNDER ONE LOCK. Connect-then-listen is only safe if
+	// no other process can interleave between the two - see the header for
+	// what happens when six launches race. QLockFile is advisory but every
+	// participant here is this same binary, and it survives a crashed holder
+	// by recording the owning pid.
+	QLockFile lock(LockPath(m_strName));
+	lock.setStaleLockTime(0);				// judge staleness by the pid, not a timeout
+	if (!lock.tryLock(2000))
+	{
+		// Someone is holding it far too long. Falling back to an unlocked
+		// attempt keeps the editor usable - a second window is a much smaller
+		// failure than refusing to start.
+		qWarning("single instance: could not take the lock; starting unserialised");
+		if (HandOff(files, m_strName)) { return true; }
+		bBecameServer = Listen();
+		return false;
+	}
+
+	if (HandOff(files, m_strName))
+	{
+		return true;					// someone already owns it; nothing to do
+	}
+	bBecameServer = Listen();
+	return false;
+}
+
 CSingleInstance::CSingleInstance(QObject* pParent, const QString& strName)
 	: QObject(pParent)
 	, m_strName(strName.isEmpty() ? SocketName() : strName)
@@ -83,8 +121,8 @@ bool CSingleInstance::Listen()
 
 	// THE STALE SOCKET. On Unix the socket file outlives a crashed process, so
 	// listen() would fail with AddressInUseError from then on and every launch
-	// would open a new window. HandOff has already established that nobody
-	// answers, so a name still present is debris and safe to clear.
+	// would open a new window. A name still present is debris - PROVIDED
+	// nobody is actually using it, which is what the lock below establishes.
 	QLocalServer::removeServer(m_strName);
 	if (!m_pServer->listen(m_strName))
 	{
@@ -99,18 +137,41 @@ bool CSingleInstance::Listen()
 			return;
 		}
 		connect(pSocket, &QLocalSocket::disconnected, pSocket, &QLocalSocket::deleteLater);
-		if (!pSocket->waitForReadyRead(WRITE_TIMEOUT_MS))
+
+		// SIGNAL-DRIVEN, NOT waitForReadyRead. This runs on the GUI thread, so
+		// a blocking wait let any local process freeze the editor for a full
+		// second just by connecting and saying nothing. Found in review.
+		//
+		// The timer is the other half: a peer that connects and never writes
+		// would otherwise leave the socket open forever. It fires once, treats
+		// silence as "just come to the front", and goes away.
+		QTimer* pDeadline = new QTimer(pSocket);
+		pDeadline->setSingleShot(true);
+		connect(pDeadline, &QTimer::timeout, this, [this, pSocket]
 		{
 			// A launch that connected and said nothing still means "come to
 			// the front", so the signal is emitted with no files.
 			emit FilesReceived(QStringList());
-			return;
-		}
-		QStringList files;
-		QDataStream stream(pSocket);
-		stream.setVersion(QDataStream::Qt_6_0);
-		stream >> files;
-		emit FilesReceived(files);
+			pSocket->abort();
+		});
+		connect(pSocket, &QLocalSocket::readyRead, this, [this, pSocket, pDeadline]
+		{
+			pDeadline->stop();
+			QStringList files;
+			QDataStream stream(pSocket);
+			stream.setVersion(QDataStream::Qt_6_0);
+			stream >> files;
+			// A short payload can arrive in pieces. Waiting for the next
+			// readyRead is correct; acting on a half-read list would open
+			// nothing and look like the handoff was lost.
+			if (stream.status() != QDataStream::Ok)
+			{
+				pDeadline->start(WRITE_TIMEOUT_MS);
+				return;
+			}
+			emit FilesReceived(files);
+		});
+		pDeadline->start(WRITE_TIMEOUT_MS);
 	});
 	return true;
 }
