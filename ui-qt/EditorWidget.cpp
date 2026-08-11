@@ -700,12 +700,24 @@ bool CEditorWidget::SaveFile(const QString& strPath, QString& strErrorOut)
 	// fixtures are untouched by it. With it on, a file that already ends in a
 	// newline must not gain a second.
 	QString strText = QString::fromUtf8(utf8);
-	if (m_Data.GetSettings().AutoAddNewLineAtEof()
-		&& !strText.isEmpty() && !strText.endsWith(QLatin1Char('\n')))
+	if (m_Data.GetSettings().AutoAddNewLineAtEof() && !strText.isEmpty())
 	{
-		strText += GetEolLabel() == QStringLiteral("CRLF") ? QStringLiteral("\r\n")
+		// The terminator this document uses, decided once and used for BOTH
+		// the already-terminated test and the thing appended.
+		//
+		// Testing only for '\n' was the first version, and it never matched a
+		// CR-only document - whose lines end in a bare '\r' - so every save
+		// appended another, giving 0d 0d and growing from there. Found in
+		// review, and it is this port's own "New files use: CR (classic Mac)"
+		// option that makes the state reachable at all.
+		const QString strEol =
+			GetEolLabel() == QStringLiteral("CRLF") ? QStringLiteral("\r\n")
 			: GetEolLabel() == QStringLiteral("CR") ? QStringLiteral("\r")
 			: QStringLiteral("\n");
+		if (!strText.endsWith(strEol))
+		{
+			strText += strEol;
+		}
 	}
 
 	// ENCODE BEFORE OPENING. The open carries Truncate, so it empties the file

@@ -2950,9 +2950,30 @@ see. The font gets the same treatment: a family this machine lacks is **added**
 to the combo rather than dropped, so opening Preferences on a Mac cannot rewrite
 a Windows user's font.
 
-**7 mutations, 7 caught.**
+### The review found the #45 bug twice more, in this same PR
 
-**Self-test: 978 → 1,006 checks on defaults, 982 → 1,010 configured** (macOS).
+**A CR-only document was never seen as terminated.** The auto-newline guard
+tested `endsWith('\n')` only, and a classic-Mac document's lines end in a bare
+`\r` — so with the setting on, every save appended another. Measured:
+`63 6c 61 73 73 69 63 20 6d 61 63 0d 0d`. And the state is reachable *because of
+this PR*, which added the "New files use: CR (classic Mac)" option. The
+terminator is now decided once and used for both the test and the append.
+
+**And the three new spin boxes clamped.** `QSpinBox` silently pulls `setValue`
+inside its range, so a fixed range rewrites an out-of-range stored value the
+moment Preferences is opened and OK'd — even untouched. That is exactly PR #45,
+whose own fix was `setRange(1, std::max(512, current.LongLineColumnLimit()))`
+one screen above. **The guard was applied to this PR's combo boxes and not to
+its spin boxes.** All three widen to admit what is stored now, and the mutations
+show precisely what was lost: a stored 200 became **72**, a 64 became **16**, a
+−40 became **−10**.
+
+That is the #45 lesson landing for the third and fourth time in one change —
+once caught by my own check, twice by review.
+
+**11 mutations, 11 caught.**
+
+**Self-test: 978 → 1,011 checks on defaults, 982 → 1,015 configured** (macOS).
 10/10 core tests; `src/` untouched.
 
 Reproduce:

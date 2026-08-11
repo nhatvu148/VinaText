@@ -4379,6 +4379,22 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 					QStringLiteral("settings: and did NOT add another, got '%1'")
 						.arg(QString::fromUtf8(Bytes())));
 
+				// A CR-ONLY DOCUMENT. Its lines end in a bare \r, which
+				// endsWith('\n') never matches - so the guard above missed it
+				// entirely and every save appended another terminator. Found
+				// in review, and it is this PR's own "New files use: CR
+				// (classic Mac)" option that makes the state reachable.
+				pEof->Send(SCI_SETEOLMODE, SC_EOL_CR);
+				pEof->Send(SCI_SETTEXT, 0,
+					reinterpret_cast<sptr_t>("classic mac\r"));
+				m_Data.ApplySettings(on, strIgnored);
+				Require(pEof->SaveFile(strPath, strErr),
+					QStringLiteral("settings: saved a CR-terminated document"));
+				Require(Bytes() == QByteArray("classic mac\r"),
+					QStringLiteral("settings: a bare CR counts as terminated, got '%1'")
+						.arg(QString::fromUtf8(Bytes().toHex(' '))));
+				pEof->Send(SCI_SETEOLMODE, SC_EOL_LF);
+
 				m_Data.ApplySettings(off, strIgnored);
 				pEof->Send(SCI_SETSAVEPOINT);
 				OnCloseTab(m_pTabs->indexOf(pEof));
@@ -4817,6 +4833,29 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 					&& out.AutoAddNewLineAtEof(),
 				QStringLiteral("preferences: and every other editor setting round-trips "
 					"untouched"));
+
+			// THE SPIN BOXES CLAMP, and that is the same #45 bug the combos
+			// above are guarded against. QSpinBox silently pulls setValue
+			// inside its range, so a fixed range rewrites a stored value the
+			// moment Preferences is opened and OK'd - even untouched. Found in
+			// review: the guard was applied to the combos and not to these.
+			{
+				Core::CAppSettings wide = before;
+				wide.SetEditorFontPointSize(200);	// beyond a 6-72 box
+				wide.SetEditorTabWidth(64);			// beyond a 1-16 box
+				wide.SetEditorZoomFactor(-40);		// beyond a -10..20 box
+				CPreferencesDialog wideDialog(wide, this);
+				const Core::CAppSettings kept = wideDialog.GetSettings();
+				Require(kept.EditorFontPointSize() == 200,
+					QStringLiteral("preferences: an out-of-range font size survives OK, "
+						"got %1").arg(kept.EditorFontPointSize()));
+				Require(kept.EditorTabWidth() == 64,
+					QStringLiteral("preferences: an out-of-range tab width survives OK, "
+						"got %1").arg(kept.EditorTabWidth()));
+				Require(kept.EditorZoomFactor() == -40,
+					QStringLiteral("preferences: an out-of-range zoom survives OK, got %1")
+						.arg(kept.EditorZoomFactor()));
+			}
 
 			// An out-of-range EOL leaves the combo at -1, and writing that back
 			// would give the Windows build a line ending it cannot map.

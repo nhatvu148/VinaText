@@ -73,12 +73,19 @@ CPreferencesDialog::CPreferencesDialog(const Core::CAppSettings& current, QWidge
 	pEditorForm->addRow(tr("Editor font"), m_pFontName);
 
 	m_pFontSize = new QSpinBox(pEditor);
-	m_pFontSize->setRange(6, 72);
+	// WIDENED TO ADMIT WHAT IS STORED, as m_pLongLine above already is. A
+	// QSpinBox clamps silently on setValue, so a fixed range rewrites an
+	// out-of-range stored value the moment Preferences is opened and OK'd -
+	// even if the user never touched the field. That is PR #45's bug, which
+	// this dialog guards for its combo boxes and did not for its spin boxes.
+	m_pFontSize->setRange(std::min(6, current.EditorFontPointSize()),
+		std::max(72, current.EditorFontPointSize()));
 	m_pFontSize->setValue(current.EditorFontPointSize());
 	pEditorForm->addRow(tr("Font size"), m_pFontSize);
 
 	m_pZoom = new QSpinBox(pEditor);
-	m_pZoom->setRange(-10, 20);
+	m_pZoom->setRange(std::min(-10, current.EditorZoomFactor()),
+		std::max(20, current.EditorZoomFactor()));
 	m_pZoom->setValue(current.EditorZoomFactor());
 	pEditorForm->addRow(tr("Zoom"), m_pZoom);
 
@@ -87,7 +94,8 @@ CPreferencesDialog::CPreferencesDialog(const Core::CAppSettings& current, QWidge
 	pEditorForm->addRow(m_pCustomTabs);
 
 	m_pTabWidth = new QSpinBox(pEditor);
-	m_pTabWidth->setRange(1, 16);
+	m_pTabWidth->setRange(std::min(1, current.EditorTabWidth()),
+		std::max(16, current.EditorTabWidth()));
 	m_pTabWidth->setValue(current.EditorTabWidth());
 	pEditorForm->addRow(tr("Tab width"), m_pTabWidth);
 
