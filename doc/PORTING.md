@@ -3127,8 +3127,59 @@ to anybody.
 checkbox-to-button connect dropped, `insert` back to the MFC's `setText`, and a
 `deselect()` that would make it never replace.
 
+The extraction fix is checked by `lupdate` rather than by a self-test assertion:
+it is a build-tool behaviour, and a check asserting on `QT_TRANSLATE_NOOP` would
+only restate the source.
+
 **Self-test: 1,011 → 1,047 checks on defaults, 1,015 → 1,051 configured** (macOS;
 counts are platform-dependent). 10/10 core tests; `src/` untouched.
+
+### Review: the labels were invisible to the translator, and so are 53 others
+
+VinaText **ships a translation** — `src/LocalizationHandler.cpp` loads
+`VinaText_Language_VN.mo` and keys it on the English source string, exactly as
+Qt's `tr()` does. So "extractable" is not hypothetical here.
+
+`tr(preset._Label)` passes a runtime `const char*`. `lupdate` is a parser, not a
+compiler: it can only see string **literals** at the call. Measured over
+`ui-qt/`:
+
+```
+before: Found 156 source text(s)     # and none of the 25 presets
+after:  Found 181 source text(s)     # 25 new, all under context RegexPresets
+```
+
+**The first fix silently did nothing, and only measuring caught it.** The obvious
+tidy version is a local macro:
+
+```cpp
+#define PRESET(label) QT_TRANSLATE_NOOP("RegexPresets", label)
+```
+
+It reads far better, it compiles, and it extracts **nothing** — 156 before, 156
+after — because `lupdate` does not expand user macros. `QT_TRANSLATE_NOOP` is
+spelled out at all 25 entries for that reason, and the comment there says so, or
+someone will tidy it back.
+
+**And that is exactly what already happened to the transforms.**
+`LineTransforms.cpp` defines its own helper:
+
+```cpp
+QString Tr(const char* sz) { return QCoreApplication::translate("LineTransforms", sz); }
+```
+
+`lupdate` cannot follow it either, so **53 strings** — 36 prompt strings and 17
+menu labels — are invisible to the extractor today. That is a pre-existing gap
+from §6p, not something this change introduced, and it is left alone here rather
+than quietly widening a PR about the find bar. It is small and mechanical: mark
+the literals with `QT_TRANSLATE_NOOP("LineTransforms", …)` inside the `Tr(…)`
+calls, which changes nothing at run time.
+
+**The prerequisite is bigger than either.** `ui-qt/` has **no translation
+infrastructure at all** — no `.ts` files, no `TRANSLATIONS` in CMake, no
+`QTranslator` installed — so nothing is translated regardless of what extracts.
+Recorded here so it is a known gap with a number against it rather than a
+surprise.
 
 ### Phase 5's dialog scope, closed
 
@@ -3170,4 +3221,11 @@ QT_QPA_PLATFORM=offscreen ./qtbuild/ui-qt/vinatext-qt --selftest \
   qtbuild/fixtures/latin1.md qtbuild/fixtures/no-trailing-newline.py \
   qtbuild/fixtures/tags.xml qtbuild/fixtures/urls.md 2>&1 \
   | grep -E "FAIL regex|selftest: [0-9]+ check"
+
+# the labels are extractable - 156 without them, 181 with
+lupdate ui-qt/*.cpp ui-qt/*.h -ts /tmp/x.ts -no-obsolete | grep Found
+
+# and the 53 that still are not, in LineTransforms
+{ grep -oE 'Tr\("([^"\\]|\\.)*"\)' ui-qt/LineTransforms.cpp
+  grep -oE '^\t\{ "([^"\\]|\\.)*"' ui-qt/LineTransforms.cpp; } | sort -u | wc -l
 ```

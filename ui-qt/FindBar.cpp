@@ -14,6 +14,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QShortcut>
+#include <QCoreApplication>
 #include <QMenu>
 #include <QToolButton>
 
@@ -66,7 +67,8 @@ CFindBar::CFindBar(QWidget* pParent)
 		{
 			const QString strPattern = QString::fromUtf8(preset._Pattern);
 			pMenu->addAction(QStringLiteral("%1\t%2")
-					.arg(tr(preset._Label), strPattern), this, [this, strPattern]
+					.arg(QCoreApplication::translate("RegexPresets", preset._Label),
+						strPattern), this, [this, strPattern]
 			{
 				// INSERTED at the caret rather than replacing the box. The MFC
 				// overwrites the whole search field (ComboboxRegexHelper::
@@ -154,7 +156,6 @@ CFindBar::CFindBar(QWidget* pParent)
 		connect(pBox, &QCheckBox::toggled, this, &CFindBar::PatternChanged);
 	}
 	connect(m_pRegex, &QCheckBox::toggled, m_pRegexHelp, &QWidget::setVisible);
-	
 
 	// A shortcut rather than a keyPressEvent override: the key lands in the line
 	// edit, and whether an unhandled Escape propagates up to this widget is a
