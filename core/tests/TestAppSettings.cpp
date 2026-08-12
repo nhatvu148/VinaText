@@ -288,6 +288,118 @@ int main(int argc, char** argv)
 			std::istreambuf_iterator<char>());
 		twice.close();
 		Check(strTwice == strAfter, "saving twice is byte-identical");
+	}
+
+	//----------------------------------------------------------------------
+	// 6. The eight settings the editor gained, under the keys the WINDOWS
+	//    build actually reads.
+	//
+	//    These are written into a file both frontends share, so a wrong key
+	//    is not a Qt bug - it is a Windows user's setting silently ignored,
+	//    or worse, a second key appearing alongside the real one. Three of
+	//    the eight do not match their member names in src/AppSettings.h, and
+	//    one of those is a typo in the original ("EditorFontIsStalic"), so
+	//    every key here was read out of CAppSettings::SaveSettingData.
+	//----------------------------------------------------------------------
+	{
+		const std::string strPath = strRoot + "/core-appsettings-editor.json";
+		{
+			std::ofstream seed(strPath.c_str(), std::ios::binary);
+			seed << "{\n \"VinaText Setting\": {\n"
+				"  \"EditorFontName\": \"Menlo\",\n"
+				"  \"EditorFontPointSize\": 15,\n"
+				"  \"EditorTabWidth\": 8,\n"
+				"  \"UseCustomEditorTabSettings\": true,\n"
+				"  \"EnableProcessIndentationTab\": false,\n"
+				"  \"EditorZoomFactor\": 3,\n"
+				"  \"EnableCaretBlink\": true,\n"
+				"  \"EnableMultipleCursor\": false,\n"
+				"  \"DefaultFileEOL\": 2,\n"
+				"  \"AutoAddNewLineAtTheEOF\": true\n"
+				" }\n}\n";
+		}
+
+		Core::CAppSettings loaded;
+		std::string strError;
+		Check(loaded.LoadFromFile(strPath, strError), "the editor settings file loads");
+		Check(loaded.EditorFontName() == "Menlo", "EditorFontName is read");
+		Check(loaded.EditorFontPointSize() == 15, "EditorFontPointSize is read");
+		Check(loaded.EditorTabWidth() == 8,
+			"EditorTabWidth is read - NOT 'EditorIndentationWidth', which is what "
+			"the member is called");
+		Check(loaded.UseCustomTabSettings(),
+			"UseCustomEditorTabSettings is read - the member is "
+			"m_bUseUserIndentationSettings");
+		Check(!loaded.ProcessIndentationTab(), "EnableProcessIndentationTab is read");
+		Check(loaded.EditorZoomFactor() == 3, "EditorZoomFactor is read");
+		Check(loaded.EnableCaretBlink(), "EnableCaretBlink is read");
+		Check(!loaded.EnableMultipleCursor(), "EnableMultipleCursor is read");
+		Check(loaded.DefaultFileEol() == 2, "DefaultFileEOL is read");
+		Check(loaded.AutoAddNewLineAtEof(), "AutoAddNewLineAtTheEOF is read");
+
+		// And every one survives a save/reload under the same key. A key
+		// written differently from how it is read would pass the reads above
+		// and still lose the value on the next launch.
+		Check(loaded.SaveToFile(strPath, strError), "and saves");
+		Core::CAppSettings again;
+		Check(again.LoadFromFile(strPath, strError), "and reloads");
+		Check(again.EditorFontName() == "Menlo"
+				&& again.EditorFontPointSize() == 15
+				&& again.EditorTabWidth() == 8
+				&& again.UseCustomTabSettings()
+				&& !again.ProcessIndentationTab()
+				&& again.EditorZoomFactor() == 3
+				&& again.EnableCaretBlink()
+				&& !again.EnableMultipleCursor()
+				&& again.DefaultFileEol() == 2
+				&& again.AutoAddNewLineAtEof(),
+			"every editor setting round-trips under the key it was read from");
+
+		// THE KEY IT WRITES UNDER, read off the file text rather than through a
+		// reload. A round-trip cannot see a wrong write key: SaveToFile
+		// PRESERVES keys it does not know, so the correct key survives from the
+		// seed file and the reload finds it there regardless of what was
+		// written. Demonstrated - a mutation writing "EditorIndentationWidth"
+		// instead of "EditorTabWidth" passed the round-trip above.
+		{
+			const std::string strFresh = strRoot + "/core-appsettings-keys.json";
+			// REMOVED FIRST. SaveToFile preserves keys it does not know, so a
+			// file left by an earlier run keeps whatever that run wrote -
+			// including a wrong key from a mutation - and this check then fails
+			// on correct code forever after. Found exactly that way.
+			std::remove(strFresh.c_str());
+			Core::CAppSettings writer;			// nothing to preserve now
+			writer.SetEditorTabWidth(7);
+			writer.SetEditorFontName("Menlo");
+			writer.SetDefaultFileEol(2);
+			std::string strWriteError;
+			Check(writer.SaveToFile(strFresh, strWriteError), "a fresh file is written");
+
+			std::ifstream in(strFresh.c_str(), std::ios::binary);
+			const std::string strJson((std::istreambuf_iterator<char>(in)),
+				std::istreambuf_iterator<char>());
+			Check(strJson.find("\"EditorTabWidth\"") != std::string::npos,
+				"and carries EditorTabWidth - the key the Windows build reads, NOT the "
+				"member name EditorIndentationWidth");
+			Check(strJson.find("EditorIndentationWidth") == std::string::npos,
+				"and does not carry the member name instead");
+			Check(strJson.find("\"UseCustomEditorTabSettings\"") != std::string::npos,
+				"UseCustomEditorTabSettings, not UseUserIndentationSettings");
+			Check(strJson.find("\"EditorFontName\"") != std::string::npos,
+				"EditorFontName");
+			Check(strJson.find("\"AutoAddNewLineAtTheEOF\"") != std::string::npos,
+				"AutoAddNewLineAtTheEOF");
+		}
+
+		// The defaults match src/AppSettings.h, so a file that predates these
+		// keys behaves on macOS exactly as it does on Windows.
+		Core::CAppSettings fresh;
+		Check(fresh.EditorFontName() == "Courier New" && fresh.EditorFontPointSize() == 12
+				&& fresh.EditorTabWidth() == 4 && !fresh.UseCustomTabSettings()
+				&& fresh.ProcessIndentationTab() && fresh.EditorZoomFactor() == 0
+				&& !fresh.EnableCaretBlink() && fresh.EnableMultipleCursor()
+				&& fresh.DefaultFileEol() == 0 && !fresh.AutoAddNewLineAtEof(),
+			"the defaults are the Windows defaults");
 
 		// An unparseable file is REFUSED, not overwritten: far more likely to be
 		// someone's settings plus a typo than something safe to replace.

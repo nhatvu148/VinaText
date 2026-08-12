@@ -58,4 +58,18 @@ private:
 	QCheckBox*	m_pMarginClassic = nullptr;
 	QComboBox*	m_pMarginStyle = nullptr;
 	QSpinBox*	m_pLongLine = nullptr;
+
+	// The eight behaviours added alongside these. Each control exists because
+	// CEditorWidget::ApplySettings does something with it - the rule this
+	// dialog was built on and the reason EditorSettingDlg was not transcribed.
+	QComboBox*	m_pFontName = nullptr;
+	QSpinBox*	m_pFontSize = nullptr;
+	QCheckBox*	m_pCustomTabs = nullptr;
+	QSpinBox*	m_pTabWidth = nullptr;
+	QCheckBox*	m_pUseTabs = nullptr;
+	QSpinBox*	m_pZoom = nullptr;
+	QCheckBox*	m_pCaretBlink = nullptr;
+	QCheckBox*	m_pMultiCursor = nullptr;
+	QComboBox*	m_pDefaultEol = nullptr;
+	QCheckBox*	m_pNewlineAtEof = nullptr;
 };

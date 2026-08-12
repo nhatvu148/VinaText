@@ -691,13 +691,42 @@ bool CEditorWidget::SaveFile(const QString& strPath, QString& strErrorOut)
 		reinterpret_cast<sptr_t>(utf8.data()));
 	utf8.truncate(static_cast<int>(nLength));
 
+	// A trailing newline, if the setting asks for one. Applied to the TEXT,
+	// before encoding, so it goes through the same encoder as everything else
+	// - appending bytes afterwards would write a raw \n into a UTF-16 file.
+	//
+	// Guarded on already having one: the MFC's m_bAutoAddNewLineAtTheEOF ships
+	// FALSE, so this is off by default and the byte-identical round-trip
+	// fixtures are untouched by it. With it on, a file that already ends in a
+	// newline must not gain a second.
+	QString strText = QString::fromUtf8(utf8);
+	if (m_Data.GetSettings().AutoAddNewLineAtEof() && !strText.isEmpty())
+	{
+		// The terminator this document uses, decided once and used for BOTH
+		// the already-terminated test and the thing appended.
+		//
+		// Testing only for '\n' was the first version, and it never matched a
+		// CR-only document - whose lines end in a bare '\r' - so every save
+		// appended another, giving 0d 0d and growing from there. Found in
+		// review, and it is this port's own "New files use: CR (classic Mac)"
+		// option that makes the state reachable at all.
+		const QString strEol =
+			GetEolLabel() == QStringLiteral("CRLF") ? QStringLiteral("\r\n")
+			: GetEolLabel() == QStringLiteral("CR") ? QStringLiteral("\r")
+			: QStringLiteral("\n");
+		if (!strText.endsWith(strEol))
+		{
+			strText += strEol;
+		}
+	}
+
 	// ENCODE BEFORE OPENING. The open carries Truncate, so it empties the file
 	// the instant it succeeds - and this used to run first, which meant any
 	// failure between it and the write left the user with a ZERO-BYTE file
 	// where their document had been. Nothing could fail there when it was
 	// written; the encoder can now, and a save that cannot produce bytes must
 	// not have destroyed the old ones getting there.
-	const std::optional<QByteArray> encoded = EncodeForSave(QString::fromUtf8(utf8));
+	const std::optional<QByteArray> encoded = EncodeForSave(strText);
 	if (!encoded.has_value())
 	{
 		strErrorOut = tr("Cannot write %1: the encoding '%2' is not available in this "
@@ -827,6 +856,67 @@ void CEditorWidget::ApplySettings()
 	Send(SCI_MARKERENABLEHIGHLIGHT, settings.EnableHighlightFolder() ? 1 : 0);
 	Send(SCI_SETFOLDFLAGS, settings.DrawFoldingLineUnderLineStyle()
 		? SC_FOLDFLAG_LINEAFTER_CONTRACTED : 0, 0);
+
+	//----------------------------------------------------------------------
+	// The eight the editor gained. Each is a BEHAVIOUR first - a control in
+	// Preferences exists because one of these does something, which is the
+	// rule since PR #45 and the reason EditorSettingDlg was not transcribed.
+	//----------------------------------------------------------------------
+
+	// Indentation. UseCustomTabSettings gates the width, exactly as
+	// m_bUseUserIndentationSettings gates m_nEditorIndentationWidth - with it
+	// off the editor keeps its own default rather than the stored number.
+	Send(SCI_SETTABWIDTH, static_cast<uptr_t>(settings.UseCustomTabSettings()
+		? settings.EditorTabWidth() : DEFAULT_TAB_WIDTH));
+	// TABS versus SPACES. SCI_SETUSETABS takes "use tabs", and the setting is
+	// named for processing indentation as tabs, so it maps straight across.
+	Send(SCI_SETUSETABS, settings.ProcessIndentationTab() ? 1 : 0);
+	Send(SCI_SETINDENT, static_cast<uptr_t>(settings.UseCustomTabSettings()
+		? settings.EditorTabWidth() : DEFAULT_TAB_WIDTH));
+
+	Send(SCI_SETZOOM, static_cast<uptr_t>(settings.EditorZoomFactor()));
+
+	// The default line ending, for documents that have none of their own.
+	// ONLY for an untitled one: a loaded file's EOL comes from its bytes, and
+	// DetectEol has already read it. Applying this to a loaded document would
+	// silently re-end every line the next time it was saved.
+	if (IsUntitled())
+	{
+		// core/ cannot include Scintilla, so it stores the raw number and the
+		// mapping lives here. 0/1/2 are SC_EOL_CRLF/CR/LF.
+		const int nEol = settings.DefaultFileEol();
+		if (nEol == 0 || nEol == 1 || nEol == 2)
+		{
+			Send(SCI_SETEOLMODE, static_cast<uptr_t>(nEol));
+		}
+	}
+
+	// Caret blink. Scintilla takes a PERIOD in milliseconds, where 0 means a
+	// steady caret - it has no boolean. 500ms is its own default.
+	Send(SCI_SETCARETPERIOD, settings.EnableCaretBlink() ? 500 : 0);
+
+	// Multiple cursors. THE MFC SHIPS THIS ON and ui-qt had it off, so this is
+	// closing an existing divergence rather than adding a feature.
+	// Additional selection typing is what makes them useful rather than
+	// decorative; CEditorCtrl sets both together (src/Editor.cpp).
+	Send(SCI_SETMULTIPLESELECTION, settings.EnableMultipleCursor() ? 1 : 0);
+	Send(SCI_SETADDITIONALSELECTIONTYPING, settings.EnableMultipleCursor() ? 1 : 0);
+
+	// The font, through the same helper ApplyEditorStyles uses - so a theme
+	// switch and a settings change cannot disagree about it.
+	ApplyEditorFont();
+	Send(SCI_STYLECLEARALL);
+}
+
+void CEditorWidget::ApplyEditorFont()
+{
+	const Core::CAppSettings& settings = m_Data.GetSettings();
+	const QByteArray fontName =
+		QString::fromStdString(settings.EditorFontName()).toUtf8();
+	Send(SCI_STYLESETFONT, STYLE_DEFAULT,
+		reinterpret_cast<sptr_t>(fontName.constData()));
+	Send(SCI_STYLESETSIZE, STYLE_DEFAULT,
+		static_cast<sptr_t>(settings.EditorFontPointSize()));
 }
 
 void CEditorWidget::ApplyTheme(EEditorTheme theme)
@@ -869,10 +959,13 @@ void CEditorWidget::ApplyEditorStyles(const Core::CEditorTheme& theme)
 		return;
 	}
 
-	const QFont fixed = QFontDatabase::systemFont(QFontDatabase::FixedFont);
-	const QByteArray family = fixed.family().toUtf8();
-	Send(SCI_STYLESETFONT, STYLE_DEFAULT, reinterpret_cast<sptr_t>(family.constData()));
-	Send(SCI_STYLESETSIZE, STYLE_DEFAULT, fixed.pointSize() > 0 ? fixed.pointSize() : 11);
+	// THE FONT COMES FROM THE SETTING, not from QFontDatabase. It used to be
+	// the system fixed font here, and since ReapplySettings runs
+	// ApplySettings() and then ApplyTheme(), every theme switch silently threw
+	// the user's chosen font away - SCI_STYLECLEARALL below broadcasts
+	// STYLE_DEFAULT over everything. One place owns the font now, and this is
+	// the only one that runs after STYLECLEARALL.
+	ApplyEditorFont();
 	Send(SCI_STYLESETFORE, STYLE_DEFAULT, ToScintillaColour(fore));
 	Send(SCI_STYLESETBACK, STYLE_DEFAULT, ToScintillaColour(back));
 	Send(SCI_STYLECLEARALL);

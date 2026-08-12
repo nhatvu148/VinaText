@@ -302,6 +302,10 @@ private:
 	void SetLineCenterDisplay(int nLine);
 	void SetFirstVisibleLine(int nLine);
 
+	// STYLE_DEFAULT's font and size, from the settings. Called from BOTH
+	// ApplySettings and ApplyEditorStyles, because SCI_STYLECLEARALL resets
+	// it and the theme switch would otherwise discard the user's font.
+	void ApplyEditorFont();
 	void ApplyEditorStyles(const Core::CEditorTheme& theme);
 	void ApplyLanguageStyles(const Core::CEditorTheme& theme);
 	void ApplyFoldMargin(const Core::CEditorTheme& theme);
