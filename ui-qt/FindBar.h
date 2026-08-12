@@ -46,6 +46,16 @@ public:
 	void SetReplaceVisible(bool bVisible);
 	void ShowStatus(const QString& strText, bool bIsMiss);
 
+	// Turns regex mode on, which is also what reveals the preset list. Not
+	// test-only: the screenshot path uses it, because a button that never
+	// appears in a picture has not been shown to anybody.
+	void SetRegex(bool bOn);
+
+	// For the self-test, which cannot open a menu or click an item.
+	bool IsRegexHelpVisible() const;
+	bool InsertPresetForTest(int nIndex);
+	void TypePatternForTest(const QString& strText);
+
 signals:
 	void FindRequested(bool bBackward);
 	void ReplaceRequested();
@@ -62,4 +72,8 @@ private:
 	QCheckBox*	m_pWholeWord = nullptr;
 	QCheckBox*	m_pRegex = nullptr;
 	QLabel*		m_pStatus = nullptr;
+	// The regex helper list from src/ComboboxRegexHelper.cpp - the one part of
+	// FindDlg that is not find-in-files. Only useful in regex mode, so it
+	// appears with the checkbox rather than sitting there inert.
+	QToolButton*	m_pRegexHelp = nullptr;
 };

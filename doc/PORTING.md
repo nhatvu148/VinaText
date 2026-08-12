@@ -3020,3 +3020,154 @@ Bucket assignment is a judgement call per file, driven by the class each `.cpp` 
 It is not mechanically derivable from the counts alone — treat the table as a proposal to
 review, not an oracle.
 
+## 6s. Find and Replace — what was salvaged, and what was deferred with cause
+
+The last two dialogs on D10's *kept* list. **Neither is ported, and one small
+piece of one of them is.** That is a scope decision, so it is recorded with the
+measurement it rests on rather than left as a gap.
+
+### The dialogs are 1,881 lines, and the find bar already does the part an editor needs
+
+`ui-qt` has had a find bar since M1 — pattern, replace row, match case, whole
+word, regex, wrap, count, replace-all. Listing what `FindDlg` (899) and
+`ReplaceDlg` (982) add **over** that is the whole argument:
+
+| adds | needs |
+|---|---|
+| Search Scope, Search All Files, File Filter, Specific Path, Exclude Sub Folder | walking a directory tree |
+| results grouped by file / by path, jump to a hit | **`SearchResultWindow`**, **`PathResultWindow`** |
+| the regex preset list | nothing |
+
+The first two rows are **find-in-files**, and its two result panes are already on
+D10's deferred list — deferred *before* this decision, for the IDE-half reasons in
+§4 D10. Porting the dialogs would mean building two panes D10 defers in order to
+serve a dialog D10 keeps. The list is what does not depend on any of it, so the
+list is what shipped: **`ui-qt/RegexPresets.{h,cpp}`, 111 lines, in the find bar
+behind the regex checkbox.**
+
+D10's own rule is the one applied here — *a control exists because a behaviour
+exists* (§6r, PR #45) — and it reaches the same verdict about find-in-files that
+it reached about the compiler settings page.
+
+### The presets were measured against the engine that has to run them, and a third of them do not
+
+Both frontends search with plain `SCFIND_REGEXP` — **Scintilla's basic engine**,
+not PCRE. The MFC's 27 entries were written against .NET syntax and never checked
+against it. Every one was run through the engine, each against a string chosen to
+satisfy **its own label** — so a zero means the engine cannot run the pattern, not
+that the text happened to lack a match:
+
+```
+MFC PRESETS: 12 of 27 find NOTHING in a string built for them
+```
+
+Twelve. The constructs, probed one at a time:
+
+```
+PROBE \b        on hello -> 0     PROBE \<        on hello  -> 1
+PROBE dog|cat   on a dog -> 0     PROBE \(dog\)   on a dog  -> 1
+PROBE \d{3}     on x123x -> 0     PROBE \d\d\d    on x123x  -> 1
+PROBE (?=\r?$)  on abc   -> 0     PROBE $         on abc    -> 1
+PROBE (?<pet>dog)  on a dog -> 0  PROBE \k<pet>   on dogdog -> 0
+PROBE [\w-[0-9_]] on a1   -> 0    PROBE \1        on dogdog -> 0
+```
+
+No `\b`, no alternation, no `{n}`, no lookahead, no named groups in any spelling,
+no .NET character-class subtraction, and a bare `\1` with no group before it. So
+of the 27:
+
+- **3 dropped as unportable** — `(?<pet>…)` and `\k<pet>` (named groups), and
+  *"Match a line break"*, `\r?\n`: Scintilla's regex is **line-oriented**, a
+  search never spans one, so no pattern for a line break can match in **either**
+  frontend. That entry has never worked on Windows either.
+- **1 split into 2** — *"Match at beginning or end of word"* offered a single `\b`.
+  The engine has `\<` and `\>`, which are different patterns, so it becomes two
+  entries that each say which end they mean.
+- **10 rewritten**, because the pattern could not run or did not do what its own
+  label said. The plainest is *"not in the set 'abc'"*, which shipped `^[abc]` —
+  start-of-line, not negation — and is one of the few that **runs**, so it fails
+  silently rather than finding nothing. *"Space or Tab"* shipped `[\t]`, tab only.
+  *"Match a hexadecimal number"* shipped the **C-identifier pattern**, the same
+  string as the entry above it, copied.
+- **13 kept verbatim.** 13 + 12 = 25 offered, from 27.
+
+### The check that makes this stay true
+
+**Every preset carries a sample it must match**, and the self-test runs all 25
+through `HighlightMatches` — the editor's own search, the same call the find bar
+makes. Offering a pattern is a promise that it works *here*; a preset library
+checked against a spec instead of against the engine is exactly how the MFC ended
+up shipping seven broken entries.
+
+The check names **every** failing preset rather than stopping at the first, so a
+mutation reports `1 did not: Start of a word (\b)` and a bad merge reports all of
+them at once.
+
+### Insert, not overwrite — and the one case where overwrite is right
+
+`ComboboxRegexHelper::SetSearchFields` calls `SetWindowTextW`: picking a preset
+**replaces the entire search field**, discarding whatever was being typed. These
+are building blocks — someone reaching for one usually has half a pattern already
+— so the Qt version calls `QLineEdit::insert`, at the caret.
+
+That is not the same as never replacing. `Activate` prefills the box from the
+selection and `selectAll()`s it, so typing replaces; a preset picked in that state
+replaces too, which is what `insert` does with a selection and what every editor
+does with a paste. **Both halves are pinned by checks**, because each looks like a
+bug from the other's side. My first version of the first check failed on correct
+code for exactly that reason: it used `Activate` to set up "already typed", which
+is the one state where replacing is right.
+
+The button is hidden in plain-text mode. A menu of patterns that do nothing to a
+literal search is worse than no menu — and it is in regex mode in the screenshot
+for the same reason, since a control that never appears in one has not been shown
+to anybody.
+
+**4 mutations, 4 caught** — `\<` back to `\b` (1 preset named), the
+checkbox-to-button connect dropped, `insert` back to the MFC's `setText`, and a
+`deselect()` that would make it never replace.
+
+**Self-test: 1,011 → 1,047 checks on defaults, 1,015 → 1,051 configured** (macOS;
+counts are platform-dependent). 10/10 core tests; `src/` untouched.
+
+### Phase 5's dialog scope, closed
+
+**14 kept → 12 ported or superseded, 2 deferred with cause.** The brief's *kept*
+row and its *deferred* table are updated to match, so the next reader sees the
+reasoning and not just the absence.
+
+Reproduce:
+
+```bash
+# what the dialogs are, and what the salvaged piece is
+wc -l src/FindDlg.cpp src/ReplaceDlg.cpp          # 899 + 982 = 1,881
+wc -l ui-qt/RegexPresets.cpp ui-qt/RegexPresets.h # 68 + 43 = 111
+
+# 27 in the MFC, 25 offered here
+grep -c AddString src/ComboboxRegexHelper.cpp     # 27
+grep -cE '^\s+\{ "' ui-qt/RegexPresets.cpp        # 25
+
+# 13 kept verbatim, 12 changed - by comparing the two lists, not by eye
+python3 - <<'EOF'
+import re, codecs, pathlib
+lit = lambda x: codecs.decode(x, 'unicode_escape')
+mfc = {lit(x) for x in re.findall(r'SetWindowTextW\(_T\("(.*?)"\)\);',
+    pathlib.Path('src/ComboboxRegexHelper.cpp').read_text())}
+mine = [lit(x) for x in re.findall(r'^\s+\{ "[^"]*",\s*"((?:[^"\\]|\\.)*)"',
+    pathlib.Path('ui-qt/RegexPresets.cpp').read_text(), re.M)]
+print(sum(p in mfc for p in mine), 'verbatim;', sum(p not in mfc for p in mine), 'changed')
+EOF
+
+# the mislabelled one, as the MFC has it: start-of-line, under "not in the set"
+grep -n '\^\[abc\]' src/ComboboxRegexHelper.cpp
+
+# every preset matches its own sample, checked by the editor's own search.
+# A PASSING run prints only the summary - the check names failures, so silence
+# on the FAIL line is the result.
+QT_QPA_PLATFORM=offscreen ./qtbuild/ui-qt/vinatext-qt --selftest \
+  core/LanguageData.cpp tools/extract_language_data.py \
+  qtbuild/fixtures/crlf-bom.cpp qtbuild/fixtures/utf16.py \
+  qtbuild/fixtures/latin1.md qtbuild/fixtures/no-trailing-newline.py \
+  qtbuild/fixtures/tags.xml qtbuild/fixtures/urls.md 2>&1 \
+  | grep -E "FAIL regex|selftest: [0-9]+ check"
+```

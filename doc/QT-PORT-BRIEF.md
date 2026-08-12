@@ -478,13 +478,19 @@ Windows exactly as now.
 | `platform/`'s IDE half — `Compiler`, `Debugger`, `SystemInfo`, `HostView`, `HostManager`, `WindowsPrinter` | ~3,500 | Risk 3 already called `Debugger`/`Compiler` "its own project" |
 | viewers and explorer — `FileExplorerCtrl`, `BuildWindow`, `ImageView`, `PdfView`, `MediaView`, `WebView` | ~10,200 | `FileExplorerCtrl` alone is 6,220 |
 | 16 of the 30 dialogs | ~3,170 | path tools, project templates, spell-check, password, gamma |
+| **`FindDlg` and `ReplaceDlg`** | 1,881 | **moved here from "kept", §6s.** What they add over the shipped find bar is *find-in-files*, which needs `SearchResultWindow` and `PathResultWindow` — two panes deferred one row down. Their regex preset list was salvaged and shipped separately. |
 | 6 of the 8 dock panes | — | `BuildWindow`, `PathResultWindow`, `SearchResultWindow`, `BreakpointWindow`, `SearchAndReplaceWindow`, `FileExplorerWindow` — named in full, because a category list dropped one. **8, not 9: see §3d's correction.** |
 
 **Kept — what an editor needs:**
 
-- **14 dialogs, 4,594 LOC**: `FindDlg`, `ReplaceDlg`, `GotoDlg`, `CodePageMFCDlg`,
-  `AppAboutDlg` (required by D3 for the Qt LGPL attribution), the three settings
-  pages, and the six small text-transform dialogs.
+- **12 dialogs, 2,713 LOC**: `GotoDlg`, `CodePageMFCDlg`, `AppAboutDlg` (required
+  by D3 for the Qt LGPL attribution), the three settings pages, and the six small
+  text-transform dialogs. **Was 14 / 4,594** — `FindDlg` and `ReplaceDlg` moved to
+  *deferred* in §6s, on the same evidence D10 itself uses: the majority of what
+  they do depends on something D10 already defers. Every count in this row has
+  since proved to undercount the work behind it — "the three settings pages" was
+  four objects and 69 settings (§6r), "the six text-transform dialogs" was five
+  classes backing **17** commands (§6p). Read them as a list of names, not a size.
 - **2 dock panes and 1 dialog**: `MessageWindow` (done, §6k), `BookmarkWindow`,
   and `OpenTabWindows` — which is a **modal dialog**, not a pane (done, §6n).
   With `MessageWindow` shipped, `BookmarkWindow` is the only dock pane left here.

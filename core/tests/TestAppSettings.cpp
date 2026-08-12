@@ -288,6 +288,13 @@ int main(int argc, char** argv)
 			std::istreambuf_iterator<char>());
 		twice.close();
 		Check(strTwice == strAfter, "saving twice is byte-identical");
+
+		// strRoot is the REPO ROOT - it is where src/AppSettings.h is read from -
+		// so a scratch file left here is a stray untracked file in someone's
+		// working tree. Cleaned up for the same reason the keys check below
+		// removes its file BEFORE writing: a test that leaves state behind is one
+		// run away from reading it back.
+		std::remove(strPath.c_str());
 	}
 
 	//----------------------------------------------------------------------
@@ -389,6 +396,12 @@ int main(int argc, char** argv)
 				"EditorFontName");
 			Check(strJson.find("\"AutoAddNewLineAtTheEOF\"") != std::string::npos,
 				"AutoAddNewLineAtTheEOF");
+
+			// Cleaned up, in the repo root. The remove ABOVE stays regardless:
+			// it is the guard against a file left by a crashed or killed run,
+			// which this one cannot cover.
+			in.close();
+			std::remove(strFresh.c_str());
 		}
 
 		// The defaults match src/AppSettings.h, so a file that predates these

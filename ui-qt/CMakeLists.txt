@@ -39,6 +39,8 @@ qt_add_executable(vinatext-qt
     LineTransforms.h
     SingleInstance.cpp
     SingleInstance.h
+    RegexPresets.cpp
+    RegexPresets.h
     PreferencesDialog.cpp
     PreferencesDialog.h
     AboutDialog.cpp

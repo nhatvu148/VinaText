@@ -14,7 +14,10 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QShortcut>
+#include <QMenu>
 #include <QToolButton>
+
+#include "RegexPresets.h"
 
 CFindBar::CFindBar(QWidget* pParent)
 	: QWidget(pParent)
@@ -49,6 +52,35 @@ CFindBar::CFindBar(QWidget* pParent)
 	m_pToggleReplace->setCheckable(true);
 	m_pToggleReplace->setAutoRaise(true);
 
+	// The regex helper list. Hidden until regex is on: a menu of patterns that
+	// do nothing to a plain-text search is worse than no menu.
+	m_pRegexHelp = new QToolButton(this);
+	m_pRegexHelp->setText(QStringLiteral("\u25BE"));
+	m_pRegexHelp->setToolTip(tr("Insert a regular expression"));
+	m_pRegexHelp->setAutoRaise(true);
+	m_pRegexHelp->setPopupMode(QToolButton::InstantPopup);
+	m_pRegexHelp->hide();
+	{
+		QMenu* pMenu = new QMenu(this);
+		for (const RegexPresets::SPreset& preset : RegexPresets::All())
+		{
+			const QString strPattern = QString::fromUtf8(preset._Pattern);
+			pMenu->addAction(QStringLiteral("%1\t%2")
+					.arg(tr(preset._Label), strPattern), this, [this, strPattern]
+			{
+				// INSERTED at the caret rather than replacing the box. The MFC
+				// overwrites the whole search field (ComboboxRegexHelper::
+				// SetSearchFields calls SetWindowTextW), which throws away
+				// whatever was being typed - these are building blocks, and a
+				// user reaching for one usually has part of a pattern already.
+				m_pPattern->insert(strPattern);
+				m_pPattern->setFocus();
+				emit PatternChanged();
+			});
+		}
+		m_pRegexHelp->setMenu(pMenu);
+	}
+
 	QToolButton* pClose = new QToolButton(this);
 	pClose->setText(QStringLiteral("✕"));
 	pClose->setToolTip(tr("Close (Esc)"));
@@ -63,6 +95,7 @@ CFindBar::CFindBar(QWidget* pParent)
 	pLayout->addWidget(m_pMatchCase);
 	pLayout->addWidget(m_pWholeWord);
 	pLayout->addWidget(m_pRegex);
+	pLayout->addWidget(m_pRegexHelp);
 	pLayout->addWidget(m_pStatus);
 	pLayout->addStretch(0);
 	pLayout->addWidget(pClose);
@@ -120,6 +153,8 @@ CFindBar::CFindBar(QWidget* pParent)
 	{
 		connect(pBox, &QCheckBox::toggled, this, &CFindBar::PatternChanged);
 	}
+	connect(m_pRegex, &QCheckBox::toggled, m_pRegexHelp, &QWidget::setVisible);
+	
 
 	// A shortcut rather than a keyPressEvent override: the key lands in the line
 	// edit, and whether an unhandled Escape propagates up to this widget is a
@@ -183,6 +218,40 @@ void CFindBar::Activate(const QString& strInitial, bool bReplace)
 	// field would mean tabbing backwards to start.
 	m_pPattern->setFocus();
 	m_pPattern->selectAll();
+}
+
+bool CFindBar::IsRegexHelpVisible() const
+{
+	return !m_pRegexHelp->isHidden();
+}
+
+bool CFindBar::InsertPresetForTest(int nIndex)
+{
+	// Through the menu's own action, so the check exercises the shipped
+	// insertion rather than a copy of it - the lesson from 6n.
+	const QList<QAction*> actions = m_pRegexHelp->menu()->actions();
+	if (nIndex < 0 || nIndex >= actions.size())
+	{
+		return false;
+	}
+	actions.at(nIndex)->trigger();
+	return true;
+}
+
+void CFindBar::SetRegex(bool bOn)
+{
+	// Through the checkbox, which owns the helper's visibility - setting the
+	// helper directly would leave the two out of step.
+	m_pRegex->setChecked(bOn);
+}
+
+void CFindBar::TypePatternForTest(const QString& strText)
+{
+	// What TYPING leaves behind: the text, and a caret at the end with NOTHING
+	// selected. Activate() cannot stand in for this - it selectAll()s, so the
+	// box is in the one state where an insert legitimately replaces.
+	m_pPattern->setText(strText);
+	m_pPattern->setCursorPosition(strText.size());
 }
 
 void CFindBar::ShowStatus(const QString& strText, bool bIsMiss)
