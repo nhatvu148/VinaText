@@ -3411,6 +3411,36 @@ that produced the illegible block, and one edit changed both the flag and the
 value - and inserting `LocateMatch` above `HighlightMatches` left that function's
 doc comment stranded on the wrong declaration.
 
+### Review: the second walk, measured and kept
+
+A later finding called `OnFind` "two full-document scans per keypress" and asked
+for the ordinal to come out of `FindNext`. Measured on a **6.6 MB** file with
+**32,400** matches:
+
+```
+HighlightMatches 24.21 ms | FindNext 0.140 ms | LocateMatch 19.03 ms (1 of 32400)
+```
+
+Three things that changes:
+
+- **`FindNext` is not a full scan.** 0.140 ms - it stops at the first match past
+  the caret. There is one walk, not two.
+- **It is not per keypress.** `LocateMatch` runs on a Next press.
+  `HighlightMatches` is what runs per keystroke, through `textChanged` ->
+  `OnPatternChanged`, and at **24 ms it is the larger of the two** - it predates
+  this change and nobody has felt it.
+- **Neither suggested fix removes the work.** `FindNext` cannot "return the
+  ordinal it discovers", because it searches from the caret and never learns how
+  many matches precede it; and the match range is already known - what costs is
+  counting what is *before* it, which is a walk from position 0 by definition.
+
+The only alternative that would remove it is caching match positions in
+`HighlightMatches` - which reintroduces exactly the staleness `LocateMatch` was
+written to avoid. A wrong `3 of 7` reads as a fact.
+
+Kept as it is, with the numbers recorded so a future change has a baseline rather
+than an opinion.
+
 **Self-test: 1,047 -> 1,072 checks on defaults, 1,051 -> 1,076 configured**
 (macOS). 10/10 core tests; `src/` untouched.
 
