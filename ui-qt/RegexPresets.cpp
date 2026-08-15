@@ -8,12 +8,17 @@
 
 #include "RegexPresets.h"
 
-// FOR QT_TRANSLATE_NOOP, which arrives transitively through <QString> today and
-// should not have to. Review asked for <QCoreApplication>; the macro is not
-// defined there - it lives in qttranslation.h, which qglobal.h includes, so
-// <QtGlobal> is the portable home. Measured: a TU with <QtGlobal> compiles, one
-// with nothing does not. NOT <QtTranslation>, the header's own public name -
-// that split is newer than the Qt 6.4 that Ubuntu's qt6-base-dev gives Linux CI.
+// FOR QT_TRANSLATE_NOOP, AND NOW LOAD-BEARING. Review asked for
+// <QCoreApplication>; the macro is not defined there - it lives in
+// qttranslation.h, which qglobal.h includes, so <QtGlobal> is the portable home.
+// NOT <QtTranslation>, the header's own public name: that split is newer than
+// the Qt 6.4 that Ubuntu's qt6-base-dev gives Linux CI.
+//
+// When this was added the macro still arrived transitively through the header's
+// <QString>, so the reviewer's reason for it - "not reachable transitively" -
+// was measurably wrong. A LATER review then removed that unused <QString>, and
+// the wrong reason became the right one: delete this line now and the file no
+// longer compiles. Measured both ways.
 #include <QtGlobal>
 
 // QT_TRANSLATE_NOOP MARKS A LABEL FOR lupdate WITHOUT TRANSLATING IT HERE. The

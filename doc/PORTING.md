@@ -3221,6 +3221,22 @@ shortcut, and none of these strings reads like a key name. **The condition is
 recorded in the code**: if an action here ever gains a real shortcut, the two
 would compete for the same column and this has to change.
 
+**A third round then removed the header's `<QString>`, which was unused - and
+made the earlier reviewer's wrong reason right.** The struct is all `const
+char*`, so nothing in `RegexPresets.h` needed Qt at all. But that `<QString>` was
+what carried `qglobal.h`, and therefore the macro, into the `.cpp`. Measured:
+
+```
+<QString> dropped, <QtGlobal> kept    -> builds
+<QString> dropped, <QtGlobal> removed -> error: use of undeclared identifier
+                                         'QT_TRANSLATE_NOOP'
+```
+
+So "the macro is not reachable transitively" was false when it was written and is
+true now, made true by a later finding. Had the two arrived in the other order,
+dropping the include would have broken the build. The comment on that include
+says so, because the next reader will otherwise see a line that looks redundant.
+
 **The menu is now a screenshot of its own** (`vinatext-regex-presets.png`),
 because it is a popup and cannot appear in the main shot - the same reason the
 window manager has one. That picture is also the evidence above. The popup is

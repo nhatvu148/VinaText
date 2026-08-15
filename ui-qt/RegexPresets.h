@@ -22,7 +22,9 @@
 
 #pragma once
 
-#include <QString>
+// NO Qt HEADER. Every field is a const char* - the labels are marked with
+// QT_TRANSLATE_NOOP in the .cpp, which expands to the bare literal, and the
+// lookup happens at the call site. <QString> was here and unused.
 #include <vector>
 
 namespace RegexPresets
