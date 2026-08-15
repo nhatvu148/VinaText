@@ -3461,3 +3461,78 @@ QT_QPA_PLATFORM=offscreen ./qtbuild/ui-qt/vinatext-qt --selftest \
   qtbuild/fixtures/latin1.md qtbuild/fixtures/no-trailing-newline.py \
   qtbuild/fixtures/tags.xml qtbuild/fixtures/urls.md 2>&1 | tail -1
 ```
+
+## 6u. Nothing was relocatable — the prerequisite for packaging
+
+Packaging was deferred to last on purpose. Starting it turned up the thing that
+had to come first: **the Qt app could not be copied anywhere.**
+
+Both of the directories it reads at run time were compiled in as **absolute paths
+into the source tree**:
+
+```cmake
+VINATEXT_DATA_DIR="${CMAKE_SOURCE_DIR}/Packages/data-packages"
+VINATEXT_LICENSE_DIR="${CMAKE_SOURCE_DIR}/license"
+```
+
+That is correct for a build-tree run and wrong for every other copy. A `.app`
+handed to somebody else looks for `languages.json` in a directory on **the
+builder's machine**. No bundle, `.dmg` or AppImage can work until this is fixed,
+which is why it is a PR of its own and not a line inside the bundling one.
+
+**The licence half is a D3 obligation, not a nicety.** The About box tells the
+user the Qt licence text is at `license/License-Qt.txt`. LGPLv3 compliance
+depends on that text actually shipping - a path true only in the build tree makes
+the statement false in every distributed copy.
+
+### The search order is the whole contract
+
+`ResourcePaths::Candidates` returns, in order:
+
+1. `<exe>/../Resources/<leaf>` — a macOS bundle's own resources
+2. `<exe>/<leaf>` — an AppImage's AppDir, or an unpacked tarball
+3. `<exe>/../share/vinatext/<leaf>` — a Linux prefix install
+4. the compiled-in build path — **last**
+
+**Last matters as much as first.** If the builder's source tree were tried
+early, a packaged copy running on a machine that happens to have the source would
+read from it and work *for the wrong reason* - and fail only on the machines
+nobody tests on. The check asserts both ends, not just the winner.
+
+### Existing is not the same as usable
+
+A candidate only counts if it holds a witness file — `languages.json` for data,
+`License-VinaText.txt` for licences. Without that rule an **empty** directory next
+to the binary wins the search, and the app then reports a missing `languages.json`
+rather than a missing directory: the failure one step removed from its cause.
+
+And when nothing resolves, the compiled-in path is returned rather than an empty
+string, so the caller's error names somewhere real.
+
+### Proved by relocating it, not by reading it
+
+```bash
+# stage a copy the way a bundle lays out
+cp qtbuild/ui-qt/vinatext-qt  $R/
+cp -R Packages/data-packages  $R/data
+cp -R license                 $R/license
+cd $R && ./vinatext-qt --selftest $R/data/languages.json     # runs
+
+# now break the STAGED licences while the source tree keeps its own
+rm $R/license/License-Qt.txt
+cd $R && ./vinatext-qt --selftest $R/data/languages.json
+# FAIL attribution: <staged>/license/License-Qt.txt exists
+```
+
+The failure names the **staged** path, and the intact source tree does not rescue
+it. That is the proof that the copy reads its own files and that precedence works.
+
+**2 mutations, 2 caught**: putting the compiled-in path first, and dropping the
+witness-file rule.
+
+**Self-test: 1,072 -> 1,079 checks on defaults, 1,076 -> 1,083 configured**
+(macOS). 10/10 core tests; `src/` untouched.
+
+**Still to do before there is an artifact:** the macOS bundle and `.dmg`, the
+Linux AppImage, CI uploading both, and checking D3's dynamic-linking obligation
+against the shipped binary rather than against the build.

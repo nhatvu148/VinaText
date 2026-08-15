@@ -8,6 +8,8 @@
 
 #include "MainWindow.h"
 
+#include "ResourcePaths.h"
+
 #include "EditorWidget.h"
 #include "FindBar.h"
 #include "GotoBar.h"
@@ -2465,11 +2467,54 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 			// the binary from qtbuild/ui-qt/ - a confusing way to report that
 			// you are standing in the wrong place. Same convention as
 			// VINATEXT_DATA_DIR.
-			const QString strPath = QStringLiteral(VINATEXT_LICENSE_DIR)
+			const QString strPath = ResourcePaths::LicenseDir()
 				+ QLatin1Char('/') + strFile;
 			Require(QFile::exists(strPath),
 				QStringLiteral("attribution: %1 exists").arg(strPath));
 		}
+	}
+
+	//----------------------------------------------------------------------
+	// Where the app finds its files. This is what makes a copied build work,
+	// so it is checked rather than assumed - see doc/PORTING.md 6u.
+	//----------------------------------------------------------------------
+	{
+		const QStringList candidates = ResourcePaths::Candidates(QStringLiteral("data"));
+		Require(candidates.size() >= 4,
+			QStringLiteral("paths: %1 candidates for the data directory")
+				.arg(candidates.size()));
+		// THE ORDER IS THE CONTRACT. A bundle's own Resources must beat
+		// everything, and the builder's source tree must lose to everything -
+		// otherwise a packaged copy on a machine that happens to have the source
+		// tree reads the wrong one, and works for exactly the wrong reason.
+		Require(candidates.first().contains(QStringLiteral("/../Resources/")),
+			QStringLiteral("paths: the bundle's Resources is tried FIRST, got '%1'")
+				.arg(candidates.first()));
+		Require(candidates.last() == QStringLiteral(VINATEXT_DATA_DIR),
+			QStringLiteral("paths: the compiled-in build path is tried LAST, got '%1'")
+				.arg(candidates.last()));
+
+		Require(QFile::exists(ResourcePaths::DataDir() + QStringLiteral("/languages.json")),
+			QStringLiteral("paths: the resolved data dir holds languages.json (%1)")
+				.arg(ResourcePaths::DataDir()));
+		Require(QFile::exists(ResourcePaths::LicenseDir()
+				+ QStringLiteral("/License-VinaText.txt")),
+			QStringLiteral("paths: the resolved licence dir holds the licences (%1)")
+				.arg(ResourcePaths::LicenseDir()));
+
+		// EXISTING IS NOT THE SAME AS USABLE. An empty directory next to the
+		// binary would otherwise win the search, and the app would report a
+		// missing languages.json instead of a missing directory - the failure
+		// one step removed from its cause. Left in place would be harmless
+		// (that is the rule being tested) but it is removed anyway, because a
+		// test that leaves state behind is one run from reading it back.
+		const QString strDecoy = QCoreApplication::applicationDirPath()
+			+ QStringLiteral("/data");
+		const bool bMade = QDir().mkpath(strDecoy);
+		Require(bMade, QStringLiteral("paths: made an empty decoy at %1").arg(strDecoy));
+		Require(QFile::exists(ResourcePaths::DataDir() + QStringLiteral("/languages.json")),
+			QStringLiteral("paths: an EMPTY directory next to the binary does not win"));
+		QDir().rmdir(strDecoy);
 	}
 
 	//----------------------------------------------------------------------
