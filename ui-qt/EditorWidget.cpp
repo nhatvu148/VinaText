@@ -204,11 +204,13 @@ CEditorWidget::CEditorWidget(const CEditorData& data, QWidget* pParent)
 	Send(SCI_INDICSETSTYLE, FIND_CURRENT_INDICATOR, INDIC_ROUNDBOX);
 	Send(SCI_INDICSETALPHA, FIND_CURRENT_INDICATOR, 160);
 	Send(SCI_INDICSETOUTLINEALPHA, FIND_CURRENT_INDICATOR, 255);
-	// UNDER THE TEXT. Indicators draw OVER it by default, which is survivable at
-	// the find indicator's alpha 80 and is not at this one's - rendered at 200
-	// over the text, the current match became a solid block with the word no
-	// longer legible inside it. The whole point is to show you where you are, so
-	// a marker that hides the thing it marks is worse than none.
+	// UNDER THE TEXT. Indicators draw OVER it by default, which the find
+	// indicator survives at alpha 80 and a heavier fill does not: rendered at
+	// alpha 200 OVER the text, the current match became a solid block with the
+	// word no longer legible inside it. A marker that hides the thing it marks is
+	// worse than none. Two changes came out of that one picture - this flag, and
+	// dropping the fill to the 160 above - so the 200 is what was measured, not
+	// what ships.
 	Send(SCI_INDICSETUNDER, FIND_CURRENT_INDICATOR, 1);
 
 	// The margin is sized for the line count, so it has to follow it. Without
@@ -2005,6 +2007,11 @@ bool CEditorWidget::ReplaceNext(const QString& strPattern, const QString& strRep
 	// changed.
 	Send(SCI_SETSEL, static_cast<uptr_t>(nFound), nFound + nReplaced);
 	Send(SCI_SCROLLCARET);
+	// AND NO CURRENT MATCH. Usually this is moot - the replaced characters ARE
+	// the marked ones, so the mark dies with them - but not if the caret moved
+	// after the last Find. Then the replace lands elsewhere and the mark is left
+	// claiming to be where you are. Measured: marker at 85, selection at 158.
+	ClearCurrentMatch();
 	return true;
 }
 
@@ -2088,6 +2095,9 @@ int CEditorWidget::ReplaceAll(const QString& strPattern, const QString& strRepla
 	// moving the caret scrolls.
 	Send(SCI_GOTOLINE, static_cast<uptr_t>(nCaretLine));
 	Send(SCI_SETFIRSTVISIBLELINE, static_cast<uptr_t>(nFirstVisible));
+	// Same reason as ReplaceNext: after this the caret is back where it started
+	// and nothing under it is a match, so any current mark is a leftover.
+	ClearCurrentMatch();
 	return nCount;
 }
 
@@ -2136,6 +2146,12 @@ void CEditorWidget::MarkCurrentMatch(sptr_t nStart, sptr_t nEnd)
 	{
 		Send(SCI_INDICATORFILLRANGE, static_cast<uptr_t>(nStart), nEnd - nStart);
 	}
+}
+
+void CEditorWidget::ClearCurrentMatch()
+{
+	Send(SCI_SETINDICATORCURRENT, FIND_CURRENT_INDICATOR);
+	Send(SCI_INDICATORCLEARRANGE, 0, Send(SCI_GETLENGTH));
 }
 
 void CEditorWidget::ClearHighlight()

@@ -1673,6 +1673,28 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 					& (1 << 16)) == 0,
 				QStringLiteral("%1: ClearHighlight clears the current marker too")
 					.arg(strName));
+
+			// A REPLACE LEAVES NO CURRENT MATCH, in the one state where it
+			// otherwise would: the caret moved after the Find, so the replace
+			// lands somewhere else and the mark is not deleted along with the
+			// text it was on. Found in review; measured at marker 85 /
+			// selection 158 before the fix.
+			pEditor->Send(SCI_GOTOPOS, 0);
+			pEditor->HighlightMatches(strWord, options);
+			pEditor->FindNext(strWord, options);
+			const sptr_t nMarked = pEditor->Send(SCI_GETSELECTIONSTART);
+			pEditor->Send(SCI_GOTOPOS, nMarked + strWord.size());
+			Require(pEditor->ReplaceNext(strWord, strWord + QStringLiteral("_x"), options),
+				QStringLiteral("%1: the replace ran").arg(strName));
+			Require((pEditor->Send(SCI_INDICATORALLONFOR, static_cast<uptr_t>(nMarked))
+					& (1 << 16)) == 0,
+				QStringLiteral("%1: a replace elsewhere drops the old current mark")
+					.arg(strName));
+			// The document is shared with every later check on this tab, so put
+			// it back rather than leaving a "_x" behind.
+			pEditor->Send(SCI_UNDO);
+			pEditor->Send(SCI_SETSAVEPOINT);
+			pEditor->ClearHighlight();
 		}
 
 		const QString strAbsent = QStringLiteral("zzq_not_in_this_file_zzq");

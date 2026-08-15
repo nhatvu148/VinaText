@@ -3375,7 +3375,43 @@ The screenshot now renders **standing on a match** rather than in the
 highlight-all state - the state in which this looked correct while being
 unusable.
 
-**Self-test: 1,047 -> 1,066 checks on defaults, 1,051 -> 1,070 configured**
+### Review: a replace can leave the mark behind, but not the way it was described
+
+The finding said `ReplaceNext`/`ReplaceAll` "leave a current-match indicator
+pointing at a stale range". **Measured, the usual case cannot happen:**
+
+```
+PROBE after FindNext          current=1
+PROBE after RAW ReplaceNext   current=0     <- the marked characters ARE the replaced ones
+```
+
+`SCI_REPLACETARGET` deletes exactly the range the mark was on, so the mark dies
+with the text. **But there is one state where it survives, and the finding is
+right about it:** if the caret moves after the Find - a click in the document -
+the replace lands somewhere else and the mark stays where it was.
+
+```
+PROBE clicked away, then Replace: marker still on the OLD match = 1
+PROBE selection now 158, marker 85
+```
+
+Invisible in the app, because `OnReplace` calls `OnPatternChanged` and the
+re-highlight clears it. That is exactly the argument for fixing it anyway: the
+widget was relying on its caller to tidy up after it. Both replace paths now drop
+the mark themselves - what a replace leaves behind is a **replacement**, not a
+match. The check drives the click-away state specifically, since the ordinary
+path passes without the fix.
+
+**2 further mutations, 2 caught**: dropping the `ClearCurrentMatch()` call, and
+gutting the method.
+
+Two other review notes, both correct and both mine: the `SCI_INDICSETUNDER`
+comment cited alpha **200** where the code ships **160** - 200 was the measurement
+that produced the illegible block, and one edit changed both the flag and the
+value - and inserting `LocateMatch` above `HighlightMatches` left that function's
+doc comment stranded on the wrong declaration.
+
+**Self-test: 1,047 -> 1,072 checks on defaults, 1,051 -> 1,076 configured**
 (macOS). 10/10 core tests; `src/` untouched.
 
 Reproduce:
