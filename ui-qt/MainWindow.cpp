@@ -1361,7 +1361,17 @@ void CMainWindow::OnFind(bool bBackward)
 	if (!pEditor->FindNext(m_pFindBar->GetPattern(), options))
 	{
 		m_pFindBar->ShowStatus(tr("no matches"), true);
+		return;
 	}
+
+	// "2 of 7", not "7 matches". With every match highlighted, the count alone
+	// does not change as you walk them, so the bar looked identical on every
+	// press - which is exactly how this bug was reported.
+	const CEditorWidget::SMatchPosition position =
+		pEditor->LocateMatch(m_pFindBar->GetPattern(), options);
+	m_pFindBar->ShowStatus(position._Ordinal > 0
+		? tr("%1 of %2").arg(position._Ordinal).arg(position._Total)
+		: tr("%1 matches").arg(position._Total), false);
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -1562,6 +1572,7 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 	//----------------------------------------------------------------------
 	// Lexer, both themes, find, status bar - per tab
 	//----------------------------------------------------------------------
+	int nWalkChecked = 0;
 	int nFoldClicksChecked = 0;
 	int nBraceMatchesChecked = 0;
 	int nTagMatchFilesChecked = 0;
@@ -1615,6 +1626,77 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 			QStringLiteral("%1: FindNext located '%2'").arg(strName, strWord));
 		Require(pEditor->Send(SCI_GETSELECTIONEND) > pEditor->Send(SCI_GETSELECTIONSTART),
 			QStringLiteral("%1: the match is selected").arg(strName));
+		// WHICH match you are on, and that it LOOKS different from the rest.
+		// Positions were always right; what was wrong was that every match was
+		// drawn alike, so pressing Next appeared to do nothing. Counted, and the
+		// count asserted at the end, because a file with one match cannot
+		// exercise any of this and would pass by not running.
+		const int nMatches = pEditor->HighlightMatches(strWord, options);
+		if (nMatches >= 2)
+		{
+			++nWalkChecked;
+			pEditor->Send(SCI_GOTOPOS, 0);
+
+			pEditor->FindNext(strWord, options);
+			const sptr_t nFirst = pEditor->Send(SCI_GETSELECTIONSTART);
+			CEditorWidget::SMatchPosition first = pEditor->LocateMatch(strWord, options);
+			Require(first._Ordinal == 1 && first._Total == nMatches,
+				QStringLiteral("%1: the first match is 1 of %2, got %3 of %4")
+					.arg(strName).arg(nMatches).arg(first._Ordinal).arg(first._Total));
+
+			// The current indicator is ON it - and that is the whole fix, so it
+			// is asserted rather than assumed from the call having been made.
+			Require((pEditor->Send(SCI_INDICATORALLONFOR, static_cast<uptr_t>(nFirst))
+					& (1 << 16)) != 0,
+				QStringLiteral("%1: the current-match indicator marks the match")
+					.arg(strName));
+
+			pEditor->FindNext(strWord, options);
+			const sptr_t nSecond = pEditor->Send(SCI_GETSELECTIONSTART);
+			Require(nSecond != nFirst,
+				QStringLiteral("%1: Next MOVED, %2 -> %3").arg(strName)
+					.arg(static_cast<qlonglong>(nFirst)).arg(static_cast<qlonglong>(nSecond)));
+			CEditorWidget::SMatchPosition second = pEditor->LocateMatch(strWord, options);
+			Require(second._Ordinal == 2,
+				QStringLiteral("%1: and says 2 of %2, got %3")
+					.arg(strName).arg(nMatches).arg(second._Ordinal));
+
+			// AND THE OLD ONE IS RELEASED. Filling without clearing would leave
+			// every visited match looking current, which is the same defect
+			// wearing a different hat.
+			Require((pEditor->Send(SCI_INDICATORALLONFOR, static_cast<uptr_t>(nFirst))
+					& (1 << 16)) == 0,
+				QStringLiteral("%1: the previous match is no longer marked current")
+					.arg(strName));
+			pEditor->ClearHighlight();
+			Require((pEditor->Send(SCI_INDICATORALLONFOR, static_cast<uptr_t>(nSecond))
+					& (1 << 16)) == 0,
+				QStringLiteral("%1: ClearHighlight clears the current marker too")
+					.arg(strName));
+
+			// A REPLACE LEAVES NO CURRENT MATCH, in the one state where it
+			// otherwise would: the caret moved after the Find, so the replace
+			// lands somewhere else and the mark is not deleted along with the
+			// text it was on. Found in review; measured at marker 85 /
+			// selection 158 before the fix.
+			pEditor->Send(SCI_GOTOPOS, 0);
+			pEditor->HighlightMatches(strWord, options);
+			pEditor->FindNext(strWord, options);
+			const sptr_t nMarked = pEditor->Send(SCI_GETSELECTIONSTART);
+			pEditor->Send(SCI_GOTOPOS, nMarked + strWord.size());
+			Require(pEditor->ReplaceNext(strWord, strWord + QStringLiteral("_x"), options),
+				QStringLiteral("%1: the replace ran").arg(strName));
+			Require((pEditor->Send(SCI_INDICATORALLONFOR, static_cast<uptr_t>(nMarked))
+					& (1 << 16)) == 0,
+				QStringLiteral("%1: a replace elsewhere drops the old current mark")
+					.arg(strName));
+			// The document is shared with every later check on this tab, so put
+			// it back rather than leaving a "_x" behind.
+			pEditor->Send(SCI_UNDO);
+			pEditor->Send(SCI_SETSAVEPOINT);
+			pEditor->ClearHighlight();
+		}
+
 		const QString strAbsent = QStringLiteral("zzq_not_in_this_file_zzq");
 		Require(pEditor->HighlightMatches(strAbsent, options) == 0,
 			QStringLiteral("%1: a pattern that is not there matches nothing").arg(strName));
@@ -4986,6 +5068,11 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 		}
 	}
 
+	// The corpus has to REACH the interesting path. A suite where every file had
+	// exactly one match would pass every check above by never running one.
+	Require(nWalkChecked > 0,
+		QStringLiteral("at least one file had 2+ matches to walk (%1 did)")
+			.arg(nWalkChecked));
 	Require(nFoldClicksChecked > 0,
 		QStringLiteral("the fold-margin click was exercised on at least one file"));
 	Require(nBraceMatchesChecked > 0,
@@ -5072,6 +5159,11 @@ int CMainWindow::RenderScreenshots(const QStringList& files, const QString& strD
 		// bar would show nothing of this feature at all.
 		m_pFindBar->SetRegex(true);
 		OnPatternChanged();
+		// AND STANDING ON A MATCH, so the picture shows the difference between
+		// the one you are on and the rest. Without this the shot renders the
+		// highlight-all state only - which is the state in which this looked
+		// correct while being unusable.
+		OnFind(false);
 		// And the goto bar below it, for the same reason: D10 asks for a
 		// screenshot of the shallow visible tail, and a feature that never
 		// appears in one has not been shown to anybody. Both bars at once is

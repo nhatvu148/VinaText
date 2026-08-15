@@ -40,6 +40,19 @@ namespace
 	// containers; 8 is the first of those.
 	const int FIND_INDICATOR = 8;
 
+	// THE MATCH YOU ARE STANDING ON, drawn differently from the rest. Without it
+	// the find indicator (alpha 80) paints over the selection (alpha 60) on the
+	// current match, so every match looks alike and pressing Next appears to do
+	// nothing - measured by rendering the same file with match 1 and match 2
+	// current and finding no visible difference. See doc/PORTING.md 6t.
+	//
+	// 16, NOT 9. Scintilla reserves 8..31 for containers, but 9..15 already have
+	// meanings in src/EditorCommonDef.h:47-53 - BRACEMATCH, TAGMATCH, TAGATTR,
+	// HIGHLIGHT_PYTHON, HIGHLIGHT_GENERAL, URL_HOTSPOT, SPELL_CHECKER. Taking one
+	// of those because it is free HERE would be the recurring bug in this port:
+	// the name of a thing is not the name of the thing it uses.
+	const int FIND_CURRENT_INDICATOR = 16;
+
 	// src/EditorCommonDef.h:48-52, which numbers them from INDIC_CONTAINER (8).
 	// Kept at the same numbers as the MFC so the two frontends stay comparable
 	// when reading a document's indicator state.
@@ -183,6 +196,22 @@ CEditorWidget::CEditorWidget(const CEditorData& data, QWidget* pParent)
 	Send(SCI_SETINDICATORCURRENT, FIND_INDICATOR);
 	Send(SCI_INDICSETSTYLE, FIND_INDICATOR, INDIC_ROUNDBOX);
 	Send(SCI_INDICSETALPHA, FIND_INDICATOR, 80);
+
+	// The current match: the same colour, but a solid outline and a much heavier
+	// fill. Same hue on purpose - it is the same search - and the weight is what
+	// separates "this one" from "one of these". A SECOND colour would need a
+	// theme key, and neither theme file has one.
+	Send(SCI_INDICSETSTYLE, FIND_CURRENT_INDICATOR, INDIC_ROUNDBOX);
+	Send(SCI_INDICSETALPHA, FIND_CURRENT_INDICATOR, 160);
+	Send(SCI_INDICSETOUTLINEALPHA, FIND_CURRENT_INDICATOR, 255);
+	// UNDER THE TEXT. Indicators draw OVER it by default, which the find
+	// indicator survives at alpha 80 and a heavier fill does not: rendered at
+	// alpha 200 OVER the text, the current match became a solid block with the
+	// word no longer legible inside it. A marker that hides the thing it marks is
+	// worse than none. Two changes came out of that one picture - this flag, and
+	// dropping the fill to the 160 above - so the 200 is what was measured, not
+	// what ships.
+	Send(SCI_INDICSETUNDER, FIND_CURRENT_INDICATOR, 1);
 
 	// The margin is sized for the line count, so it has to follow it. Without
 	// this, a document that grows past 999 lines clips its own line numbers until
@@ -1070,6 +1099,8 @@ void CEditorWidget::ApplyEditorStyles(const Core::CEditorTheme& theme)
 	if (theme.ResolveRole("editorIndicatorColor", colour))
 	{
 		Send(SCI_INDICSETFORE, FIND_INDICATOR, ToScintillaColour(colour));
+		// The same colour, so a theme change cannot leave the two disagreeing.
+		Send(SCI_INDICSETFORE, FIND_CURRENT_INDICATOR, ToScintillaColour(colour));
 	}
 
 	Core::SColor margin, lineNumber;
@@ -1908,9 +1939,11 @@ bool CEditorWidget::FindNext(const QString& strPattern, const SFindOptions& opti
 			static_cast<uptr_t>(pattern.size()), reinterpret_cast<sptr_t>(pattern.constData()));
 		if (nFound >= 0)
 		{
-			Send(SCI_SETSEL, static_cast<uptr_t>(Send(SCI_GETTARGETSTART)),
-				Send(SCI_GETTARGETEND));
+			const sptr_t nStart = Send(SCI_GETTARGETSTART);
+			const sptr_t nEnd = Send(SCI_GETTARGETEND);
+			Send(SCI_SETSEL, static_cast<uptr_t>(nStart), nEnd);
 			Send(SCI_SCROLLCARET);
+			MarkCurrentMatch(nStart, nEnd);
 			return true;
 		}
 	}
@@ -1974,6 +2007,11 @@ bool CEditorWidget::ReplaceNext(const QString& strPattern, const QString& strRep
 	// changed.
 	Send(SCI_SETSEL, static_cast<uptr_t>(nFound), nFound + nReplaced);
 	Send(SCI_SCROLLCARET);
+	// AND NO CURRENT MATCH. Usually this is moot - the replaced characters ARE
+	// the marked ones, so the mark dies with them - but not if the caret moved
+	// after the last Find. Then the replace lands elsewhere and the mark is left
+	// claiming to be where you are. Measured: marker at 85, selection at 158.
+	ClearCurrentMatch();
 	return true;
 }
 
@@ -2057,6 +2095,9 @@ int CEditorWidget::ReplaceAll(const QString& strPattern, const QString& strRepla
 	// moving the caret scrolls.
 	Send(SCI_GOTOLINE, static_cast<uptr_t>(nCaretLine));
 	Send(SCI_SETFIRSTVISIBLELINE, static_cast<uptr_t>(nFirstVisible));
+	// Same reason as ReplaceNext: after this the caret is back where it started
+	// and nothing under it is a match, so any current mark is a leftover.
+	ClearCurrentMatch();
 	return nCount;
 }
 
@@ -2094,8 +2135,69 @@ int CEditorWidget::HighlightMatches(const QString& strPattern, const SFindOption
 	return nCount;
 }
 
+void CEditorWidget::MarkCurrentMatch(sptr_t nStart, sptr_t nEnd)
+{
+	Send(SCI_SETINDICATORCURRENT, FIND_CURRENT_INDICATOR);
+	Send(SCI_INDICATORCLEARRANGE, 0, Send(SCI_GETLENGTH));
+	// A zero-length match - "^" under a regex - has nothing to fill, and asking
+	// Scintilla to fill zero characters marks nothing. The caret is the only
+	// indication there, which is what it is.
+	if (nEnd > nStart)
+	{
+		Send(SCI_INDICATORFILLRANGE, static_cast<uptr_t>(nStart), nEnd - nStart);
+	}
+}
+
+void CEditorWidget::ClearCurrentMatch()
+{
+	Send(SCI_SETINDICATORCURRENT, FIND_CURRENT_INDICATOR);
+	Send(SCI_INDICATORCLEARRANGE, 0, Send(SCI_GETLENGTH));
+}
+
 void CEditorWidget::ClearHighlight()
 {
-	Send(SCI_SETINDICATORCURRENT, FIND_INDICATOR);
-	Send(SCI_INDICATORCLEARRANGE, 0, Send(SCI_GETLENGTH));
+	for (int nIndicator : { FIND_INDICATOR, FIND_CURRENT_INDICATOR })
+	{
+		Send(SCI_SETINDICATORCURRENT, nIndicator);
+		Send(SCI_INDICATORCLEARRANGE, 0, Send(SCI_GETLENGTH));
+	}
+}
+
+CEditorWidget::SMatchPosition CEditorWidget::LocateMatch(const QString& strPattern,
+	const SFindOptions& options)
+{
+	SMatchPosition position;
+	if (strPattern.isEmpty())
+	{
+		return position;
+	}
+	// ONE PASS, no cache. A cached count goes stale the moment the document is
+	// edited, and the wrong "3 of 7" is worse than none - it reads as a fact.
+	const QByteArray pattern = strPattern.toUtf8();
+	const sptr_t nDocEnd = Send(SCI_GETLENGTH);
+	const sptr_t nSelection = Send(SCI_GETSELECTIONSTART);
+	Send(SCI_SETSEARCHFLAGS, static_cast<uptr_t>(ToSearchFlags(options)));
+
+	sptr_t nStart = 0;
+	while (nStart <= nDocEnd)
+	{
+		Send(SCI_SETTARGETSTART, static_cast<uptr_t>(nStart), 0);
+		Send(SCI_SETTARGETEND, static_cast<uptr_t>(nDocEnd), 0);
+		if (Send(SCI_SEARCHINTARGET, static_cast<uptr_t>(pattern.size()),
+				reinterpret_cast<sptr_t>(pattern.constData())) < 0)
+		{
+			break;
+		}
+		const sptr_t nMatchStart = Send(SCI_GETTARGETSTART);
+		const sptr_t nMatchEnd = Send(SCI_GETTARGETEND);
+		++position._Total;
+		if (nMatchStart == nSelection)
+		{
+			position._Ordinal = position._Total;
+		}
+		// Same step-past-zero-length guard as HighlightMatches, and for the same
+		// reason: without it a regex like "^" never terminates.
+		nStart = (nMatchEnd > nMatchStart) ? nMatchEnd : nMatchStart + 1;
+	}
+	return position;
 }

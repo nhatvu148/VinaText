@@ -3293,3 +3293,171 @@ lupdate ui-qt/*.cpp ui-qt/*.h -ts /tmp/x.ts -no-obsolete | grep Found
 { grep -oE 'Tr\("([^"\\]|\\.)*"\)' ui-qt/LineTransforms.cpp
   grep -oE '^\t\{ "([^"\\]|\\.)*"' ui-qt/LineTransforms.cpp; } | sort -u | wc -l
 ```
+
+## 6t. The match you are standing on
+
+**Reported from the UI, not by any check: "I click the up/down arrows to jump
+between results but see no difference."** The report was right, and the diagnosis
+was not the obvious one.
+
+### The navigation was never broken
+
+Measured first, on the reporter's own pattern:
+
+```
+PROBE highlight=2
+PROBE next#0 ok=1 sel=[470,479] line=16
+PROBE next#1 ok=1 sel=[488,497] line=18
+PROBE next#2 ok=1 sel=[470,479] line=16     <- wraps
+```
+
+`FindNext` walked the document correctly and always had. **The drawing was the
+bug.** Rendering the same file twice - match 1 current, then match 2 - showed
+nothing visibly different except the status bar's `Ln 17` / `Ln 19`.
+
+The cause is two Scintilla layers fighting, and the stronger one wins:
+
+| layer | applies to | alpha |
+|---|---|---|
+| `FIND_INDICATOR`, `INDIC_ROUNDBOX` | **every** match | 80 |
+| selection, `SCI_SETSELBACK` | the current match | 60 |
+
+The indicator paints over the selection, so the match you are on looks like the
+ones you are not. **Highlight-all swallowed the current-match indication** - a
+feature added in the port, breaking a distinction the MFC gets for free by not
+having it.
+
+**Not one of 1,047 checks caught this**, and the reason is worth keeping: every
+find check asserted on *positions*, which were right the whole time. A check that
+never looks at what is drawn cannot see a drawing bug.
+
+### The fix, and the two things it got wrong first
+
+A second indicator marks the current match: same colour, heavier fill, solid
+outline. Same hue on purpose - it is the same search - with weight separating
+"this one" from "one of these".
+
+- **Indicator 16, not 9.** Scintilla reserves 8..31 for containers, so 9 is free
+  *here* - and is `INDIC_BRACEMATCH` in `src/EditorCommonDef.h:47`. Taking it
+  would have been this port's recurring bug once more: the name of a thing is not
+  the name of the thing it uses. 9..15 all have MFC meanings; 16 is the first
+  that does not.
+- **Under the text, not over it.** Indicators draw over the text by default,
+  which survives alpha 80 and does not survive this one. Rendered at 200 over the
+  text, the current match became a solid block with the word no longer legible
+  inside it - a marker hiding the thing it marks. `SCI_INDICSETUNDER` fixes it;
+  found by looking at the picture, not by reasoning about the constant.
+
+### And the bar now says which one
+
+`2 matches` never changed as you walked them, so the status was identical on
+every press - which is exactly how the bug was reported. It reads **`1 of 2`**
+now. Ordinal and total come from **one** walk of the document (`LocateMatch`),
+never a cached count: a stale `3 of 7` reads as a fact and is worse than no
+number at all.
+
+### Checks
+
+Four new assertions per file with 2+ matches, counted so a one-match corpus
+cannot pass them by never running them:
+
+- the first match reports `1 of N`
+- the current indicator is **on** it
+- Next moves to a different position, reporting `2 of N`
+- the previous match is **released** - filling without clearing would leave every
+  visited match looking current, the same defect wearing a different hat
+- `ClearHighlight` clears both indicators
+
+**4 mutations, 4 caught**: never mark the current match; fill without clearing;
+ordinal off by one; `ClearHighlight` forgetting the new indicator.
+
+The screenshot now renders **standing on a match** rather than in the
+highlight-all state - the state in which this looked correct while being
+unusable.
+
+### Review: a replace can leave the mark behind, but not the way it was described
+
+The finding said `ReplaceNext`/`ReplaceAll` "leave a current-match indicator
+pointing at a stale range". **Measured, the usual case cannot happen:**
+
+```
+PROBE after FindNext          current=1
+PROBE after RAW ReplaceNext   current=0     <- the marked characters ARE the replaced ones
+```
+
+`SCI_REPLACETARGET` deletes exactly the range the mark was on, so the mark dies
+with the text. **But there is one state where it survives, and the finding is
+right about it:** if the caret moves after the Find - a click in the document -
+the replace lands somewhere else and the mark stays where it was.
+
+```
+PROBE clicked away, then Replace: marker still on the OLD match = 1
+PROBE selection now 158, marker 85
+```
+
+Invisible in the app, because `OnReplace` calls `OnPatternChanged` and the
+re-highlight clears it. That is exactly the argument for fixing it anyway: the
+widget was relying on its caller to tidy up after it. Both replace paths now drop
+the mark themselves - what a replace leaves behind is a **replacement**, not a
+match. The check drives the click-away state specifically, since the ordinary
+path passes without the fix.
+
+**2 further mutations, 2 caught**: dropping the `ClearCurrentMatch()` call, and
+gutting the method.
+
+Two other review notes, both correct and both mine: the `SCI_INDICSETUNDER`
+comment cited alpha **200** where the code ships **160** - 200 was the measurement
+that produced the illegible block, and one edit changed both the flag and the
+value - and inserting `LocateMatch` above `HighlightMatches` left that function's
+doc comment stranded on the wrong declaration.
+
+### Review: the second walk, measured and kept
+
+A later finding called `OnFind` "two full-document scans per keypress" and asked
+for the ordinal to come out of `FindNext`. Measured on a **6.6 MB** file with
+**32,400** matches:
+
+```
+HighlightMatches 24.21 ms | FindNext 0.140 ms | LocateMatch 19.03 ms (1 of 32400)
+```
+
+Three things that changes:
+
+- **`FindNext` is not a full scan.** 0.140 ms - it stops at the first match past
+  the caret. There is one walk, not two.
+- **It is not per keypress.** `LocateMatch` runs on a Next press.
+  `HighlightMatches` is what runs per keystroke, through `textChanged` ->
+  `OnPatternChanged`, and at **24 ms it is the larger of the two** - it predates
+  this change and nobody has felt it.
+- **Neither suggested fix removes the work.** `FindNext` cannot "return the
+  ordinal it discovers", because it searches from the caret and never learns how
+  many matches precede it; and the match range is already known - what costs is
+  counting what is *before* it, which is a walk from position 0 by definition.
+
+The only alternative that would remove it is caching match positions in
+`HighlightMatches` - which reintroduces exactly the staleness `LocateMatch` was
+written to avoid. A wrong `3 of 7` reads as a fact.
+
+Kept as it is, with the numbers recorded so a future change has a baseline rather
+than an opinion.
+
+**Self-test: 1,047 -> 1,072 checks on defaults, 1,051 -> 1,076 configured**
+(macOS). 10/10 core tests; `src/` untouched.
+
+Reproduce:
+
+```bash
+# 9..15 are taken; 16 is the first container indicator that is not
+grep -nE "INDIC_(BRACEMATCH|TAGMATCH|TAGATTR|HIGHLIGHT_|URL_HOTSPOT|SPELL)" \
+  src/EditorCommonDef.h
+
+# the two layers, and which one is heavier
+grep -nE "INDICSETALPHA, FIND_INDICATOR|SETSELALPHA" ui-qt/EditorWidget.cpp
+
+# the walk is asserted, and the corpus is asserted to reach it
+QT_QPA_PLATFORM=offscreen ./qtbuild/ui-qt/vinatext-qt --selftest \
+  core/LanguageData.cpp tools/extract_language_data.py \
+  qtbuild/fixtures/crlf-bom.cpp qtbuild/fixtures/utf16.py \
+  qtbuild/fixtures/latin1.md qtbuild/fixtures/no-trailing-newline.py \
+  qtbuild/fixtures/tags.xml qtbuild/fixtures/urls.md 2>&1 | tail -1
+```
