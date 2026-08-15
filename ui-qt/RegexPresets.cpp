@@ -8,6 +8,14 @@
 
 #include "RegexPresets.h"
 
+// FOR QT_TRANSLATE_NOOP, which arrives transitively through <QString> today and
+// should not have to. Review asked for <QCoreApplication>; the macro is not
+// defined there - it lives in qttranslation.h, which qglobal.h includes, so
+// <QtGlobal> is the portable home. Measured: a TU with <QtGlobal> compiles, one
+// with nothing does not. NOT <QtTranslation>, the header's own public name -
+// that split is newer than the Qt 6.4 that Ubuntu's qt6-base-dev gives Linux CI.
+#include <QtGlobal>
+
 // QT_TRANSLATE_NOOP MARKS A LABEL FOR lupdate WITHOUT TRANSLATING IT HERE. The
 // table is built once and lives for the process; the lookup happens where the
 // menu is filled, or a language change would never reach it. The macro expands

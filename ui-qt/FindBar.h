@@ -19,6 +19,7 @@
 
 class QCheckBox;
 class QLabel;
+class QMenu;
 class QLineEdit;
 class QToolButton;
 class QWidget;
@@ -54,6 +55,11 @@ public:
 	// For the self-test, which cannot open a menu or click an item.
 	bool IsRegexHelpVisible() const;
 	bool InsertPresetForTest(int nIndex);
+
+	// The preset menu, for the screenshot - a popup cannot be opened by the
+	// self-test any other way, and a list nobody can see in a picture is the
+	// thing this feature is.
+	QMenu* PresetMenu() const;
 	void TypePatternForTest(const QString& strText);
 
 signals:

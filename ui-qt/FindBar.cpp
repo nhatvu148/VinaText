@@ -66,6 +66,15 @@ CFindBar::CFindBar(QWidget* pParent)
 		for (const RegexPresets::SPreset& preset : RegexPresets::All())
 		{
 			const QString strPattern = QString::fromUtf8(preset._Pattern);
+			// THE TAB PUTS THE PATTERN IN QMenu's SHORTCUT COLUMN. That is what
+			// a tab in an action's text means to Qt, and review flagged it as
+			// looking like a keybinding. Kept deliberately, on the rendering
+			// rather than on taste: with 25 entries the tab gives an aligned
+			// second column and " - " gives a ragged one that is markedly harder
+			// to scan (both rendered; see doc/PORTING.md 6s). Nothing in this
+			// menu carries a shortcut, so the column is otherwise unused - if
+			// one is ever added here, this has to change, because then the two
+			// would be competing for the same space.
 			pMenu->addAction(QStringLiteral("%1\t%2")
 					.arg(QCoreApplication::translate("RegexPresets", preset._Label),
 						strPattern), this, [this, strPattern]
@@ -219,6 +228,11 @@ void CFindBar::Activate(const QString& strInitial, bool bReplace)
 	// field would mean tabbing backwards to start.
 	m_pPattern->setFocus();
 	m_pPattern->selectAll();
+}
+
+QMenu* CFindBar::PresetMenu() const
+{
+	return m_pRegexHelp->menu();
 }
 
 bool CFindBar::IsRegexHelpVisible() const

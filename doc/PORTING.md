@@ -3181,6 +3181,54 @@ infrastructure at all** — no `.ts` files, no `TRANSLATIONS` in CMake, no
 Recorded here so it is a known gap with a number against it rather than a
 surprise.
 
+### Second review: a wrong header, and a tab that lands in the shortcut column
+
+**The include finding was right to raise and wrong in every particular.** It
+asked for `<QCoreApplication>` on the grounds that `QT_TRANSLATE_NOOP` is defined
+there and is not reachable transitively. Measured:
+
+```
+$ grep -rl "define QT_TRANSLATE_NOOP" <Qt>/QtCore/Headers/*.h
+qttranslation.h                     # not qcoreapplication.h
+
+<QtGlobal>  + QT_TRANSLATE_NOOP -> compiles      # qglobal.h includes qttranslation.h
+<QString>   + QT_TRANSLATE_NOOP -> compiles      # so it IS reachable transitively
+nothing     + QT_TRANSLATE_NOOP -> fails
+```
+
+It compiles on macOS **and** Linux CI, so "not available transitively" is simply
+untrue; the reviewer inferred it from `FindBar.cpp` needing `<QCoreApplication>`,
+which that file needs for the **class** `QCoreApplication::translate`, not for the
+macro. But the underlying advice — do not lean on a transitive include for a
+symbol you name — is right, so the include is added. **`<QtGlobal>`, not the
+suggested header, and not `<QtTranslation>` either**: the latter is the macro's
+own public name and would have been the tidiest answer, but that header split is
+newer than the **Qt 6.4** Ubuntu's `qt6-base-dev` gives Linux CI, so it would
+have broken the build the fix was meant to protect.
+
+**The tab finding is correct, and is kept anyway — on the rendering, not on
+taste.** A tab in a `QAction`'s text puts what follows into `QMenu`'s shortcut
+column, so the patterns render where a keybinding would. Both versions were
+rendered before deciding:
+
+| separator | result |
+|---|---|
+| `\t` | an aligned second column; 25 patterns scan straight down |
+| `" - "` | ragged - every pattern starts at a different x, following the label's length |
+
+The tab wins clearly for a list this long, nothing in this menu carries a
+shortcut, and none of these strings reads like a key name. **The condition is
+recorded in the code**: if an action here ever gains a real shortcut, the two
+would compete for the same column and this has to change.
+
+**The menu is now a screenshot of its own** (`vinatext-regex-presets.png`),
+because it is a popup and cannot appear in the main shot - the same reason the
+window manager has one. That picture is also the evidence above. The popup is
+hidden again afterwards and **that is checked, not assumed**: left up it would
+sit on top of the editor in both theme shots, which would still be written and
+still "succeed". Mutation: comment out the `hide()` and the run reports
+`the preset popup is still up`.
+
 ### Phase 5's dialog scope, closed
 
 **14 kept → 12 ported or superseded, 2 deferred with cause.** The brief's *kept*

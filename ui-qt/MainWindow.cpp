@@ -5118,6 +5118,43 @@ int CMainWindow::RenderScreenshots(const QStringList& files, const QString& strD
 	}
 
 	int nFailures = 0;
+
+	// The preset list, in its own picture, for the same reason: it is a POPUP,
+	// so it cannot appear in the main shot either, and the whole feature is the
+	// list. It is also the evidence for a review finding - the pattern sits in
+	// QMenu's shortcut column because the label carries a tab, and the two
+	// renderings were compared here before keeping it (PORTING.md 6s).
+	{
+		m_pFindBar->Activate(QString());
+		m_pFindBar->SetRegex(true);
+		QMenu* pPresets = m_pFindBar->PresetMenu();
+		pPresets->popup(QPoint(0, 0));
+		QApplication::processEvents();
+		const QString strPresets = QStringLiteral("%1/vinatext-regex-presets.png")
+			.arg(strDirectory);
+		if (pPresets->grab().save(strPresets))
+		{
+			qInfo("wrote %s", qPrintable(strPresets));
+		}
+		else
+		{
+			qWarning("could not write %s", qPrintable(strPresets));
+		}
+		// Hidden again before the main shots: a popup left open would sit on top
+		// of the window in both of them.
+		pPresets->hide();
+		QApplication::processEvents();
+		// CHECKED, not assumed. A popup still up would sit on top of the window
+		// in both theme shots below, and the shots would still be "written" -
+		// this is the failure that reports itself instead of shipping a picture
+		// of a menu covering the editor.
+		if (pPresets->isVisible())
+		{
+			qWarning("the preset popup is still up; the theme shots would be wrong");
+			++nFailures;
+		}
+	}
+
 	const struct { EEditorTheme _Theme; const char* _Name; } shots[] = {
 		{ EEditorTheme::Light, "light" },
 		{ EEditorTheme::Dark, "dark" },
