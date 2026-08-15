@@ -234,6 +234,17 @@ public:
 
 	// Marks every match with an indicator and returns how many there are - what
 	// the find bar counts. Leaves the caret and the selection alone.
+	// Where the current selection sits in the match list: _Ordinal is 1-based and
+	// 0 when the selection is not a match, _Total is how many there are. Both
+	// come from ONE walk of the document, so they cannot disagree with each
+	// other the way a count and a cached index would.
+	struct SMatchPosition
+	{
+		int _Ordinal = 0;
+		int _Total = 0;
+	};
+	SMatchPosition LocateMatch(const QString& strPattern, const SFindOptions& options);
+
 	int HighlightMatches(const QString& strPattern, const SFindOptions& options);
 	void ClearHighlight();
 
@@ -277,6 +288,10 @@ private slots:
 	void OnUpdateUi(Scintilla::Update updated);
 
 private:
+	// Fills the current-match indicator over one range, clearing wherever it was
+	// before. Private: it is a consequence of a find, never a thing to ask for.
+	void MarkCurrentMatch(sptr_t nStart, sptr_t nEnd);
+
 	// Highlights the brace under the caret and its partner, or clears both when
 	// there is no match. Transcribes CEditorCtrl::DoBraceMatchHighlight.
 	void UpdateBraceMatch();
