@@ -3020,3 +3020,276 @@ Bucket assignment is a judgement call per file, driven by the class each `.cpp` 
 It is not mechanically derivable from the counts alone — treat the table as a proposal to
 review, not an oracle.
 
+## 6s. Find and Replace — what was salvaged, and what was deferred with cause
+
+The last two dialogs on D10's *kept* list. **Neither is ported, and one small
+piece of one of them is.** That is a scope decision, so it is recorded with the
+measurement it rests on rather than left as a gap.
+
+### The dialogs are 1,881 lines, and the find bar already does the part an editor needs
+
+`ui-qt` has had a find bar since M1 — pattern, replace row, match case, whole
+word, regex, wrap, count, replace-all. Listing what `FindDlg` (899) and
+`ReplaceDlg` (982) add **over** that is the whole argument:
+
+| adds | needs |
+|---|---|
+| Search Scope, Search All Files, File Filter, Specific Path, Exclude Sub Folder | walking a directory tree |
+| results grouped by file / by path, jump to a hit | **`SearchResultWindow`**, **`PathResultWindow`** |
+| the regex preset list | nothing |
+
+The first two rows are **find-in-files**, and its two result panes are already on
+D10's deferred list — deferred *before* this decision, for the IDE-half reasons in
+§4 D10. Porting the dialogs would mean building two panes D10 defers in order to
+serve a dialog D10 keeps. The list is what does not depend on any of it, so the
+list is what shipped: **`ui-qt/RegexPresets.{h,cpp}`, 111 lines, in the find bar
+behind the regex checkbox.**
+
+D10's own rule is the one applied here — *a control exists because a behaviour
+exists* (§6r, PR #45) — and it reaches the same verdict about find-in-files that
+it reached about the compiler settings page.
+
+### The presets were measured against the engine that has to run them, and a third of them do not
+
+Both frontends search with plain `SCFIND_REGEXP` — **Scintilla's basic engine**,
+not PCRE. The MFC's 27 entries were written against .NET syntax and never checked
+against it. Every one was run through the engine, each against a string chosen to
+satisfy **its own label** — so a zero means the engine cannot run the pattern, not
+that the text happened to lack a match:
+
+```
+MFC PRESETS: 12 of 27 find NOTHING in a string built for them
+```
+
+Twelve. The constructs, probed one at a time:
+
+```
+PROBE \b        on hello -> 0     PROBE \<        on hello  -> 1
+PROBE dog|cat   on a dog -> 0     PROBE \(dog\)   on a dog  -> 1
+PROBE \d{3}     on x123x -> 0     PROBE \d\d\d    on x123x  -> 1
+PROBE (?=\r?$)  on abc   -> 0     PROBE $         on abc    -> 1
+PROBE (?<pet>dog)  on a dog -> 0  PROBE \k<pet>   on dogdog -> 0
+PROBE [\w-[0-9_]] on a1   -> 0    PROBE \1        on dogdog -> 0
+```
+
+No `\b`, no alternation, no `{n}`, no lookahead, no named groups in any spelling,
+no .NET character-class subtraction, and a bare `\1` with no group before it. So
+of the 27:
+
+- **3 dropped as unportable** — `(?<pet>…)` and `\k<pet>` (named groups), and
+  *"Match a line break"*, `\r?\n`: Scintilla's regex is **line-oriented**, a
+  search never spans one, so no pattern for a line break can match in **either**
+  frontend. That entry has never worked on Windows either.
+- **1 split into 2** — *"Match at beginning or end of word"* offered a single `\b`.
+  The engine has `\<` and `\>`, which are different patterns, so it becomes two
+  entries that each say which end they mean.
+- **10 rewritten**, because the pattern could not run or did not do what its own
+  label said. The plainest is *"not in the set 'abc'"*, which shipped `^[abc]` —
+  start-of-line, not negation — and is one of the few that **runs**, so it fails
+  silently rather than finding nothing. *"Space or Tab"* shipped `[\t]`, tab only.
+  *"Match a hexadecimal number"* shipped the **C-identifier pattern**, the same
+  string as the entry above it, copied.
+- **13 kept verbatim.** 13 + 12 = 25 offered, from 27.
+
+### The check that makes this stay true
+
+**Every preset carries a sample it must match**, and the self-test runs all 25
+through `HighlightMatches` — the editor's own search, the same call the find bar
+makes. Offering a pattern is a promise that it works *here*; a preset library
+checked against a spec instead of against the engine is exactly how the MFC ended
+up shipping seven broken entries.
+
+The check names **every** failing preset rather than stopping at the first, so a
+mutation reports `1 did not: Start of a word (\b)` and a bad merge reports all of
+them at once.
+
+### Insert, not overwrite — and the one case where overwrite is right
+
+`ComboboxRegexHelper::SetSearchFields` calls `SetWindowTextW`: picking a preset
+**replaces the entire search field**, discarding whatever was being typed. These
+are building blocks — someone reaching for one usually has half a pattern already
+— so the Qt version calls `QLineEdit::insert`, at the caret.
+
+That is not the same as never replacing. `Activate` prefills the box from the
+selection and `selectAll()`s it, so typing replaces; a preset picked in that state
+replaces too, which is what `insert` does with a selection and what every editor
+does with a paste. **Both halves are pinned by checks**, because each looks like a
+bug from the other's side. My first version of the first check failed on correct
+code for exactly that reason: it used `Activate` to set up "already typed", which
+is the one state where replacing is right.
+
+The button is hidden in plain-text mode. A menu of patterns that do nothing to a
+literal search is worse than no menu — and it is in regex mode in the screenshot
+for the same reason, since a control that never appears in one has not been shown
+to anybody.
+
+**4 mutations, 4 caught** — `\<` back to `\b` (1 preset named), the
+checkbox-to-button connect dropped, `insert` back to the MFC's `setText`, and a
+`deselect()` that would make it never replace.
+
+The extraction fix is checked by `lupdate` rather than by a self-test assertion:
+it is a build-tool behaviour, and a check asserting on `QT_TRANSLATE_NOOP` would
+only restate the source.
+
+**Self-test: 1,011 → 1,047 checks on defaults, 1,015 → 1,051 configured** (macOS;
+counts are platform-dependent). 10/10 core tests; `src/` untouched.
+
+### Review: the labels were invisible to the translator, and so are 53 others
+
+VinaText **ships a translation** — `src/LocalizationHandler.cpp` loads
+`VinaText_Language_VN.mo` and keys it on the English source string, exactly as
+Qt's `tr()` does. So "extractable" is not hypothetical here.
+
+`tr(preset._Label)` passes a runtime `const char*`. `lupdate` is a parser, not a
+compiler: it can only see string **literals** at the call. Measured over
+`ui-qt/`:
+
+```
+before: Found 156 source text(s)     # and none of the 25 presets
+after:  Found 181 source text(s)     # 25 new, all under context RegexPresets
+```
+
+**The first fix silently did nothing, and only measuring caught it.** The obvious
+tidy version is a local macro:
+
+```cpp
+#define PRESET(label) QT_TRANSLATE_NOOP("RegexPresets", label)
+```
+
+It reads far better, it compiles, and it extracts **nothing** — 156 before, 156
+after — because `lupdate` does not expand user macros. `QT_TRANSLATE_NOOP` is
+spelled out at all 25 entries for that reason, and the comment there says so, or
+someone will tidy it back.
+
+**And that is exactly what already happened to the transforms.**
+`LineTransforms.cpp` defines its own helper:
+
+```cpp
+QString Tr(const char* sz) { return QCoreApplication::translate("LineTransforms", sz); }
+```
+
+`lupdate` cannot follow it either, so **53 strings** — 36 prompt strings and 17
+menu labels — are invisible to the extractor today. That is a pre-existing gap
+from §6p, not something this change introduced, and it is left alone here rather
+than quietly widening a PR about the find bar. It is small and mechanical: mark
+the literals with `QT_TRANSLATE_NOOP("LineTransforms", …)` inside the `Tr(…)`
+calls, which changes nothing at run time.
+
+**The prerequisite is bigger than either.** `ui-qt/` has **no translation
+infrastructure at all** — no `.ts` files, no `TRANSLATIONS` in CMake, no
+`QTranslator` installed — so nothing is translated regardless of what extracts.
+Recorded here so it is a known gap with a number against it rather than a
+surprise.
+
+### Second review: a wrong header, and a tab that lands in the shortcut column
+
+**The include finding was right to raise and wrong in every particular.** It
+asked for `<QCoreApplication>` on the grounds that `QT_TRANSLATE_NOOP` is defined
+there and is not reachable transitively. Measured:
+
+```
+$ grep -rl "define QT_TRANSLATE_NOOP" <Qt>/QtCore/Headers/*.h
+qttranslation.h                     # not qcoreapplication.h
+
+<QtGlobal>  + QT_TRANSLATE_NOOP -> compiles      # qglobal.h includes qttranslation.h
+<QString>   + QT_TRANSLATE_NOOP -> compiles      # so it IS reachable transitively
+nothing     + QT_TRANSLATE_NOOP -> fails
+```
+
+It compiles on macOS **and** Linux CI, so "not available transitively" is simply
+untrue; the reviewer inferred it from `FindBar.cpp` needing `<QCoreApplication>`,
+which that file needs for the **class** `QCoreApplication::translate`, not for the
+macro. But the underlying advice — do not lean on a transitive include for a
+symbol you name — is right, so the include is added. **`<QtGlobal>`, not the
+suggested header, and not `<QtTranslation>` either**: the latter is the macro's
+own public name and would have been the tidiest answer, but that header split is
+newer than the **Qt 6.4** Ubuntu's `qt6-base-dev` gives Linux CI, so it would
+have broken the build the fix was meant to protect.
+
+**The tab finding is correct, and is kept anyway — on the rendering, not on
+taste.** A tab in a `QAction`'s text puts what follows into `QMenu`'s shortcut
+column, so the patterns render where a keybinding would. Both versions were
+rendered before deciding:
+
+| separator | result |
+|---|---|
+| `\t` | an aligned second column; 25 patterns scan straight down |
+| `" - "` | ragged - every pattern starts at a different x, following the label's length |
+
+The tab wins clearly for a list this long, nothing in this menu carries a
+shortcut, and none of these strings reads like a key name. **The condition is
+recorded in the code**: if an action here ever gains a real shortcut, the two
+would compete for the same column and this has to change.
+
+**A third round then removed the header's `<QString>`, which was unused - and
+made the earlier reviewer's wrong reason right.** The struct is all `const
+char*`, so nothing in `RegexPresets.h` needed Qt at all. But that `<QString>` was
+what carried `qglobal.h`, and therefore the macro, into the `.cpp`. Measured:
+
+```
+<QString> dropped, <QtGlobal> kept    -> builds
+<QString> dropped, <QtGlobal> removed -> error: use of undeclared identifier
+                                         'QT_TRANSLATE_NOOP'
+```
+
+So "the macro is not reachable transitively" was false when it was written and is
+true now, made true by a later finding. Had the two arrived in the other order,
+dropping the include would have broken the build. The comment on that include
+says so, because the next reader will otherwise see a line that looks redundant.
+
+**The menu is now a screenshot of its own** (`vinatext-regex-presets.png`),
+because it is a popup and cannot appear in the main shot - the same reason the
+window manager has one. That picture is also the evidence above. The popup is
+hidden again afterwards and **that is checked, not assumed**: left up it would
+sit on top of the editor in both theme shots, which would still be written and
+still "succeed". Mutation: comment out the `hide()` and the run reports
+`the preset popup is still up`.
+
+### Phase 5's dialog scope, closed
+
+**14 kept → 12 ported or superseded, 2 deferred with cause.** The brief's *kept*
+row and its *deferred* table are updated to match, so the next reader sees the
+reasoning and not just the absence.
+
+Reproduce:
+
+```bash
+# what the dialogs are, and what the salvaged piece is
+wc -l src/FindDlg.cpp src/ReplaceDlg.cpp          # 899 + 982 = 1,881
+wc -l ui-qt/RegexPresets.cpp ui-qt/RegexPresets.h # 68 + 43 = 111
+
+# 27 in the MFC, 25 offered here
+grep -c AddString src/ComboboxRegexHelper.cpp     # 27
+grep -cE '^\s+\{ "' ui-qt/RegexPresets.cpp        # 25
+
+# 13 kept verbatim, 12 changed - by comparing the two lists, not by eye
+python3 - <<'EOF'
+import re, codecs, pathlib
+lit = lambda x: codecs.decode(x, 'unicode_escape')
+mfc = {lit(x) for x in re.findall(r'SetWindowTextW\(_T\("(.*?)"\)\);',
+    pathlib.Path('src/ComboboxRegexHelper.cpp').read_text())}
+mine = [lit(x) for x in re.findall(r'^\s+\{ "[^"]*",\s*"((?:[^"\\]|\\.)*)"',
+    pathlib.Path('ui-qt/RegexPresets.cpp').read_text(), re.M)]
+print(sum(p in mfc for p in mine), 'verbatim;', sum(p not in mfc for p in mine), 'changed')
+EOF
+
+# the mislabelled one, as the MFC has it: start-of-line, under "not in the set"
+grep -n '\^\[abc\]' src/ComboboxRegexHelper.cpp
+
+# every preset matches its own sample, checked by the editor's own search.
+# A PASSING run prints only the summary - the check names failures, so silence
+# on the FAIL line is the result.
+QT_QPA_PLATFORM=offscreen ./qtbuild/ui-qt/vinatext-qt --selftest \
+  core/LanguageData.cpp tools/extract_language_data.py \
+  qtbuild/fixtures/crlf-bom.cpp qtbuild/fixtures/utf16.py \
+  qtbuild/fixtures/latin1.md qtbuild/fixtures/no-trailing-newline.py \
+  qtbuild/fixtures/tags.xml qtbuild/fixtures/urls.md 2>&1 \
+  | grep -E "FAIL regex|selftest: [0-9]+ check"
+
+# the labels are extractable - 156 without them, 181 with
+lupdate ui-qt/*.cpp ui-qt/*.h -ts /tmp/x.ts -no-obsolete | grep Found
+
+# and the 53 that still are not, in LineTransforms
+{ grep -oE 'Tr\("([^"\\]|\\.)*"\)' ui-qt/LineTransforms.cpp
+  grep -oE '^\t\{ "([^"\\]|\\.)*"' ui-qt/LineTransforms.cpp; } | sort -u | wc -l
+```

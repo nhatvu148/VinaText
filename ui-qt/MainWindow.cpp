@@ -15,6 +15,7 @@
 #include "WindowListDialog.h"
 #include "BookmarkPane.h"
 #include "LineTransforms.h"
+#include "RegexPresets.h"
 #include "TransformDialog.h"
 #include "SingleInstance.h"
 #include "AboutDialog.h"
@@ -4436,6 +4437,103 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 	}
 
 	//----------------------------------------------------------------------
+	// Regex presets - the one part of FindDlg that is not find-in-files.
+	// See doc/PORTING.md 6s.
+	//
+	// EVERY PRESET IS RUN THROUGH THE EDITOR'S OWN SEARCH. Offering a pattern
+	// is a promise that it works here, and both frontends use plain
+	// SCFIND_REGEXP - which has no lookahead, no named groups and no .NET
+	// character-class subtraction, all of which the originals use.
+	//----------------------------------------------------------------------
+	{
+		Require(!RegexPresets::All().empty(),
+			QStringLiteral("regex: there are presets"));
+
+		CEditorWidget* pRe = NewUntitled();
+		Require(pRe != nullptr, QStringLiteral("regex: got a scratch document"));
+		if (pRe != nullptr)
+		{
+			int nBroken = 0;
+			QString strFirstBroken;
+			for (const RegexPresets::SPreset& preset : RegexPresets::All())
+			{
+				Require(preset._Sample != nullptr && *preset._Sample != '\0',
+					QStringLiteral("regex: '%1' carries a sample to match")
+						.arg(QLatin1String(preset._Label)));
+				const QByteArray sample(preset._Sample);
+				pRe->Send(SCI_SETTEXT, 0,
+					reinterpret_cast<sptr_t>(sample.constData()));
+				CEditorWidget::SFindOptions options;
+				options._Regex = true;
+				if (pRe->HighlightMatches(QString::fromUtf8(preset._Pattern), options) < 1)
+				{
+					++nBroken;
+					// ALL of them, not just the first - a list that names one
+					// failure hides however many follow it, and the point of
+					// this check is to find every preset the engine cannot run.
+					if (!strFirstBroken.isEmpty()) { strFirstBroken += QStringLiteral("; "); }
+					strFirstBroken += QStringLiteral("%1 (%2)")
+						.arg(QLatin1String(preset._Label),
+							QLatin1String(preset._Pattern));
+				}
+				pRe->ClearHighlight();
+			}
+			Require(nBroken == 0,
+				QStringLiteral("regex: every offered preset matches its own sample in "
+					"THIS editor's engine; %1 did not: %2")
+					.arg(nBroken).arg(strFirstBroken));
+
+			pRe->Send(SCI_SETSAVEPOINT);
+			OnCloseTab(m_pTabs->indexOf(pRe));
+		}
+
+		// AND THE BAR OFFERS THEM, only in regex mode.
+		m_pFindBar->Activate(QString());
+		m_pFindBar->SetReplaceVisible(false);
+		Require(!m_pFindBar->IsRegexHelpVisible(),
+			QStringLiteral("regex: the helper is hidden while the search is plain text"));
+
+		// The checkbox is what reveals it, driven through the same signal a
+		// click produces.
+		Require(m_pFindBar->IsRegex() == false,
+			QStringLiteral("regex: the bar starts in plain-text mode"));
+		m_pFindBar->SetRegex(true);
+		Require(m_pFindBar->IsRegexHelpVisible(),
+			QStringLiteral("regex: turning regex on reveals the helper"));
+
+		// INSERTS AT THE CARET rather than replacing the box. The MFC's
+		// SetSearchFields overwrites the whole field, discarding whatever was
+		// being typed.
+		m_pFindBar->Activate(QString());
+		m_pFindBar->SetRegex(true);
+		m_pFindBar->TypePatternForTest(QStringLiteral("abc"));
+		Require(m_pFindBar->InsertPresetForTest(0),
+			QStringLiteral("regex: inserted the first preset"));
+		Require(m_pFindBar->GetPattern().startsWith(QStringLiteral("abc")),
+			QStringLiteral("regex: and what was already typed SURVIVED, got '%1'")
+				.arg(m_pFindBar->GetPattern()));
+		Require(m_pFindBar->GetPattern() != QStringLiteral("abc"),
+			QStringLiteral("regex: while the preset was actually added, got '%1'")
+				.arg(m_pFindBar->GetPattern()));
+
+		// THE OTHER HALF, and it is deliberate rather than an oversight:
+		// Cmd+F prefills the box with the selection and SELECTS it, so that
+		// typing replaces. A preset picked in that state replaces too - the
+		// same rule QLineEdit applies to a paste. Pinned so nobody "fixes" the
+		// insert into never replacing.
+		m_pFindBar->Activate(QStringLiteral("abc"));
+		m_pFindBar->SetRegex(true);
+		Require(m_pFindBar->InsertPresetForTest(0),
+			QStringLiteral("regex: inserted over the preselected pattern"));
+		Require(!m_pFindBar->GetPattern().contains(QStringLiteral("abc")),
+			QStringLiteral("regex: a PRESELECTED pattern is replaced, got '%1'")
+				.arg(m_pFindBar->GetPattern()));
+
+		m_pFindBar->SetRegex(false);
+		OnHideFind();
+	}
+
+	//----------------------------------------------------------------------
 	// Menu shortcuts. Added because Replace shipped bound to a key the
 	// operating system eats: QKeySequence::Replace resolves to Cmd+H on macOS,
 	// which is Hide Application, so the menu item was unreachable by keyboard
@@ -4969,6 +5067,10 @@ int CMainWindow::RenderScreenshots(const QStringList& files, const QString& strD
 	{
 		OnShowFind();
 		m_pFindBar->Activate(FirstWordOf(pEditor));
+		// IN REGEX MODE, so the preset list's button is in the picture. It is
+		// hidden in plain-text mode by design, so a screenshot of the default
+		// bar would show nothing of this feature at all.
+		m_pFindBar->SetRegex(true);
 		OnPatternChanged();
 		// And the goto bar below it, for the same reason: D10 asks for a
 		// screenshot of the shallow visible tail, and a feature that never
@@ -5016,6 +5118,43 @@ int CMainWindow::RenderScreenshots(const QStringList& files, const QString& strD
 	}
 
 	int nFailures = 0;
+
+	// The preset list, in its own picture, for the same reason: it is a POPUP,
+	// so it cannot appear in the main shot either, and the whole feature is the
+	// list. It is also the evidence for a review finding - the pattern sits in
+	// QMenu's shortcut column because the label carries a tab, and the two
+	// renderings were compared here before keeping it (PORTING.md 6s).
+	{
+		m_pFindBar->Activate(QString());
+		m_pFindBar->SetRegex(true);
+		QMenu* pPresets = m_pFindBar->PresetMenu();
+		pPresets->popup(QPoint(0, 0));
+		QApplication::processEvents();
+		const QString strPresets = QStringLiteral("%1/vinatext-regex-presets.png")
+			.arg(strDirectory);
+		if (pPresets->grab().save(strPresets))
+		{
+			qInfo("wrote %s", qPrintable(strPresets));
+		}
+		else
+		{
+			qWarning("could not write %s", qPrintable(strPresets));
+		}
+		// Hidden again before the main shots: a popup left open would sit on top
+		// of the window in both of them.
+		pPresets->hide();
+		QApplication::processEvents();
+		// CHECKED, not assumed. A popup still up would sit on top of the window
+		// in both theme shots below, and the shots would still be "written" -
+		// this is the failure that reports itself instead of shipping a picture
+		// of a menu covering the editor.
+		if (pPresets->isVisible())
+		{
+			qWarning("the preset popup is still up; the theme shots would be wrong");
+			++nFailures;
+		}
+	}
+
 	const struct { EEditorTheme _Theme; const char* _Name; } shots[] = {
 		{ EEditorTheme::Light, "light" },
 		{ EEditorTheme::Dark, "dark" },
