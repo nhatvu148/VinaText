@@ -45,6 +45,7 @@
 #include <QTemporaryDir>
 #include <QVBoxLayout>
 #include <QDir>
+#include <QIcon>
 #include <QEventLoop>
 #include <QElapsedTimer>
 #include <QThread>
@@ -2470,6 +2471,37 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 			Require(QFile::exists(strPath),
 				QStringLiteral("attribution: %1 exists").arg(strPath));
 		}
+	}
+
+	//----------------------------------------------------------------------
+	// The application icon. A .qrc path that does not resolve gives a null QIcon
+	// SILENTLY - QIcon has no way to complain - so the app would simply wear the
+	// generic binary icon again and nothing would say why. See doc/PORTING.md 6w.
+	//----------------------------------------------------------------------
+	{
+		const QIcon icon = QApplication::windowIcon();
+		Require(!icon.isNull(), QStringLiteral("icon: the window icon is set"));
+		// AND HAS PIXELS. A QIcon built from a path Qt cannot decode is non-null
+		// but empty, which is the failure this is actually guarding against -
+		// the .ico plugin missing from a deployed build looks exactly like that.
+		Require(!icon.availableSizes().isEmpty(),
+			QStringLiteral("icon: and it decoded to at least one size"));
+		const QPixmap pixmap = icon.pixmap(64, 64);
+		Require(!pixmap.isNull() && pixmap.width() > 0,
+			QStringLiteral("icon: it renders at 64px, got %1x%2")
+				.arg(pixmap.width()).arg(pixmap.height()));
+
+		// A LARGE SIZE, because the Dock and the app switcher ask for one and a
+		// 32px source scaled up to 128 looks worse than no icon at all. The .ico
+		// carries 16 through 256; this fails if somebody ships a trimmed one.
+		int nLargest = 0;
+		for (const QSize& size : icon.availableSizes())
+		{
+			nLargest = qMax(nLargest, size.width());
+		}
+		Require(nLargest >= 128,
+			QStringLiteral("icon: it carries a large size for the Dock, largest is %1")
+				.arg(nLargest));
 	}
 
 	//----------------------------------------------------------------------
