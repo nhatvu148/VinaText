@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleName</key>
+	<string>VinaText</string>
+	<key>CFBundleDisplayName</key>
+	<string>VinaText</string>
+	<key>CFBundleExecutable</key>
+	<string>${MACOSX_BUNDLE_EXECUTABLE_NAME}</string>
+	<key>CFBundleIdentifier</key>
+	<string>org.vinadevs.vinatext</string>
+	<key>CFBundleVersion</key>
+	<string>${MACOSX_BUNDLE_BUNDLE_VERSION}</string>
+	<key>CFBundleShortVersionString</key>
+	<string>${MACOSX_BUNDLE_SHORT_VERSION_STRING}</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleIconFile</key>
+	<string>VinaText</string>
+	<!-- 10.14: below it there is no dark mode for the title bar to follow, so
+	     MacAppearance has nothing to set. -->
+	<key>LSMinimumSystemVersion</key>
+	<string>10.14</string>
+	<!-- NOT set: NSRequiresAquaSystemAppearance. Setting it would freeze the app
+	     in light mode and undo the title-bar work in 6v. -->
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<!-- Opening a file from Finder. The editor claims text and source files it
+	     can actually lex; it deliberately does NOT claim every extension, since
+	     an editor that grabs .pdf and .png would be lying about what it is until
+	     the viewers D10 defers arrive. -->
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Text Document</string>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>public.plain-text</string>
+				<string>public.source-code</string>
+				<string>public.script</string>
+				<string>public.xml</string>
+				<string>public.json</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>

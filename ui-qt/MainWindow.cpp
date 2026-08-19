@@ -2765,9 +2765,24 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 		// "bundle". Getting this label wrong would be worse than omitting it -
 		// it would state the opposite of the truth - so it is checked against
 		// the resolution rather than assumed from it.
-		Require(strStartupLog.contains(QStringLiteral("(build tree)")),
-			QStringLiteral("paths: a build-tree run says so, log was '%1'")
-				.arg(strStartupLog.simplified().left(200)));
+		// THE LABEL MATCHES WHERE IT ACTUALLY IS - derived from the shape of the
+		// resolved path, not by asking DescribeSource again, which would agree
+		// with itself whatever it said. The first version of this hardcoded
+		// "(build tree)" and duly failed the moment a real .app was built, which
+		// is the reason a bundle has to be built rather than reasoned about.
+		const QString strLoaded = QDir::cleanPath(m_Data.GetDataDir());
+		const QString strExpected =
+			strLoaded.contains(QStringLiteral("/Contents/Resources/"))
+				? QStringLiteral("bundle")
+			: (strLoaded == QDir::cleanPath(QStringLiteral(VINATEXT_DATA_DIR)))
+				? QStringLiteral("build tree")
+			: QString();
+		Require(!strExpected.isEmpty(),
+			QStringLiteral("paths: the run is a bundle or a build tree, got '%1'")
+				.arg(strLoaded));
+		Require(strStartupLog.contains(QStringLiteral("(%1)").arg(strExpected)),
+			QStringLiteral("paths: and the log says (%1), log was '%2'")
+				.arg(strExpected, strStartupLog.simplified().left(160)));
 		Require(ResourcePaths::DescribeSource(
 				ResourcePaths::Candidates(QStringLiteral("data")).first(),
 				QStringLiteral("data")) == QStringLiteral("bundle"),
