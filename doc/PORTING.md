@@ -3601,7 +3601,29 @@ A second mutation confirms the distinction that matters: logging
 `ResourcePaths::DataDir()` instead of what `Load` used passes at the defaults and
 fails under `--data`, which is the only configuration where the two differ.
 
-**Self-test: 1,072 -> 1,086 checks on defaults, 1,076 -> 1,090 configured**
+### And it says WHICH candidate won
+
+The first version printed the bare path, and the first person to read it had to
+decode the only question they were asking - did this copy find its own files, or
+fall back to somebody's source tree? It is labelled now, with `$HOME` collapsed
+so the line is short enough to take in:
+
+```
+Data: ~/Work/my-apps/VinaText/Packages/data-packages (build tree)
+Licences: ~/Work/my-apps/VinaText/license (build tree)
+```
+
+A bundle says `(bundle)`, a copy with its files beside it says `(next to the
+app)`, and anything off the candidate list says `(--data)`. **A wrong label would
+be worse than none** - it would state the opposite of the truth - so it is
+checked against the resolution rather than assumed from it, and the labels are
+positional, which the comment records: a candidate added without a label added
+beside it would silently take its neighbour's name.
+
+`~` is display only. A tilde handed to `QFile` opens nothing, so the two forms
+are kept apart and a check pins it.
+
+**Self-test: 1,072 -> 1,090 checks on defaults, 1,076 -> 1,094 configured**
 (macOS). 10/10 core tests; `src/` untouched.
 
 **Still to do before there is an artifact:** the macOS bundle and `.dmg`, the

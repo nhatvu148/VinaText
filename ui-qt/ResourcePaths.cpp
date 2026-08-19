@@ -74,6 +74,39 @@ QStringList ResourcePaths::Candidates(const QString& strLeaf)
 		<< CompiledIn(strLeaf);
 }
 
+QString ResourcePaths::DescribeSource(const QString& strDir, const QString& strLeaf)
+{
+	// Compared CLEANED, because the candidates carry "/../" segments and the
+	// resolved path is one of them verbatim - but a caller passing a tidied or
+	// symlink-resolved path would otherwise match nothing and be reported as
+	// "--data", which is the one label that must not be wrong.
+	const QString strWanted = QDir::cleanPath(strDir);
+	const QStringList candidates = Candidates(strLeaf);
+	// Same order as Candidates(), and that is load-bearing: the labels are
+	// positional, so a candidate added there without one added here would
+	// silently take its neighbour's name.
+	const char* aLabels[] = { "bundle", "next to the app", "prefix install", "build tree" };
+	const int nLabels = static_cast<int>(sizeof(aLabels) / sizeof(aLabels[0]));
+	for (int i = 0; i < candidates.size() && i < nLabels; ++i)
+	{
+		if (QDir::cleanPath(candidates.at(i)) == strWanted)
+		{
+			return QString::fromLatin1(aLabels[i]);
+		}
+	}
+	return QStringLiteral("--data");
+}
+
+QString ResourcePaths::ForDisplay(const QString& strPath)
+{
+	const QString strHome = QDir::homePath();
+	if (!strHome.isEmpty() && strPath.startsWith(strHome + QLatin1Char('/')))
+	{
+		return QLatin1Char('~') + strPath.mid(strHome.size());
+	}
+	return strPath;
+}
+
 QString ResourcePaths::DataDir()
 {
 	return Resolve(QStringLiteral("data"));

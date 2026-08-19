@@ -177,8 +177,17 @@ CMainWindow::CMainWindow(CEditorData& data, QWidget* pParent)
 	// silently falling back to a build tree looks exactly like a working one.
 	// That is not hypothetical: testing the relocation by eye needed a fake
 	// theme colour to tell the two apart, which is a bad way to find out.
-	LogMessage(tr("Data: %1").arg(m_Data.GetDataDir()));
-	LogMessage(tr("Licences: %1").arg(ResourcePaths::LicenseDir()));
+	// Labelled, because the path alone makes the reader work out the only thing
+	// they want to know: did this copy find its own files, or fall back to
+	// somebody's source tree? "(build tree)" answers it at a glance, and "~"
+	// keeps the line short enough to read.
+	const QString strLicenceDir = ResourcePaths::LicenseDir();
+	LogMessage(tr("Data: %1 (%2)")
+		.arg(ResourcePaths::ForDisplay(m_Data.GetDataDir()),
+			ResourcePaths::DescribeSource(m_Data.GetDataDir(), QStringLiteral("data"))));
+	LogMessage(tr("Licences: %1 (%2)")
+		.arg(ResourcePaths::ForDisplay(strLicenceDir),
+			ResourcePaths::DescribeSource(strLicenceDir, QStringLiteral("license"))));
 
 	resize(1100, 750);
 	// After resize(), so a stored geometry wins over the default rather than
@@ -2526,11 +2535,36 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 		// value away and watching nothing happen.
 		Require(!m_Data.GetDataDir().isEmpty(),
 			QStringLiteral("paths: the loaded data dir is recorded, not empty"));
-		Require(strStartupLog.contains(QStringLiteral("Data: ") + m_Data.GetDataDir()),
+		Require(strStartupLog.contains(QStringLiteral("Data: ")
+				+ ResourcePaths::ForDisplay(m_Data.GetDataDir())),
 			QStringLiteral("paths: the message pane names the data dir it loaded (%1)")
 				.arg(m_Data.GetDataDir()));
-		Require(strStartupLog.contains(QStringLiteral("Licences: ") + ResourcePaths::LicenseDir()),
+		Require(strStartupLog.contains(QStringLiteral("Licences: ")
+				+ ResourcePaths::ForDisplay(ResourcePaths::LicenseDir())),
 			QStringLiteral("paths: and the licence dir"));
+
+		// AND WHICH CANDIDATE WON, which is the question the path alone makes
+		// you answer yourself. A build-tree run says "build tree"; a bundle says
+		// "bundle". Getting this label wrong would be worse than omitting it -
+		// it would state the opposite of the truth - so it is checked against
+		// the resolution rather than assumed from it.
+		Require(strStartupLog.contains(QStringLiteral("(build tree)")),
+			QStringLiteral("paths: a build-tree run says so, log was '%1'")
+				.arg(strStartupLog.simplified().left(200)));
+		Require(ResourcePaths::DescribeSource(
+				ResourcePaths::Candidates(QStringLiteral("data")).first(),
+				QStringLiteral("data")) == QStringLiteral("bundle"),
+			QStringLiteral("paths: the first candidate is labelled 'bundle'"));
+		Require(ResourcePaths::DescribeSource(QStringLiteral("/somewhere/else"),
+				QStringLiteral("data")) == QStringLiteral("--data"),
+			QStringLiteral("paths: anything off the list is labelled '--data'"));
+
+		// ~ is display only. A tilde handed to QFile opens nothing, so the two
+		// forms must not be confused - the log shows one and the resolver
+		// returns the other.
+		Require(!ResourcePaths::ForDisplay(m_Data.GetDataDir()).startsWith(QLatin1Char('/'))
+				|| !m_Data.GetDataDir().startsWith(QDir::homePath()),
+			QStringLiteral("paths: a path under HOME is displayed with ~"));
 		Require(QFile::exists(ResourcePaths::LicenseDir()
 				+ QStringLiteral("/License-VinaText.txt")),
 			QStringLiteral("paths: the resolved licence dir holds the licences (%1)")

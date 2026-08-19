@@ -49,6 +49,18 @@ namespace ResourcePaths
 	// app - see doc/PORTING.md 6u.
 	bool HoldsResources(const QString& strDir, const QString& strLeaf);
 
+	// Which candidate a resolved directory came from: "bundle", "next to the
+	// app", "prefix install", "build tree", or "--data" for anything else.
+	//
+	// A bare absolute path in the message pane makes the reader decode the
+	// answer to the only question they are asking - did this copy find its own
+	// files, or fall back to somebody's source tree? This says it.
+	QString DescribeSource(const QString& strDir, const QString& strLeaf);
+
+	// The same path with $HOME collapsed to ~, for display only. Never pass the
+	// result to anything that opens a file.
+	QString ForDisplay(const QString& strPath);
+
 	// Every candidate for a leaf, in search order, whether or not it exists.
 	// Public so the self-test can report WHICH ones were tried when none hit -
 	// "data directory not found" without the list is a bad afternoon.
