@@ -97,8 +97,12 @@ QString ResourcePaths::DescribeSource(const QString& strDir, const QString& strL
 	return QStringLiteral("--data");
 }
 
-QString ResourcePaths::ForDisplay(const QString& strPath)
+QString ResourcePaths::ForDisplay(const QString& strPath0)
 {
+	// CLEANED FIRST. A bundle resolves through Contents/MacOS/../Resources, and
+	// printing that verbatim shows the reader a path with a "/../" in the middle
+	// of it, which reads like a mistake rather than like the app's own folder.
+	const QString strPath = QDir::cleanPath(strPath0);
 	const QString strHome = QDir::homePath();
 	if (!strHome.isEmpty() && strPath.startsWith(strHome + QLatin1Char('/')))
 	{

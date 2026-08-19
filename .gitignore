@@ -18,3 +18,7 @@ __pycache__/
 *.pyc
 build/
 qtbuild/
+
+# The packaging build tree, alongside qtbuild/.
+qtbundle/
+dist/

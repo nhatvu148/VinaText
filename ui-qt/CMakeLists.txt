@@ -99,6 +99,73 @@ target_compile_definitions(vinatext-qt PRIVATE
     VINATEXT_LEXILLA_VERSION="${LEXILLA_VERSION}"
     VINATEXT_LICENSE_DIR="${CMAKE_SOURCE_DIR}/license")
 
-set_target_properties(vinatext-qt PROPERTIES
-    MACOSX_BUNDLE FALSE          # a plain binary is easier to run from a terminal
-    WIN32_EXECUTABLE FALSE)
+# The bundle is OPT-IN, and the default stays a plain binary. Flipping
+# MACOSX_BUNDLE on unconditionally would move the executable to
+# vinatext-qt.app/Contents/MacOS/vinatext-qt and break every command in CI and in
+# doc/PORTING.md that runs ./qtbuild/ui-qt/vinatext-qt - for a build nobody was
+# asking to package. Packaging asks for it explicitly.
+option(VINATEXT_MACOS_BUNDLE "Build ui-qt as a macOS .app bundle" OFF)
+
+if(APPLE AND VINATEXT_MACOS_BUNDLE)
+    # The icon, generated from the SAME res/app.ico the Windows build ships, so
+    # there is one piece of artwork in the repository rather than two that drift.
+    set(VINATEXT_ICNS "${CMAKE_CURRENT_BINARY_DIR}/VinaText.icns")
+    add_custom_command(
+        OUTPUT "${VINATEXT_ICNS}"
+        COMMAND "${CMAKE_SOURCE_DIR}/tools/make_macos_icon.sh"
+                "${CMAKE_SOURCE_DIR}/res/app.ico" "${VINATEXT_ICNS}"
+        DEPENDS "${CMAKE_SOURCE_DIR}/res/app.ico"
+                "${CMAKE_SOURCE_DIR}/tools/make_macos_icon.sh"
+        COMMENT "Generating VinaText.icns from res/app.ico"
+        VERBATIM)
+    target_sources(vinatext-qt PRIVATE "${VINATEXT_ICNS}")
+    set_source_files_properties("${VINATEXT_ICNS}" PROPERTIES
+        MACOSX_PACKAGE_LOCATION "Resources")
+
+    # The data and the licences travel INSIDE the bundle, at the first path
+    # ResourcePaths::Candidates looks in. Without this the .app resolves nothing
+    # and falls back to the builder's source tree - which is the failure 6u
+    # exists to make visible, and it would look like success on this machine.
+    # CONFIGURE_DEPENDS, so adding a data file re-globs on the next build rather
+    # than waiting for someone to reconfigure. Measured without it: a new file
+    # dropped into license/ built cleanly and simply was not in the bundle - a
+    # SILENT omission, and for the licence glob below that is a D3 obligation
+    # quietly going missing rather than a build failure anyone would notice.
+    file(GLOB VINATEXT_DATA_FILES CONFIGURE_DEPENDS
+        "${CMAKE_SOURCE_DIR}/Packages/data-packages/*")
+    foreach(DATA_FILE IN LISTS VINATEXT_DATA_FILES)
+        target_sources(vinatext-qt PRIVATE "${DATA_FILE}")
+        set_source_files_properties("${DATA_FILE}" PROPERTIES
+            MACOSX_PACKAGE_LOCATION "Resources/data"
+            HEADER_FILE_ONLY TRUE)
+    endforeach()
+
+    # D3's obligation: the LGPL notices ship with the binary they describe. The
+    # About box names license/License-Qt.txt, and a path true only in the build
+    # tree makes that claim false in every copy handed to somebody else.
+    file(GLOB VINATEXT_LICENSE_FILES CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/license/*")
+    foreach(LICENSE_FILE IN LISTS VINATEXT_LICENSE_FILES)
+        target_sources(vinatext-qt PRIVATE "${LICENSE_FILE}")
+        set_source_files_properties("${LICENSE_FILE}" PROPERTIES
+            MACOSX_PACKAGE_LOCATION "Resources/license"
+            HEADER_FILE_ONLY TRUE)
+    endforeach()
+
+    set_target_properties(vinatext-qt PROPERTIES
+        MACOSX_BUNDLE TRUE
+        MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/Info.plist.in"
+        # NOT MACOSX_BUNDLE_EXECUTABLE_NAME: it is not one of the properties
+        # CMake substitutes into Info.plist.in, and the ${MACOSX_BUNDLE_EXECUTABLE_NAME}
+        # there is filled from the target's real output name instead. Setting it
+        # did nothing, and what it said - "vinatext-qt" - was the wrong name,
+        # since OUTPUT_NAME below makes the binary VinaText. Verified with
+        # plutil: CFBundleExecutable reads "VinaText", matching the file on disk.
+        MACOSX_BUNDLE_BUNDLE_NAME "VinaText"
+        MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}"
+        MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
+        OUTPUT_NAME "VinaText")
+else()
+    set_target_properties(vinatext-qt PROPERTIES
+        MACOSX_BUNDLE FALSE      # a plain binary is easier to run from a terminal
+        WIN32_EXECUTABLE FALSE)
+endif()

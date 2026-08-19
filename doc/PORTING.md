@@ -3785,3 +3785,124 @@ are kept apart and a check pins it.
 **Still to do before there is an artifact:** the macOS bundle and `.dmg`, the
 Linux AppImage, CI uploading both, and checking D3's dynamic-linking obligation
 against the shipped binary rather than against the build.
+
+## 6x. A macOS bundle, and what building one actually taught
+
+The first artifact anybody can install. `-DVINATEXT_MACOS_BUNDLE=ON` produces
+`VinaText.app`; `tools/package_macos.sh` turns it into a `.dmg`.
+
+**The bundle is OPT-IN and the default is still a plain binary.** Flipping
+`MACOSX_BUNDLE` on unconditionally moves the executable to
+`VinaText.app/Contents/MacOS/VinaText` and breaks every command in CI and in this
+document that runs `./qtbuild/ui-qt/vinatext-qt` - for a build nobody asked to
+package.
+
+### What goes inside
+
+| | where | why |
+|---|---|---|
+| `VinaText.icns` | `Contents/Resources` | generated from **`res/app.ico`**, the Windows build's own artwork, by `tools/make_macos_icon.sh` |
+| `Packages/data-packages/*` | `Contents/Resources/data` | the first path `ResourcePaths::Candidates` looks in (6u) |
+| `license/*` | `Contents/Resources/license` | D3: the notices ship with the binary they describe |
+
+The `.icns` is **generated, not committed**. A generated binary in the tree is a
+second copy of the artwork that nothing keeps in step; redraw `app.ico` and this
+follows on the next build. `sips` and `iconutil` both ship with macOS, so it adds
+no dependency. **Nothing above 256px** - the artwork is 256x256, and a 512 slot
+would upscale it; a blurry Dock icon is worse than a small sharp one.
+
+### Three things only building it could have found
+
+**1. A check that passed everywhere except in the artifact.** The 6u self-test
+asserted the log said `(build tree)`. The moment a real `.app` ran, it said
+`(bundle)` - correctly - and the check failed. It now derives the expected label
+from the *shape of the resolved path* rather than hardcoding one, and fails
+loudly on a layout that is neither.
+
+**2. Ad-hoc signing is not optional on Apple Silicon.** `macdeployqt` rewrites
+every binary with `install_name_tool`, which invalidates the signature the linker
+applied. arm64 macOS then **kills the process on launch**:
+
+```
+exit=137        # SIGKILL, and nothing on stderr about signatures
+```
+
+`codesign --force --deep --sign -` fixes it. The failure names nothing; without
+knowing the cause it looks like the app is simply broken.
+
+**3. `macdeployqt` ships only the `cocoa` plugin**, so the packaged app could not
+run headless at all - `no Qt platform plugin could be initialized`. The packaging
+script copies `libqoffscreen.dylib` in deliberately: **79KB buys `--selftest`
+against the real `.app`**, and checking the thing we hand out rather than the
+thing we built is the only way to know a bundle is sound.
+
+### D3, checked against the artifact
+
+The packaging script fails the build unless `QtCore` resolves through
+`@executable_path/../Frameworks` - Qt **linked**, not baked in - and unless the
+Qt, Scintilla and VinaText notices are present in `Contents/Resources/license`.
+
+```
+@executable_path/../Frameworks/QtWidgets.framework/Versions/A/QtWidgets
+@executable_path/../Frameworks/QtNetwork.framework/Versions/A/QtNetwork
+@executable_path/../Frameworks/QtGui.framework/Versions/A/QtGui
+```
+
+**The whole suite runs from the shipped bundle: 1,106 checks, 0 failures**, and
+again from inside the mounted `.dmg`.
+
+### Review: two CMake nits, one of them stating a wrong name
+
+**`file(GLOB)` is evaluated at configure time.** Measured: a new file dropped
+into `license/` built cleanly and simply **was not in the bundle** - a silent
+omission, and for the licence glob that is a D3 obligation quietly going missing
+rather than a failure anyone would notice. `CONFIGURE_DEPENDS` on both globs; the
+same probe now lands in the bundle on an incremental build.
+
+One limit worth knowing: a file *removed* from `license/` stays in an existing
+bundle until a clean build, because nothing prunes `Contents/Resources`. Adding
+is what the obligation cares about, so this is recorded rather than worked
+around.
+
+**`MACOSX_BUNDLE_EXECUTABLE_NAME` did nothing, and said the wrong thing.** It is
+not one of the properties CMake substitutes into `Info.plist.in`; the
+`${MACOSX_BUNDLE_EXECUTABLE_NAME}` there is filled from the target's real output
+name. So the line was inert - and it said `vinatext-qt`, while `OUTPUT_NAME`
+makes the binary `VinaText`. Had it ever been honoured literally,
+`CFBundleExecutable` would have named a file that does not exist and the bundle
+would not launch. Verified rather than reasoned about, which is what the review
+asked for:
+
+```
+$ plutil -p .../Contents/Info.plist | grep CFBundleExecutable
+  "CFBundleExecutable" => "VinaText"
+$ ls .../Contents/MacOS/
+VinaText
+```
+
+Dropped, with a comment saying why, so nobody adds it back.
+
+### Gatekeeper, stated plainly
+
+The signature is **ad-hoc**, not a Developer ID. macOS will still refuse a
+downloaded copy on first launch; the user has to right-click -> Open once, or run
+`xattr -dr com.apple.quarantine /Applications/VinaText.app`. Removing that step
+needs a **paid Apple Developer ID ($99/year)** plus notarisation, and CI would
+need three secrets - the certificate, its password, and an app-specific password.
+The pipeline is built so that adding them is configuration rather than rework.
+
+Reproduce:
+
+```bash
+cmake -S . -B qtbundle -G Ninja -DVINATEXT_BUILD_QT=ON \
+  -DVINATEXT_MACOS_BUNDLE=ON -DCMAKE_PREFIX_PATH=$(brew --prefix qt)
+cmake --build qtbundle --parallel
+tools/package_macos.sh qtbundle/ui-qt/VinaText.app dist
+
+# and check the thing that ships, not the thing that was built
+QT_QPA_PLATFORM=offscreen dist/../qtbundle/ui-qt/VinaText.app/Contents/MacOS/VinaText \
+  --selftest core/LanguageData.cpp tools/extract_language_data.py \
+  qtbuild/fixtures/*.cpp qtbuild/fixtures/*.py qtbuild/fixtures/*.md qtbuild/fixtures/*.xml
+```
+
+**Still to do:** the Linux AppImage, and CI building and uploading both.
