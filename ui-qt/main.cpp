@@ -22,6 +22,8 @@
 #include <QApplication>
 #include "SingleInstance.h"
 
+#include "ResourcePaths.h"
+
 #include <QCommandLineParser>
 #include <QIcon>
 #include <QSettings>
@@ -31,11 +33,14 @@
 namespace
 {
 	// Where the JSON extracted in PR #3 lives. The MFC app resolves it next to the
-	// executable via PathUtils::GetVinaTextPackagePath(); a build-tree run cannot,
-	// so the path is compiled in and --data overrides it.
+	// executable via PathUtils::GetVinaTextPackagePath(); this now does the same
+	// where there IS something next to the executable, and falls back to the
+	// compiled-in build-tree path otherwise. See ResourcePaths.h - without it
+	// nothing that is copied off this machine can find its data. --data still
+	// overrides everything.
 	QString DefaultDataDir()
 	{
-		return QStringLiteral(VINATEXT_DATA_DIR);
+		return ResourcePaths::DataDir();
 	}
 }
 

@@ -8,6 +8,9 @@
 
 #include "MainWindow.h"
 
+#include "MacAppearance.h"
+#include "ResourcePaths.h"
+
 #include "EditorWidget.h"
 #include "FindBar.h"
 #include "GotoBar.h"
@@ -169,6 +172,24 @@ CMainWindow::CMainWindow(CEditorData& data, QWidget* pParent)
 		LogMessage(tr("Settings: no file at %1 - using defaults")
 			.arg(m_Data.GetSettingsPath()));
 	}
+
+	// AND WHERE THE REST CAME FROM. These two are resolved at run time from
+	// several candidates (ResourcePaths.h), and until they were printed there
+	// was no way to tell from the running app WHICH one won - a packaged copy
+	// silently falling back to a build tree looks exactly like a working one.
+	// That is not hypothetical: testing the relocation by eye needed a fake
+	// theme colour to tell the two apart, which is a bad way to find out.
+	// Labelled, because the path alone makes the reader work out the only thing
+	// they want to know: did this copy find its own files, or fall back to
+	// somebody's source tree? "(build tree)" answers it at a glance, and "~"
+	// keeps the line short enough to read.
+	const QString strLicenceDir = ResourcePaths::LicenseDir();
+	LogMessage(tr("Data: %1 (%2)")
+		.arg(ResourcePaths::ForDisplay(m_Data.GetDataDir()),
+			ResourcePaths::DescribeSource(m_Data.GetDataDir(), QStringLiteral("data"))));
+	LogMessage(tr("Licences: %1 (%2)")
+		.arg(ResourcePaths::ForDisplay(strLicenceDir),
+			ResourcePaths::DescribeSource(strLicenceDir, QStringLiteral("license"))));
 
 	resize(1100, 750);
 	// After resize(), so a stored geometry wins over the default rather than
@@ -1166,9 +1187,114 @@ void CMainWindow::closeEvent(QCloseEvent* pEvent)
 	pEvent->accept();
 }
 
+namespace
+{
+	QColor ToQColor(const Core::SColor& c)
+	{
+		return QColor(c._Red, c._Green, c._Blue);
+	}
+
+	// The chrome sits slightly off the editor's own background so the panes and
+	// the tab bar read as separate surfaces rather than one flat field. Which
+	// direction depends on the theme: lighten a dark ground, darken a light one.
+	QColor Chrome(const QColor& editorBack)
+	{
+		return editorBack.lightness() < 128 ? editorBack.lighter(140)
+											: editorBack.darker(108);
+	}
+}
+
+void CMainWindow::ApplyWindowTheme(EEditorTheme theme)
+{
+	// THE THEME STOPPED AT THE EDITOR. Everything else - tab bar, dock panes,
+	// menus, status bar - took Qt's default palette, which on macOS follows the
+	// OS appearance. So "light theme" on a Mac in Dark Mode gave a white editor
+	// inside dark chrome, which reads as broken rather than as a choice. The MFC
+	// has no such split: 15 files under src/ theme themselves from
+	// IS_LIGHT_THEME. Reported from the UI - see doc/PORTING.md 6v.
+	const Core::CEditorTheme& data = m_Data.GetTheme(theme);
+	Core::SColor back;
+	Core::SColor fore;
+	// editorBackground is a palette key and editorTextColor is a role, exactly
+	// as CEditorWidget reads them - the same two calls, so the chrome cannot
+	// drift from the editor it surrounds.
+	if (!data.ResolveColor("editorBackground", back)
+		|| !data.ResolveRole("editorTextColor", fore))
+	{
+		// LEAVE THE SYSTEM PALETTE ALONE. A half-built palette from a theme file
+		// missing a key would be worse than the platform default: unreadable
+		// rather than merely inconsistent.
+		qWarning("theme: no window palette - editorBackground or editorTextColor missing");
+		return;
+	}
+
+	const QColor editorBack = ToQColor(back);
+	const QColor text = ToQColor(fore);
+	const QColor chrome = Chrome(editorBack);
+
+	QPalette palette;
+	palette.setColor(QPalette::Window, chrome);
+	palette.setColor(QPalette::WindowText, text);
+	palette.setColor(QPalette::Base, editorBack);
+	palette.setColor(QPalette::AlternateBase, chrome);
+	palette.setColor(QPalette::Text, text);
+	palette.setColor(QPalette::Button, chrome);
+	palette.setColor(QPalette::ButtonText, text);
+	palette.setColor(QPalette::ToolTipBase, chrome);
+	palette.setColor(QPalette::ToolTipText, text);
+	// The selection colour the editor already uses - BLENDED, not raw. Scintilla
+	// paints it with SCI_SETSELALPHA 60, so in the editor "black" is a pale grey
+	// tint over white. A QPalette has no alpha, so handing it the raw value
+	// painted a SOLID BLACK band behind selected text in the message pane, with
+	// white text on it. Reported from the UI, and it was mine.
+	//
+	// Blending at the same weight gives the widgets the tint the editor shows,
+	// and the ordinary text colour then stays readable on top of it - which the
+	// raw version could not, since it had to invert the text to compensate.
+	Core::SColor selection;
+	if (data.ResolveRole("selectionTextColor", selection))
+	{
+		const int nSelAlpha = 60;			// the value passed to SCI_SETSELALPHA
+		const QColor raw = ToQColor(selection);
+		const auto Blend = [&](int nFore, int nBack)
+		{
+			return (nFore * nSelAlpha + nBack * (255 - nSelAlpha)) / 255;
+		};
+		palette.setColor(QPalette::Highlight, QColor(
+			Blend(raw.red(), editorBack.red()),
+			Blend(raw.green(), editorBack.green()),
+			Blend(raw.blue(), editorBack.blue())));
+		palette.setColor(QPalette::HighlightedText, text);
+	}
+	// Disabled text has to be derived - no theme key describes it - and a flat
+	// grey would vanish on one theme or the other. Halfway to the ground it sits
+	// on keeps it legible on both.
+	const QColor dim = QColor::fromRgb(
+		(text.red() + chrome.red()) / 2,
+		(text.green() + chrome.green()) / 2,
+		(text.blue() + chrome.blue()) / 2);
+	palette.setColor(QPalette::Disabled, QPalette::WindowText, dim);
+	palette.setColor(QPalette::Disabled, QPalette::Text, dim);
+	palette.setColor(QPalette::Disabled, QPalette::ButtonText, dim);
+
+	// On the APPLICATION, not this window: the dialogs are top-level windows of
+	// their own, and a palette set here would leave Preferences and About still
+	// wearing the system appearance.
+	qApp->setPalette(palette);
+
+	// AND THE TITLE BAR, which the palette cannot touch - macOS draws it and it
+	// follows the OS appearance, so a light theme under Dark Mode kept a dark
+	// bar on top of an otherwise light window. Reported from the UI after the
+	// palette fix had already landed. Decided from the ground the theme gives
+	// us rather than from which enum was passed, so a theme file whose "light"
+	// is dark still gets a matching frame.
+	MacAppearance::Apply(editorBack.lightness() < 128);
+}
+
 void CMainWindow::OnSetTheme(EEditorTheme theme)
 {
 	m_Theme = theme;
+	ApplyWindowTheme(theme);
 	for (int i = 0; i < m_pTabs->count(); ++i)
 	{
 		CEditorWidget* pEditor = qobject_cast<CEditorWidget*>(m_pTabs->widget(i));
@@ -1549,6 +1675,12 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 	// no user could ever be in. Harmless under QT_QPA_PLATFORM=offscreen, which
 	// is what CI runs, and it is what RenderScreenshots already does.
 	show();
+
+	// THE STARTUP LOG, CAPTURED BEFORE ANY CHECK CAN CLEAR IT. The message-pane
+	// checks below call ClearAll(), so reading the pane at the point of use
+	// would find an empty one and report a missing line that was printed
+	// correctly - a test failing on correct code.
+	const QString strStartupLog = m_pMessagePane->GetText();
 
 	if (files.isEmpty())
 	{
@@ -2466,7 +2598,7 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 			// the binary from qtbuild/ui-qt/ - a confusing way to report that
 			// you are standing in the wrong place. Same convention as
 			// VINATEXT_DATA_DIR.
-			const QString strPath = QStringLiteral(VINATEXT_LICENSE_DIR)
+			const QString strPath = ResourcePaths::LicenseDir()
 				+ QLatin1Char('/') + strFile;
 			Require(QFile::exists(strPath),
 				QStringLiteral("attribution: %1 exists").arg(strPath));
@@ -2502,6 +2634,187 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 		Require(nLargest >= 128,
 			QStringLiteral("icon: it carries a large size for the Dock, largest is %1")
 				.arg(nLargest));
+	}
+
+	//----------------------------------------------------------------------
+	// The theme reaches the WINDOW, not just the editor. Reported from the UI:
+	// light theme on a Mac in Dark Mode gave a white editor inside dark chrome.
+	// See doc/PORTING.md 6v.
+	//----------------------------------------------------------------------
+	{
+		auto WindowOf = [this](EEditorTheme theme)
+		{
+			OnSetTheme(theme);
+			return qApp->palette();
+		};
+		const QPalette dark = WindowOf(EEditorTheme::Dark);
+		const QColor darkWindow = dark.color(QPalette::Window);
+		const QColor darkText = dark.color(QPalette::WindowText);
+		const QPalette light = WindowOf(EEditorTheme::Light);
+		const QColor lightWindow = light.color(QPalette::Window);
+
+		Require(darkWindow != lightWindow,
+			QStringLiteral("theme: the WINDOW palette changes with the theme (%1 vs %2)")
+				.arg(darkWindow.name(), lightWindow.name()));
+		Require(lightWindow.lightness() > darkWindow.lightness(),
+			QStringLiteral("theme: and the light one is the lighter (%1 vs %2)")
+				.arg(lightWindow.lightness()).arg(darkWindow.lightness()));
+
+		// LEGIBILITY, not merely difference. A palette that applied cleanly and
+		// painted text the colour of its own background would pass every check
+		// above while being unusable - which is the failure this whole change
+		// exists to fix, in a new disguise.
+		for (const auto& entry : { std::make_pair(dark, "dark"), std::make_pair(light, "light") })
+		{
+			const int nGap = qAbs(entry.first.color(QPalette::WindowText).lightness()
+				- entry.first.color(QPalette::Window).lightness());
+			Require(nGap > 80,
+				QStringLiteral("theme: %1 text stands off its background by %2")
+					.arg(QLatin1String(entry.second)).arg(nGap));
+		}
+
+		// THE TITLE BAR'S INPUT. MacAppearance::Apply is a native call with no
+		// Qt-visible effect, so the self-test cannot see the bar it paints -
+		// only a human on a Mac can. What IS checkable is the decision it is
+		// given: the dark theme's ground must be dark and the light theme's
+		// light. A theme file edited the other way would hand the frame the
+		// wrong answer, and this is the check that would say so.
+		Require(dark.color(QPalette::Base).lightness() < 128,
+			QStringLiteral("theme: the dark ground IS dark (%1), so the title bar follows")
+				.arg(dark.color(QPalette::Base).lightness()));
+		Require(light.color(QPalette::Base).lightness() >= 128,
+			QStringLiteral("theme: and the light ground is light (%1)")
+				.arg(light.color(QPalette::Base).lightness()));
+
+		// THE SELECTION BAND IS A TINT, not the raw colour. The light theme's
+		// selectionTextColor is literally "black" and Scintilla paints it at
+		// alpha 60, so handing the raw value to a QPalette - which has no alpha -
+		// put a solid black band behind selected text in the message pane.
+		// Reported from the UI. The band must therefore stay on its own side of
+		// the midpoint: light on a light theme, dark on a dark one.
+		Require(light.color(QPalette::Highlight).lightness() > 128,
+			QStringLiteral("theme: the light selection band is a light tint (%1)")
+				.arg(light.color(QPalette::Highlight).lightness()));
+		Require(dark.color(QPalette::Highlight).lightness() < 128,
+			QStringLiteral("theme: the dark selection band is a dark tint (%1)")
+				.arg(dark.color(QPalette::Highlight).lightness()));
+		for (const auto& entry : { std::make_pair(dark, "dark"), std::make_pair(light, "light") })
+		{
+			const int nGap = qAbs(entry.first.color(QPalette::HighlightedText).lightness()
+				- entry.first.color(QPalette::Highlight).lightness());
+			Require(nGap > 60,
+				QStringLiteral("theme: %1 selected text stands off its band by %2")
+					.arg(QLatin1String(entry.second)).arg(nGap));
+		}
+
+		// The chrome is NOT the editor's own ground, so the panes and the tab bar
+		// read as separate surfaces rather than one flat field.
+		Require(dark.color(QPalette::Window) != dark.color(QPalette::Base),
+			QStringLiteral("theme: the chrome sits off the editor background"));
+		OnSetTheme(EEditorTheme::Dark);
+		(void)darkText;
+	}
+
+	//----------------------------------------------------------------------
+	// Where the app finds its files. This is what makes a copied build work,
+	// so it is checked rather than assumed - see doc/PORTING.md 6u.
+	//----------------------------------------------------------------------
+	{
+		const QStringList candidates = ResourcePaths::Candidates(QStringLiteral("data"));
+		Require(candidates.size() >= 4,
+			QStringLiteral("paths: %1 candidates for the data directory")
+				.arg(candidates.size()));
+		// THE ORDER IS THE CONTRACT. A bundle's own Resources must beat
+		// everything, and the builder's source tree must lose to everything -
+		// otherwise a packaged copy on a machine that happens to have the source
+		// tree reads the wrong one, and works for exactly the wrong reason.
+		Require(candidates.first().contains(QStringLiteral("/../Resources/")),
+			QStringLiteral("paths: the bundle's Resources is tried FIRST, got '%1'")
+				.arg(candidates.first()));
+		Require(candidates.last() == QStringLiteral(VINATEXT_DATA_DIR),
+			QStringLiteral("paths: the compiled-in build path is tried LAST, got '%1'")
+				.arg(candidates.last()));
+
+		Require(QFile::exists(ResourcePaths::DataDir() + QStringLiteral("/languages.json")),
+			QStringLiteral("paths: the resolved data dir holds languages.json (%1)")
+				.arg(ResourcePaths::DataDir()));
+
+		// AND THE APP SAYS WHERE IT LOADED FROM. Without this the only way to
+		// tell a packaged copy reading its own data from one silently falling
+		// back to a build tree was to plant a fake theme colour and look - which
+		// is how the first manual test of this actually went. The pane reports
+		// what Load USED, not what the resolver would answer now, because --data
+		// overrides the search.
+		// NOT EMPTY FIRST. Without this the check passes on an empty string -
+		// "Data: " + "" is a prefix of the line whatever the line says - and it
+		// did: the accessor was added but never assigned, so the pane printed a
+		// bare "Data: " and this check could not fail. Found by mutating the
+		// value away and watching nothing happen.
+		Require(!m_Data.GetDataDir().isEmpty(),
+			QStringLiteral("paths: the loaded data dir is recorded, not empty"));
+		Require(strStartupLog.contains(QStringLiteral("Data: ")
+				+ ResourcePaths::ForDisplay(m_Data.GetDataDir())),
+			QStringLiteral("paths: the message pane names the data dir it loaded (%1)")
+				.arg(m_Data.GetDataDir()));
+		Require(strStartupLog.contains(QStringLiteral("Licences: ")
+				+ ResourcePaths::ForDisplay(ResourcePaths::LicenseDir())),
+			QStringLiteral("paths: and the licence dir"));
+
+		// AND WHICH CANDIDATE WON, which is the question the path alone makes
+		// you answer yourself. A build-tree run says "build tree"; a bundle says
+		// "bundle". Getting this label wrong would be worse than omitting it -
+		// it would state the opposite of the truth - so it is checked against
+		// the resolution rather than assumed from it.
+		Require(strStartupLog.contains(QStringLiteral("(build tree)")),
+			QStringLiteral("paths: a build-tree run says so, log was '%1'")
+				.arg(strStartupLog.simplified().left(200)));
+		Require(ResourcePaths::DescribeSource(
+				ResourcePaths::Candidates(QStringLiteral("data")).first(),
+				QStringLiteral("data")) == QStringLiteral("bundle"),
+			QStringLiteral("paths: the first candidate is labelled 'bundle'"));
+		Require(ResourcePaths::DescribeSource(QStringLiteral("/somewhere/else"),
+				QStringLiteral("data")) == QStringLiteral("--data"),
+			QStringLiteral("paths: anything off the list is labelled '--data'"));
+
+		// ~ is display only. A tilde handed to QFile opens nothing, so the two
+		// forms must not be confused - the log shows one and the resolver
+		// returns the other.
+		Require(!ResourcePaths::ForDisplay(m_Data.GetDataDir()).startsWith(QLatin1Char('/'))
+				|| !m_Data.GetDataDir().startsWith(QDir::homePath()),
+			QStringLiteral("paths: a path under HOME is displayed with ~"));
+		Require(QFile::exists(ResourcePaths::LicenseDir()
+				+ QStringLiteral("/License-VinaText.txt")),
+			QStringLiteral("paths: the resolved licence dir holds the licences (%1)")
+				.arg(ResourcePaths::LicenseDir()));
+
+		// EXISTING IS NOT THE SAME AS USABLE, tested on a scratch directory
+		// rather than next to the binary. The first version of this check wrote
+		// a decoy into the executable's own directory, and review was right that
+		// an install nobody can write to would fail it. It was worse than that:
+		// in the packaged layout this PR is building towards, <exe>/data IS the
+		// data directory, so mkpath succeeded trivially, the check asserted
+		// nothing, and the rmdir afterwards was aimed at the app's own data.
+		// Measured - the staged copy passed this check while testing none of it.
+		QTemporaryDir scratch;
+		Require(scratch.isValid(), QStringLiteral("paths: a scratch directory"));
+		Require(!ResourcePaths::HoldsResources(scratch.path(), QStringLiteral("data")),
+			QStringLiteral("paths: an EMPTY directory does not count as the data dir"));
+		// Pinned as a contract, not as a separate mechanism: it holds because
+		// the witness cannot exist inside a directory that does not, which is
+		// why the resolver has no exists() guard of its own.
+		Require(!ResourcePaths::HoldsResources(
+				QStringLiteral("/no/such/directory/anywhere"), QStringLiteral("data")),
+			QStringLiteral("paths: a directory that does not exist does not count"));
+		{
+			QFile witness(scratch.path() + QStringLiteral("/languages.json"));
+			Require(witness.open(QIODevice::WriteOnly), QStringLiteral("paths: wrote a witness"));
+			witness.close();
+		}
+		Require(ResourcePaths::HoldsResources(scratch.path(), QStringLiteral("data")),
+			QStringLiteral("paths: the SAME directory counts once the witness is in it"));
+		// And the rule is per-leaf: the data witness must not satisfy licences.
+		Require(!ResourcePaths::HoldsResources(scratch.path(), QStringLiteral("license")),
+			QStringLiteral("paths: languages.json does not make it a licence directory"));
 	}
 
 	//----------------------------------------------------------------------

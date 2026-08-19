@@ -131,6 +131,11 @@ private:
 	bool OnSaveAs();
 	bool OnCloseTab(int nIndex);
 	void OnSetTheme(EEditorTheme theme);
+
+	// Paints the window, panes, menus and dialogs from the same theme file the
+	// editor uses. Without it the theme stopped at the editor and everything
+	// around it followed the OS appearance instead.
+	void ApplyWindowTheme(EEditorTheme theme);
 	void OnToggleWordWrap(bool bEnable);
 	void OnToggleLongLineMarker(bool bEnable);
 	void OnShowFind() { ShowFindBar(false); }

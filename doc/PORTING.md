@@ -3507,3 +3507,281 @@ moved out of it.
 
 The `.icns` a macOS bundle needs is a packaging concern and comes with the bundle
 itself; this is what the running app uses.
+## 6v. The theme stopped at the editor
+
+**Reported from the UI, with two screenshots:** light theme on a Mac in Dark Mode
+gave a **white editor inside dark chrome** - dark tab bar, dark Message pane, dark
+menus, dark status bar. It reads as broken rather than as a choice.
+
+`OnSetTheme` walked the tab widgets and called `pEditor->ApplyTheme()`. Nothing
+else was touched, so everything around the editor took Qt's **default** palette,
+which on macOS follows the OS appearance. Measured, with the fix mutated out, the
+window is the same colour under both themes:
+
+```
+FAIL theme: the WINDOW palette changes with the theme (#efefef vs #efefef)
+```
+
+**This is a port gap, not a scope decision.** The MFC has no such split - **15**
+files under `src/` theme themselves from `IS_LIGHT_THEME`, including
+`BookmarkWindow`, `BuildWindow` and the dialogs. `ui-qt/` had essentially no
+palette code at all: a single stylesheet line, for the find bar's miss colour.
+The grep below returns **2** now - that line, and the `setPalette` this change
+adds.
+
+### One source for both halves
+
+`ApplyWindowTheme` builds a `QPalette` from the **same two lookups**
+`CEditorWidget` already makes - `ResolveColor("editorBackground")` and
+`ResolveRole("editorTextColor")` - so the chrome cannot drift from the editor it
+surrounds. Selection reuses `selectionTextColor`, so a selected row in the
+bookmark pane matches a selected word in the editor.
+
+Set on **`qApp`, not on the window**: Preferences and About are top-level windows
+of their own and would otherwise keep wearing the system appearance.
+
+Two things it deliberately does not do:
+
+- **Chrome is not the editor's own ground.** It is lightened on a dark theme and
+  darkened on a light one, so panes and the tab bar read as separate surfaces
+  rather than one flat field.
+- **A theme missing either key leaves the system palette alone.** A half-built
+  palette would be worse than the platform default - unreadable rather than
+  merely inconsistent.
+
+### The check that matters is legibility, not difference
+
+A palette can apply cleanly and paint text the colour of its own background,
+passing every "it changed" assertion while being unusable - the very failure this
+change exists to fix, in a new disguise. So the lightness gap between
+`WindowText` and `Window` is asserted to exceed 80 on **both** themes.
+
+**3 mutations, 3 caught**: never applying the palette; painting the text in the
+chrome colour (gap 0 on both themes); and making the chrome identical to the
+editor background.
+
+### And the selection band, which a QPalette cannot dilute
+
+Reported next: selected text in the message pane came out as a **solid black
+band with white text**. The light theme's `selectionTextColor` is literally
+`"black"`, and Scintilla paints it with `SCI_SETSELALPHA 60` - so in the editor
+it is a pale tint over white. **A `QPalette` has no alpha**, so handing it the
+raw value painted the thing at full strength, and the text had to be inverted to
+stay legible on it.
+
+Blended at the same weight the editor uses, the widgets get the tint the editor
+shows and ordinary text stays readable on top:
+
+```
+dark   band #595a56  text #ffffff
+light  band #c3c3c3  text #000000
+```
+
+The check is that the band stays on its own side of the midpoint - light on a
+light theme, dark on a dark one - plus a contrast gap against the text. Reverting
+to the raw colour reports lightness **0** and **255**, which is exactly the
+band that was reported.
+
+### The title bar, which a QPalette cannot reach
+
+The palette fix landed and the report came back: **still not fully fixed.** Every
+surface was themed except the one at the top. On macOS the **title bar is drawn
+by the system**, follows the OS appearance, and no `QPalette` touches it - so a
+light theme under Dark Mode left a dark bar on an otherwise light window.
+
+There is no cross-platform Qt API for this. AppKit's `NSApplication.appearance`
+is the whole mechanism, so `ui-qt/MacAppearance.mm` is the port's first
+Objective-C++ file, with `MacAppearanceStub.cpp` compiled everywhere else - the
+`if(APPLE)` lives in CMake so the call site carries no `#ifdef`. Set on the
+**application**, so dialogs, popups and the menu bar move with it rather than
+each needing to be found and told.
+
+It is decided from **the ground the theme actually gives**, not from which enum
+was passed, so a theme file whose "light" is dark still gets a matching frame.
+
+**The self-test cannot see this one.** It is a native call with no Qt-visible
+effect; only a human on a Mac can confirm the bar. What is checkable is the
+decision handed to it, so that is what is checked: the dark theme's ground must
+be dark and the light theme's light. A theme file edited the other way would give
+the frame the wrong answer, and those two assertions are what would say so.
+
+**Self-test: 1,072 -> 1,079 checks on defaults, 1,076 -> 1,083 configured**
+(macOS). 10/10 core tests; `src/` untouched.
+
+Reproduce:
+
+```bash
+# the MFC themes 15 files; ui-qt now has 2 palette lines, one of them this change
+grep -rl "IS_LIGHT_THEME" src/*.cpp | wc -l          # 15
+grep -rn "setPalette\|setStyleSheet" ui-qt/*.cpp | wc -l   # 2
+
+# and look at them
+./qtbuild/ui-qt/vinatext-qt --screenshot /tmp/th core/LanguageData.cpp
+```
+## 6u. Nothing was relocatable — the prerequisite for packaging
+
+Packaging was deferred to last on purpose. Starting it turned up the thing that
+had to come first: **the Qt app could not be copied anywhere.**
+
+Both of the directories it reads at run time were compiled in as **absolute paths
+into the source tree**:
+
+```cmake
+VINATEXT_DATA_DIR="${CMAKE_SOURCE_DIR}/Packages/data-packages"
+VINATEXT_LICENSE_DIR="${CMAKE_SOURCE_DIR}/license"
+```
+
+That is correct for a build-tree run and wrong for every other copy. A `.app`
+handed to somebody else looks for `languages.json` in a directory on **the
+builder's machine**. No bundle, `.dmg` or AppImage can work until this is fixed,
+which is why it is a PR of its own and not a line inside the bundling one.
+
+**The licence half is a D3 obligation, not a nicety.** The About box tells the
+user the Qt licence text is at `license/License-Qt.txt`. LGPLv3 compliance
+depends on that text actually shipping - a path true only in the build tree makes
+the statement false in every distributed copy.
+
+### The search order is the whole contract
+
+`ResourcePaths::Candidates` returns, in order:
+
+1. `<exe>/../Resources/<leaf>` — a macOS bundle's own resources
+2. `<exe>/<leaf>` — an AppImage's AppDir, or an unpacked tarball
+3. `<exe>/../share/vinatext/<leaf>` — a Linux prefix install
+4. the compiled-in build path — **last**
+
+**Last matters as much as first.** If the builder's source tree were tried
+early, a packaged copy running on a machine that happens to have the source would
+read from it and work *for the wrong reason* - and fail only on the machines
+nobody tests on. The check asserts both ends, not just the winner.
+
+### Existing is not the same as usable
+
+A candidate only counts if it holds a witness file — `languages.json` for data,
+`License-VinaText.txt` for licences. Without that rule an **empty** directory next
+to the binary wins the search, and the app then reports a missing `languages.json`
+rather than a missing directory: the failure one step removed from its cause.
+
+And when nothing resolves, the compiled-in path is returned rather than an empty
+string, so the caller's error names somewhere real.
+
+### Proved by relocating it, not by reading it
+
+```bash
+# stage a copy the way a bundle lays out
+cp qtbuild/ui-qt/vinatext-qt  $R/
+cp -R Packages/data-packages  $R/data
+cp -R license                 $R/license
+cd $R && ./vinatext-qt --selftest $R/data/languages.json     # runs
+
+# now break the STAGED licences while the source tree keeps its own
+rm $R/license/License-Qt.txt
+cd $R && ./vinatext-qt --selftest $R/data/languages.json
+# FAIL attribution: <staged>/license/License-Qt.txt exists
+```
+
+The failure names the **staged** path, and the intact source tree does not rescue
+it. That is the proof that the copy reads its own files and that precedence works.
+
+**2 mutations, 2 caught**: putting the compiled-in path first, and dropping the
+witness-file rule.
+
+### Review: the check wrote into the directory it was testing
+
+The first version of the "empty directory does not win" check created a decoy at
+`<exe>/data`, asserted the resolver ignored it, and removed it. Review flagged
+that a read-only install would fail on `mkpath`. **True, and the smaller half of
+the problem.** In the packaged layout this PR exists to enable, `<exe>/data` **is
+the data directory**:
+
+```
+$ ls $R/data
+all-file-extension.dat  file-format-description.dat  languages.json  ...
+```
+
+So `mkpath` succeeded on an existing directory, the "empty directory" assertion
+ran against a full one, **the check asserted nothing**, and the `rmdir` after it
+was aimed at the app's own data. Measured: the staged copy passed that check
+while testing none of it. It was three faults in one - fragile on read-only,
+vacuous when packaged, and pointed at live files.
+
+The rule is now public (`HoldsResources`) and tested on a `QTemporaryDir`:
+empty directory -> no, witness added -> yes, and **per leaf** - `languages.json`
+must not make somewhere a licence directory. Nothing is written next to the
+binary, so a read-only install passes:
+
+```
+read-only staged copy: 0 failing paths checks
+```
+
+**A third mutation was NOT caught, and that removed code.** "A directory that
+does not exist counts" changed no result, because the witness cannot exist inside
+a directory that does not - the early `exists(strDir)` guard was unreachable
+defensiveness. It is gone; the assertion stays as a statement of contract, with a
+comment saying which mechanism enforces it.
+
+Also from review: `ResourcePaths.h` returns a `QStringList` while including only
+`<QString>`, which supplies just the **forward declaration** from
+`qcontainerfwd.h` - enough to *declare* the function, not for a caller to *use*
+the result. Measured: `#include <QString>` + `QStringList x;` fails with
+"implicit instantiation of undefined template". `<QStringList>` added, as
+`SingleInstance.h` already does.
+
+### The app now says where it loaded from, because a human could not tell
+
+Testing the relocation by hand needed a **fake theme colour** to tell a staged
+copy from a fallback to the build tree - the running app offered no way to see
+which directory won. That is precisely the question a packaged copy raises on
+somebody else's machine, so the message pane says it at startup, beside the
+settings line it already printed:
+
+```
+Data: /Users/.../vinatext-reloc/data
+Licences: /Users/.../vinatext-reloc/license
+Settings: no file at ... - using defaults
+```
+
+It reports what `Load` **used**, not what the resolver would answer now -
+`--data` overrides the search entirely, so asking again would name a directory
+this run never touched.
+
+**And writing the check for it found the accessor was never assigned.** An
+earlier edit to `EditorData` aborted partway, so `GetDataDir()` returned an empty
+string, the pane printed a bare `Data: `, and the check - `contains("Data: " +
+GetDataDir())` - **could not fail**, because `"Data: " + ""` is a prefix of
+whatever the line says. It passed while the feature was broken. Found by mutating
+the value away and watching nothing happen, then probing the value itself. The
+check now asserts the dir is non-empty first.
+
+A second mutation confirms the distinction that matters: logging
+`ResourcePaths::DataDir()` instead of what `Load` used passes at the defaults and
+fails under `--data`, which is the only configuration where the two differ.
+
+### And it says WHICH candidate won
+
+The first version printed the bare path, and the first person to read it had to
+decode the only question they were asking - did this copy find its own files, or
+fall back to somebody's source tree? It is labelled now, with `$HOME` collapsed
+so the line is short enough to take in:
+
+```
+Data: ~/Work/my-apps/VinaText/Packages/data-packages (build tree)
+Licences: ~/Work/my-apps/VinaText/license (build tree)
+```
+
+A bundle says `(bundle)`, a copy with its files beside it says `(next to the
+app)`, and anything off the candidate list says `(--data)`. **A wrong label would
+be worse than none** - it would state the opposite of the truth - so it is
+checked against the resolution rather than assumed from it, and the labels are
+positional, which the comment records: a candidate added without a label added
+beside it would silently take its neighbour's name.
+
+`~` is display only. A tilde handed to `QFile` opens nothing, so the two forms
+are kept apart and a check pins it.
+
+**Self-test: 1,072 -> 1,090 checks on defaults, 1,076 -> 1,094 configured**
+(macOS). 10/10 core tests; `src/` untouched.
+
+**Still to do before there is an artifact:** the macOS bundle and `.dmg`, the
+Linux AppImage, CI uploading both, and checking D3's dynamic-linking obligation
+against the shipped binary rather than against the build.
