@@ -8,6 +8,8 @@
 
 #include "MainWindow.h"
 
+#include "MacAppearance.h"
+
 #include "EditorWidget.h"
 #include "FindBar.h"
 #include "GotoBar.h"
@@ -1243,6 +1245,14 @@ void CMainWindow::ApplyWindowTheme(EEditorTheme theme)
 	// their own, and a palette set here would leave Preferences and About still
 	// wearing the system appearance.
 	qApp->setPalette(palette);
+
+	// AND THE TITLE BAR, which the palette cannot touch - macOS draws it and it
+	// follows the OS appearance, so a light theme under Dark Mode kept a dark
+	// bar on top of an otherwise light window. Reported from the UI after the
+	// palette fix had already landed. Decided from the ground the theme gives
+	// us rather than from which enum was passed, so a theme file whose "light"
+	// is dark still gets a matching frame.
+	MacAppearance::Apply(editorBack.lightness() < 128);
 }
 
 void CMainWindow::OnSetTheme(EEditorTheme theme)
@@ -2589,6 +2599,19 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 				QStringLiteral("theme: %1 text stands off its background by %2")
 					.arg(QLatin1String(entry.second)).arg(nGap));
 		}
+
+		// THE TITLE BAR'S INPUT. MacAppearance::Apply is a native call with no
+		// Qt-visible effect, so the self-test cannot see the bar it paints -
+		// only a human on a Mac can. What IS checkable is the decision it is
+		// given: the dark theme's ground must be dark and the light theme's
+		// light. A theme file edited the other way would hand the frame the
+		// wrong answer, and this is the check that would say so.
+		Require(dark.color(QPalette::Base).lightness() < 128,
+			QStringLiteral("theme: the dark ground IS dark (%1), so the title bar follows")
+				.arg(dark.color(QPalette::Base).lightness()));
+		Require(light.color(QPalette::Base).lightness() >= 128,
+			QStringLiteral("theme: and the light ground is light (%1)")
+				.arg(light.color(QPalette::Base).lightness()));
 
 		// The chrome is NOT the editor's own ground, so the panes and the tab bar
 		// read as separate surfaces rather than one flat field.

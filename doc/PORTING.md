@@ -3515,7 +3515,30 @@ change exists to fix, in a new disguise. So the lightness gap between
 chrome colour (gap 0 on both themes); and making the chrome identical to the
 editor background.
 
-**Self-test: 1,072 -> 1,077 checks on defaults, 1,076 -> 1,081 configured**
+### The title bar, which a QPalette cannot reach
+
+The palette fix landed and the report came back: **still not fully fixed.** Every
+surface was themed except the one at the top. On macOS the **title bar is drawn
+by the system**, follows the OS appearance, and no `QPalette` touches it - so a
+light theme under Dark Mode left a dark bar on an otherwise light window.
+
+There is no cross-platform Qt API for this. AppKit's `NSApplication.appearance`
+is the whole mechanism, so `ui-qt/MacAppearance.mm` is the port's first
+Objective-C++ file, with `MacAppearanceStub.cpp` compiled everywhere else - the
+`if(APPLE)` lives in CMake so the call site carries no `#ifdef`. Set on the
+**application**, so dialogs, popups and the menu bar move with it rather than
+each needing to be found and told.
+
+It is decided from **the ground the theme actually gives**, not from which enum
+was passed, so a theme file whose "light" is dark still gets a matching frame.
+
+**The self-test cannot see this one.** It is a native call with no Qt-visible
+effect; only a human on a Mac can confirm the bar. What is checkable is the
+decision handed to it, so that is what is checked: the dark theme's ground must
+be dark and the light theme's light. A theme file edited the other way would give
+the frame the wrong answer, and those two assertions are what would say so.
+
+**Self-test: 1,072 -> 1,079 checks on defaults, 1,076 -> 1,083 configured**
 (macOS). 10/10 core tests; `src/` untouched.
 
 Reproduce:
