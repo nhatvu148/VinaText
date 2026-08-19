@@ -1222,13 +1222,29 @@ void CMainWindow::ApplyWindowTheme(EEditorTheme theme)
 	palette.setColor(QPalette::ButtonText, text);
 	palette.setColor(QPalette::ToolTipBase, chrome);
 	palette.setColor(QPalette::ToolTipText, text);
-	// The selection colour the editor already uses, so a selected row in the
-	// bookmark pane and a selected word in the editor are the same colour.
+	// The selection colour the editor already uses - BLENDED, not raw. Scintilla
+	// paints it with SCI_SETSELALPHA 60, so in the editor "black" is a pale grey
+	// tint over white. A QPalette has no alpha, so handing it the raw value
+	// painted a SOLID BLACK band behind selected text in the message pane, with
+	// white text on it. Reported from the UI, and it was mine.
+	//
+	// Blending at the same weight gives the widgets the tint the editor shows,
+	// and the ordinary text colour then stays readable on top of it - which the
+	// raw version could not, since it had to invert the text to compensate.
 	Core::SColor selection;
 	if (data.ResolveRole("selectionTextColor", selection))
 	{
-		palette.setColor(QPalette::Highlight, ToQColor(selection));
-		palette.setColor(QPalette::HighlightedText, editorBack);
+		const int nSelAlpha = 60;			// the value passed to SCI_SETSELALPHA
+		const QColor raw = ToQColor(selection);
+		const auto Blend = [&](int nFore, int nBack)
+		{
+			return (nFore * nSelAlpha + nBack * (255 - nSelAlpha)) / 255;
+		};
+		palette.setColor(QPalette::Highlight, QColor(
+			Blend(raw.red(), editorBack.red()),
+			Blend(raw.green(), editorBack.green()),
+			Blend(raw.blue(), editorBack.blue())));
+		palette.setColor(QPalette::HighlightedText, text);
 	}
 	// Disabled text has to be derived - no theme key describes it - and a flat
 	// grey would vanish on one theme or the other. Halfway to the ground it sits
@@ -2612,6 +2628,27 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 		Require(light.color(QPalette::Base).lightness() >= 128,
 			QStringLiteral("theme: and the light ground is light (%1)")
 				.arg(light.color(QPalette::Base).lightness()));
+
+		// THE SELECTION BAND IS A TINT, not the raw colour. The light theme's
+		// selectionTextColor is literally "black" and Scintilla paints it at
+		// alpha 60, so handing the raw value to a QPalette - which has no alpha -
+		// put a solid black band behind selected text in the message pane.
+		// Reported from the UI. The band must therefore stay on its own side of
+		// the midpoint: light on a light theme, dark on a dark one.
+		Require(light.color(QPalette::Highlight).lightness() > 128,
+			QStringLiteral("theme: the light selection band is a light tint (%1)")
+				.arg(light.color(QPalette::Highlight).lightness()));
+		Require(dark.color(QPalette::Highlight).lightness() < 128,
+			QStringLiteral("theme: the dark selection band is a dark tint (%1)")
+				.arg(dark.color(QPalette::Highlight).lightness()));
+		for (const auto& entry : { std::make_pair(dark, "dark"), std::make_pair(light, "light") })
+		{
+			const int nGap = qAbs(entry.first.color(QPalette::HighlightedText).lightness()
+				- entry.first.color(QPalette::Highlight).lightness());
+			Require(nGap > 60,
+				QStringLiteral("theme: %1 selected text stands off its band by %2")
+					.arg(QLatin1String(entry.second)).arg(nGap));
+		}
 
 		// The chrome is NOT the editor's own ground, so the panes and the tab bar
 		// read as separate surfaces rather than one flat field.

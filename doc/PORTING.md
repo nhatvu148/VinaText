@@ -3515,6 +3515,28 @@ change exists to fix, in a new disguise. So the lightness gap between
 chrome colour (gap 0 on both themes); and making the chrome identical to the
 editor background.
 
+### And the selection band, which a QPalette cannot dilute
+
+Reported next: selected text in the message pane came out as a **solid black
+band with white text**. The light theme's `selectionTextColor` is literally
+`"black"`, and Scintilla paints it with `SCI_SETSELALPHA 60` - so in the editor
+it is a pale tint over white. **A `QPalette` has no alpha**, so handing it the
+raw value painted the thing at full strength, and the text had to be inverted to
+stay legible on it.
+
+Blended at the same weight the editor uses, the widgets get the tint the editor
+shows and ordinary text stays readable on top:
+
+```
+dark   band #595a56  text #ffffff
+light  band #c3c3c3  text #000000
+```
+
+The check is that the band stays on its own side of the midpoint - light on a
+light theme, dark on a dark one - plus a contrast gap against the text. Reverting
+to the raw colour reports lightness **0** and **255**, which is exactly the
+band that was reported.
+
 ### The title bar, which a QPalette cannot reach
 
 The palette fix landed and the report came back: **still not fully fixed.** Every
