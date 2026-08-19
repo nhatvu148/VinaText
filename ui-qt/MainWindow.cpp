@@ -34,6 +34,7 @@
 #include <QMouseEvent>
 #include <QFile>
 #include <QFileDialog>
+#include <QInputDialog>
 #include <QFileInfo>
 #include <QLabel>
 #include <QMenuBar>
@@ -1068,14 +1069,60 @@ void CMainWindow::OnNew()
 	NewUntitled();
 }
 
+#ifdef Q_OS_WASM
+namespace
+{
+	// Where a browser-supplied file lands before the ordinary open path picks it
+	// up. Emscripten mounts an in-memory MEMFS at "/", so this is a real QFile
+	// path as far as the rest of the editor is concerned - it just does not
+	// survive a reload, which is what "the browser gave us these bytes" means.
+	QString WebStagePath(const QString& strName)
+	{
+		const QString strLeaf = QFileInfo(strName).fileName();
+		return QDir::tempPath() + QLatin1Char('/')
+			+ (strLeaf.isEmpty() ? QStringLiteral("untitled.txt") : strLeaf);
+	}
+}
+#endif
+
 void CMainWindow::OnOpen()
 {
+#ifdef Q_OS_WASM
+	// THE BROWSER OWNS THE FILE PICKER. There is no path to ask for - the page
+	// is handed BYTES and a name - so the bytes are staged into MEMFS and the
+	// ordinary OpenFile() runs on them. That is deliberate: encoding detection,
+	// BOM handling, EOL detection and lexer selection all live behind OpenFile,
+	// and a second load path on the web would be a second set of those bugs.
+	//
+	// The callback fires asynchronously, after the user picks. Qt hands back an
+	// empty name when they cancel.
+	QFileDialog::getOpenFileContent(tr("All files (*)"),
+		[this](const QString& strName, const QByteArray& content)
+	{
+		if (strName.isEmpty())
+		{
+			return;
+		}
+		const QString strStaged = WebStagePath(strName);
+		QFile staged(strStaged);
+		if (!staged.open(QIODevice::WriteOnly))
+		{
+			QMessageBox::warning(this, tr("VinaText"),
+				tr("Could not stage %1 for opening.").arg(strName));
+			return;
+		}
+		staged.write(content);
+		staged.close();
+		OpenFile(strStaged);
+	});
+#else
 	const QStringList paths = QFileDialog::getOpenFileNames(this, tr("Open File"),
 		m_strLastDirectory);
 	for (const QString& strPath : paths)
 	{
 		OpenFile(strPath);
 	}
+#endif
 }
 
 bool CMainWindow::OnSave()
@@ -1102,12 +1149,31 @@ bool CMainWindow::OnSaveAs()
 	const QString strSuggested = pEditor->IsUntitled()
 		? m_strLastDirectory + QLatin1Char('/') + pEditor->GetDisplayName()
 		: pEditor->GetFilePath();
+
+#ifdef Q_OS_WASM
+	// NO FILE DIALOG HERE. getSaveFileName would draw Qt's own browser over
+	// MEMFS - an in-memory filesystem the user cannot see, did not put anything
+	// in, and cannot reach afterwards - so it would ask them to choose a
+	// location that does not exist in any sense they mean. The name is asked for
+	// instead, and the browser decides where the download goes, which is the
+	// only answer the platform actually has.
+	bool bAccepted = false;
+	const QString strName = QInputDialog::getText(this, tr("Save File As"),
+		tr("File name:"), QLineEdit::Normal,
+		QFileInfo(strSuggested).fileName(), &bAccepted);
+	if (!bAccepted || strName.trimmed().isEmpty())
+	{
+		return false;
+	}
+	return SaveEditor(pEditor, WebStagePath(strName.trimmed()));
+#else
 	const QString strPath = QFileDialog::getSaveFileName(this, tr("Save File As"), strSuggested);
 	if (strPath.isEmpty())
 	{
 		return false;
 	}
 	return SaveEditor(pEditor, strPath);
+#endif
 }
 
 bool CMainWindow::SaveEditor(CEditorWidget* pEditor, const QString& strPath)
@@ -1126,9 +1192,29 @@ bool CMainWindow::SaveEditor(CEditorWidget* pEditor, const QString& strPath)
 	UpdateTabLabel(pEditor);
 	UpdateStatusBar();
 	UpdateWindowTitle();
+
+#ifdef Q_OS_WASM
+	// AND THEN HAND IT TO THE BROWSER. SaveFile has just written to MEMFS, which
+	// nobody can reach and which does not survive a reload - on the web a save
+	// the user cannot see is not a save. saveFileContent triggers a download of
+	// the bytes that were just written, so what lands in their Downloads folder
+	// is the encoder's output, byte for byte: the same BOM, the same line
+	// endings, the same codepage. Re-reading the file rather than re-encoding
+	// the buffer is the point - a second encode is a second chance to differ.
+	QFile written(strPath);
+	if (written.open(QIODevice::ReadOnly))
+	{
+		QFileDialog::saveFileContent(written.readAll(), QFileInfo(strPath).fileName());
+		written.close();
+	}
+	statusBar()->showMessage(tr("Downloaded %1").arg(QFileInfo(strPath).fileName()), 3000);
+	LogMessage(tr("Downloaded %1").arg(QFileInfo(strPath).fileName()));
+	return true;
+#else
 	statusBar()->showMessage(tr("Saved %1").arg(strPath), 3000);
 	LogMessage(tr("Saved %1").arg(strPath));
 	return true;
+#endif
 }
 
 bool CMainWindow::ConfirmClose(CEditorWidget* pEditor)

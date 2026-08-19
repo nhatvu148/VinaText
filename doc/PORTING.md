@@ -4021,3 +4021,109 @@ QT_QPA_PLATFORM=offscreen /tmp/linux/VinaText.AppDir/usr/bin/vinatext-qt \
 # the icon, with nothing installed
 tools/extract_ico_png.py res/app.ico /tmp/vinatext.png
 ```
+
+## 6z. The editor runs in a browser
+
+Qt for WebAssembly. `ui-qt/` builds and runs in a browser: menus, tab bar, the
+Scintilla view, the Message pane, the status bar, the dark theme from 6v - all of
+it, from the same sources the desktop builds.
+
+**The Message pane is what proved the resources resolved, on the first run:**
+
+```
+Settings: no file at /home/web_user/.local/share/VinaText/... - using defaults
+Data: /data (next to the app)
+Licences: /license (next to the app)
+```
+
+That is the labelled-path work from 6u answering a question it was never written
+for. Nothing about the web target was anticipated when it was built.
+
+### An open licensing obligation, recorded rather than resolved
+
+**This build is STATIC Qt**, because that is what Qt for WebAssembly is: dynamic
+linking exists there but is Technology Preview in 6.11 and Qt's own documentation
+says it is "not suitable for production use". CLAUDE.md's rule is flat - *never
+link Qt statically* - and this contradicts it.
+
+The decision to proceed was the maintainer's, taken knowingly. **The obligation
+is not discharged**: §4 D3 spells out the compliant path for static linking -
+publish relinkable object files so a user can rebuild against their own Qt - and
+nothing here does that yet. **Do not publish a web build to users until it is.**
+This section exists so the gap is written down rather than implied by silence.
+
+### Scintilla failed to LINK, not compile, and upstream had the switch
+
+On wasm32 `ptrdiff_t` is `long` - **not** `int` - while `PTRDIFF_MAX == INT_MAX`.
+`RunStyles.cxx` guards its `ptrdiff_t` instantiations on the **range** differing
+rather than the **type** differing, so on wasm32 they are skipped:
+
+```
+wasm-ld: error: undefined symbol: RunStyles<long, int>::DeleteRange(long, long)
+```
+
+Measured, with em++ 4.0.7:
+
+```cpp
+static_assert(std::is_same<ptrdiff_t, int>::value);   // "long is not int"
+```
+
+Scintilla anticipates exactly this - it carries a `PTRDIFF_DOESNT_ALIAS_INT`
+escape hatch and a `__HAIKU__` case for the same property - so the fix is one
+compile definition under `if(EMSCRIPTEN)`. **No vendored code was touched**,
+which CLAUDE.md forbids.
+
+### Two features the platform simply does not have
+
+- **Single instance.** Qt: *"All Q*Server classes are not supported by the
+  platform."* A browser tab cannot listen on a socket, and there is nothing for
+  it to mean anyway - a second tab is a second sandbox. `#ifndef Q_OS_WASM`
+  around the block, so the intent is legible rather than looking like a bug.
+- **A filesystem.** Emscripten mounts an in-memory MEMFS at `/` and nothing else
+  exists. The data and licences are baked in with `--preload-file`, which is why
+  they land at `/data` and `/license` - candidate 2, "next to the app".
+
+### Open and save go through the browser, and through the SAME code
+
+`getOpenFileContent` hands the page **bytes and a name**, never a path. So the
+bytes are staged into MEMFS and the ordinary `OpenFile()` runs on them:
+encoding detection, BOM handling, EOL detection and lexer selection all live
+behind that call, and a second load path on the web would be a second set of
+those bugs.
+
+Saving mirrors it. `SaveFile()` writes to MEMFS, then the file is **read back**
+and handed to `saveFileContent`, which downloads it - so what reaches the user's
+disk is the encoder's output byte for byte, the same BOM and line endings.
+Re-reading rather than re-encoding is the point: a second encode is a second
+chance to differ.
+
+Save As asks for a **name**, not a location. `getSaveFileName` would draw Qt's
+own browser over MEMFS - a filesystem the user cannot see, did not fill, and
+cannot reach - so it would ask them to choose a place that does not exist in any
+sense they mean.
+
+### What is verified, and what is not
+
+**Verified:** the wasm target builds; the app starts in Chrome and renders the
+full editor including the Scintilla view (captured); resources resolve to the
+preloaded copies; the desktop build is untouched - 1,106 checks, 10/10 core, both
+web changes behind `if(EMSCRIPTEN)` / `#ifdef Q_OS_WASM`.
+
+**Not verified:** the file open/save round trip in a browser, and the rendering
+of the build that contains it. Qt's canvas does not preserve its WebGL drawing
+buffer, so `toDataURL` returns a cleared frame more often than not, and synthetic
+key events do not reach Qt's input handling. **A human has to open the page, load
+a file and save it.** No self-test covers the web target at all - there is no
+headless wasm runner here, and CI does not build it.
+
+Reproduce (toolchain lives outside the repo):
+
+```bash
+aqt install-qt all_os wasm 6.11.1 wasm_singlethread -m qt5compat -O /tmp/qt-wasm
+git clone https://github.com/emscripten-core/emsdk && emsdk/emsdk install 4.0.7
+. emsdk/emsdk_env.sh
+/tmp/qt-wasm/6.11.1/wasm_singlethread/bin/qt-cmake -S . -B qtwasm -G Ninja \
+  -DVINATEXT_BUILD_QT=ON -DQT_HOST_PATH="$(brew --prefix qt)"
+cmake --build qtwasm --parallel
+(cd qtwasm/ui-qt && python3 -m http.server 8712)   # then open vinatext-qt.html
+```

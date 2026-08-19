@@ -104,6 +104,21 @@ target_compile_definitions(vinatext-qt PRIVATE
 # vinatext-qt.app/Contents/MacOS/vinatext-qt and break every command in CI and in
 # doc/PORTING.md that runs ./qtbuild/ui-qt/vinatext-qt - for a build nobody was
 # asking to package. Packaging asks for it explicitly.
+# WEB (SPIKE). A wasm build has no filesystem: Emscripten mounts an in-memory
+# MEMFS at "/" and nothing else exists, so ResourcePaths resolves nothing and
+# main() correctly refuses to start. --preload-file bakes the data and the
+# licences into a .data file the loader fetches, landing them at /data and
+# /license - which is candidate 2, "next to the app", since applicationDirPath
+# is "/" here.
+#
+# THIS IS THE SPIKE'S ANSWER TO RESOURCES, not a shipping decision: baking them
+# in makes the download bigger and makes --data meaningless. See doc/PORTING.md 6z.
+if(EMSCRIPTEN)
+    target_link_options(vinatext-qt PRIVATE
+        "SHELL:--preload-file ${CMAKE_SOURCE_DIR}/Packages/data-packages@/data"
+        "SHELL:--preload-file ${CMAKE_SOURCE_DIR}/license@/license")
+endif()
+
 option(VINATEXT_MACOS_BUNDLE "Build ui-qt as a macOS .app bundle" OFF)
 
 if(APPLE AND VINATEXT_MACOS_BUNDLE)

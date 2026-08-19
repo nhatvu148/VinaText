@@ -77,6 +77,21 @@ target_include_directories(scintilla_editbase SYSTEM PUBLIC
 # Exactly the .pro's DEFINES.
 target_compile_definitions(scintilla_editbase PUBLIC SCINTILLA_QT=1 MAKING_LIBRARY=1)
 
+# WASM32: ptrdiff_t is `long`, which is NOT `int`, while PTRDIFF_MAX == INT_MAX.
+# RunStyles.cxx guards its ptrdiff_t instantiations on the RANGE being different
+# rather than the TYPE being different, so on wasm32 they are skipped and the
+# link fails on RunStyles<long, int>. Scintilla anticipates exactly this - it
+# carries a PTRDIFF_DOESNT_ALIAS_INT escape hatch and a __HAIKU__ special case
+# for the same property - so this uses upstream's own switch rather than
+# patching vendored code, which CLAUDE.md forbids.
+#
+#   static_assert(std::is_same<ptrdiff_t, int>::value) -> "long is not int"
+#
+# Measured with em++ 4.0.7. See doc/PORTING.md 6z.
+if(EMSCRIPTEN)
+    target_compile_definitions(scintilla_editbase PUBLIC PTRDIFF_DOESNT_ALIAS_INT=1)
+endif()
+
 # Qt5Compat is required on Qt 6: PlatQt.cpp and ScintillaQt.cpp use QTextCodec in
 # more than ten places. LGPLv3, same as the rest of Qt - see brief D2/D3.
 target_link_libraries(scintilla_editbase PUBLIC
