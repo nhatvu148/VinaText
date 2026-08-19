@@ -3462,6 +3462,117 @@ QT_QPA_PLATFORM=offscreen ./qtbuild/ui-qt/vinatext-qt --selftest \
   qtbuild/fixtures/tags.xml qtbuild/fixtures/urls.md 2>&1 | tail -1
 ```
 
+## 6v. The theme stopped at the editor
+
+**Reported from the UI, with two screenshots:** light theme on a Mac in Dark Mode
+gave a **white editor inside dark chrome** - dark tab bar, dark Message pane, dark
+menus, dark status bar. It reads as broken rather than as a choice.
+
+`OnSetTheme` walked the tab widgets and called `pEditor->ApplyTheme()`. Nothing
+else was touched, so everything around the editor took Qt's **default** palette,
+which on macOS follows the OS appearance. Measured, with the fix mutated out, the
+window is the same colour under both themes:
+
+```
+FAIL theme: the WINDOW palette changes with the theme (#efefef vs #efefef)
+```
+
+**This is a port gap, not a scope decision.** The MFC has no such split - **15**
+files under `src/` theme themselves from `IS_LIGHT_THEME`, including
+`BookmarkWindow`, `BuildWindow` and the dialogs. `ui-qt/` had essentially no
+palette code at all: a single stylesheet line, for the find bar's miss colour.
+The grep below returns **2** now - that line, and the `setPalette` this change
+adds.
+
+### One source for both halves
+
+`ApplyWindowTheme` builds a `QPalette` from the **same two lookups**
+`CEditorWidget` already makes - `ResolveColor("editorBackground")` and
+`ResolveRole("editorTextColor")` - so the chrome cannot drift from the editor it
+surrounds. Selection reuses `selectionTextColor`, so a selected row in the
+bookmark pane matches a selected word in the editor.
+
+Set on **`qApp`, not on the window**: Preferences and About are top-level windows
+of their own and would otherwise keep wearing the system appearance.
+
+Two things it deliberately does not do:
+
+- **Chrome is not the editor's own ground.** It is lightened on a dark theme and
+  darkened on a light one, so panes and the tab bar read as separate surfaces
+  rather than one flat field.
+- **A theme missing either key leaves the system palette alone.** A half-built
+  palette would be worse than the platform default - unreadable rather than
+  merely inconsistent.
+
+### The check that matters is legibility, not difference
+
+A palette can apply cleanly and paint text the colour of its own background,
+passing every "it changed" assertion while being unusable - the very failure this
+change exists to fix, in a new disguise. So the lightness gap between
+`WindowText` and `Window` is asserted to exceed 80 on **both** themes.
+
+**3 mutations, 3 caught**: never applying the palette; painting the text in the
+chrome colour (gap 0 on both themes); and making the chrome identical to the
+editor background.
+
+### And the selection band, which a QPalette cannot dilute
+
+Reported next: selected text in the message pane came out as a **solid black
+band with white text**. The light theme's `selectionTextColor` is literally
+`"black"`, and Scintilla paints it with `SCI_SETSELALPHA 60` - so in the editor
+it is a pale tint over white. **A `QPalette` has no alpha**, so handing it the
+raw value painted the thing at full strength, and the text had to be inverted to
+stay legible on it.
+
+Blended at the same weight the editor uses, the widgets get the tint the editor
+shows and ordinary text stays readable on top:
+
+```
+dark   band #595a56  text #ffffff
+light  band #c3c3c3  text #000000
+```
+
+The check is that the band stays on its own side of the midpoint - light on a
+light theme, dark on a dark one - plus a contrast gap against the text. Reverting
+to the raw colour reports lightness **0** and **255**, which is exactly the
+band that was reported.
+
+### The title bar, which a QPalette cannot reach
+
+The palette fix landed and the report came back: **still not fully fixed.** Every
+surface was themed except the one at the top. On macOS the **title bar is drawn
+by the system**, follows the OS appearance, and no `QPalette` touches it - so a
+light theme under Dark Mode left a dark bar on an otherwise light window.
+
+There is no cross-platform Qt API for this. AppKit's `NSApplication.appearance`
+is the whole mechanism, so `ui-qt/MacAppearance.mm` is the port's first
+Objective-C++ file, with `MacAppearanceStub.cpp` compiled everywhere else - the
+`if(APPLE)` lives in CMake so the call site carries no `#ifdef`. Set on the
+**application**, so dialogs, popups and the menu bar move with it rather than
+each needing to be found and told.
+
+It is decided from **the ground the theme actually gives**, not from which enum
+was passed, so a theme file whose "light" is dark still gets a matching frame.
+
+**The self-test cannot see this one.** It is a native call with no Qt-visible
+effect; only a human on a Mac can confirm the bar. What is checkable is the
+decision handed to it, so that is what is checked: the dark theme's ground must
+be dark and the light theme's light. A theme file edited the other way would give
+the frame the wrong answer, and those two assertions are what would say so.
+
+**Self-test: 1,072 -> 1,079 checks on defaults, 1,076 -> 1,083 configured**
+(macOS). 10/10 core tests; `src/` untouched.
+
+Reproduce:
+
+```bash
+# the MFC themes 15 files; ui-qt now has 2 palette lines, one of them this change
+grep -rl "IS_LIGHT_THEME" src/*.cpp | wc -l          # 15
+grep -rn "setPalette\|setStyleSheet" ui-qt/*.cpp | wc -l   # 2
+
+# and look at them
+./qtbuild/ui-qt/vinatext-qt --screenshot /tmp/th core/LanguageData.cpp
+```
 ## 6u. Nothing was relocatable — the prerequisite for packaging
 
 Packaging was deferred to last on purpose. Starting it turned up the thing that

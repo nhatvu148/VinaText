@@ -8,6 +8,7 @@
 
 #include "MainWindow.h"
 
+#include "MacAppearance.h"
 #include "ResourcePaths.h"
 
 #include "EditorWidget.h"
@@ -1185,9 +1186,114 @@ void CMainWindow::closeEvent(QCloseEvent* pEvent)
 	pEvent->accept();
 }
 
+namespace
+{
+	QColor ToQColor(const Core::SColor& c)
+	{
+		return QColor(c._Red, c._Green, c._Blue);
+	}
+
+	// The chrome sits slightly off the editor's own background so the panes and
+	// the tab bar read as separate surfaces rather than one flat field. Which
+	// direction depends on the theme: lighten a dark ground, darken a light one.
+	QColor Chrome(const QColor& editorBack)
+	{
+		return editorBack.lightness() < 128 ? editorBack.lighter(140)
+											: editorBack.darker(108);
+	}
+}
+
+void CMainWindow::ApplyWindowTheme(EEditorTheme theme)
+{
+	// THE THEME STOPPED AT THE EDITOR. Everything else - tab bar, dock panes,
+	// menus, status bar - took Qt's default palette, which on macOS follows the
+	// OS appearance. So "light theme" on a Mac in Dark Mode gave a white editor
+	// inside dark chrome, which reads as broken rather than as a choice. The MFC
+	// has no such split: 15 files under src/ theme themselves from
+	// IS_LIGHT_THEME. Reported from the UI - see doc/PORTING.md 6v.
+	const Core::CEditorTheme& data = m_Data.GetTheme(theme);
+	Core::SColor back;
+	Core::SColor fore;
+	// editorBackground is a palette key and editorTextColor is a role, exactly
+	// as CEditorWidget reads them - the same two calls, so the chrome cannot
+	// drift from the editor it surrounds.
+	if (!data.ResolveColor("editorBackground", back)
+		|| !data.ResolveRole("editorTextColor", fore))
+	{
+		// LEAVE THE SYSTEM PALETTE ALONE. A half-built palette from a theme file
+		// missing a key would be worse than the platform default: unreadable
+		// rather than merely inconsistent.
+		qWarning("theme: no window palette - editorBackground or editorTextColor missing");
+		return;
+	}
+
+	const QColor editorBack = ToQColor(back);
+	const QColor text = ToQColor(fore);
+	const QColor chrome = Chrome(editorBack);
+
+	QPalette palette;
+	palette.setColor(QPalette::Window, chrome);
+	palette.setColor(QPalette::WindowText, text);
+	palette.setColor(QPalette::Base, editorBack);
+	palette.setColor(QPalette::AlternateBase, chrome);
+	palette.setColor(QPalette::Text, text);
+	palette.setColor(QPalette::Button, chrome);
+	palette.setColor(QPalette::ButtonText, text);
+	palette.setColor(QPalette::ToolTipBase, chrome);
+	palette.setColor(QPalette::ToolTipText, text);
+	// The selection colour the editor already uses - BLENDED, not raw. Scintilla
+	// paints it with SCI_SETSELALPHA 60, so in the editor "black" is a pale grey
+	// tint over white. A QPalette has no alpha, so handing it the raw value
+	// painted a SOLID BLACK band behind selected text in the message pane, with
+	// white text on it. Reported from the UI, and it was mine.
+	//
+	// Blending at the same weight gives the widgets the tint the editor shows,
+	// and the ordinary text colour then stays readable on top of it - which the
+	// raw version could not, since it had to invert the text to compensate.
+	Core::SColor selection;
+	if (data.ResolveRole("selectionTextColor", selection))
+	{
+		const int nSelAlpha = 60;			// the value passed to SCI_SETSELALPHA
+		const QColor raw = ToQColor(selection);
+		const auto Blend = [&](int nFore, int nBack)
+		{
+			return (nFore * nSelAlpha + nBack * (255 - nSelAlpha)) / 255;
+		};
+		palette.setColor(QPalette::Highlight, QColor(
+			Blend(raw.red(), editorBack.red()),
+			Blend(raw.green(), editorBack.green()),
+			Blend(raw.blue(), editorBack.blue())));
+		palette.setColor(QPalette::HighlightedText, text);
+	}
+	// Disabled text has to be derived - no theme key describes it - and a flat
+	// grey would vanish on one theme or the other. Halfway to the ground it sits
+	// on keeps it legible on both.
+	const QColor dim = QColor::fromRgb(
+		(text.red() + chrome.red()) / 2,
+		(text.green() + chrome.green()) / 2,
+		(text.blue() + chrome.blue()) / 2);
+	palette.setColor(QPalette::Disabled, QPalette::WindowText, dim);
+	palette.setColor(QPalette::Disabled, QPalette::Text, dim);
+	palette.setColor(QPalette::Disabled, QPalette::ButtonText, dim);
+
+	// On the APPLICATION, not this window: the dialogs are top-level windows of
+	// their own, and a palette set here would leave Preferences and About still
+	// wearing the system appearance.
+	qApp->setPalette(palette);
+
+	// AND THE TITLE BAR, which the palette cannot touch - macOS draws it and it
+	// follows the OS appearance, so a light theme under Dark Mode kept a dark
+	// bar on top of an otherwise light window. Reported from the UI after the
+	// palette fix had already landed. Decided from the ground the theme gives
+	// us rather than from which enum was passed, so a theme file whose "light"
+	// is dark still gets a matching frame.
+	MacAppearance::Apply(editorBack.lightness() < 128);
+}
+
 void CMainWindow::OnSetTheme(EEditorTheme theme)
 {
 	m_Theme = theme;
+	ApplyWindowTheme(theme);
 	for (int i = 0; i < m_pTabs->count(); ++i)
 	{
 		CEditorWidget* pEditor = qobject_cast<CEditorWidget*>(m_pTabs->widget(i));
@@ -2496,6 +2602,85 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 			Require(QFile::exists(strPath),
 				QStringLiteral("attribution: %1 exists").arg(strPath));
 		}
+	}
+
+	//----------------------------------------------------------------------
+	// The theme reaches the WINDOW, not just the editor. Reported from the UI:
+	// light theme on a Mac in Dark Mode gave a white editor inside dark chrome.
+	// See doc/PORTING.md 6v.
+	//----------------------------------------------------------------------
+	{
+		auto WindowOf = [this](EEditorTheme theme)
+		{
+			OnSetTheme(theme);
+			return qApp->palette();
+		};
+		const QPalette dark = WindowOf(EEditorTheme::Dark);
+		const QColor darkWindow = dark.color(QPalette::Window);
+		const QColor darkText = dark.color(QPalette::WindowText);
+		const QPalette light = WindowOf(EEditorTheme::Light);
+		const QColor lightWindow = light.color(QPalette::Window);
+
+		Require(darkWindow != lightWindow,
+			QStringLiteral("theme: the WINDOW palette changes with the theme (%1 vs %2)")
+				.arg(darkWindow.name(), lightWindow.name()));
+		Require(lightWindow.lightness() > darkWindow.lightness(),
+			QStringLiteral("theme: and the light one is the lighter (%1 vs %2)")
+				.arg(lightWindow.lightness()).arg(darkWindow.lightness()));
+
+		// LEGIBILITY, not merely difference. A palette that applied cleanly and
+		// painted text the colour of its own background would pass every check
+		// above while being unusable - which is the failure this whole change
+		// exists to fix, in a new disguise.
+		for (const auto& entry : { std::make_pair(dark, "dark"), std::make_pair(light, "light") })
+		{
+			const int nGap = qAbs(entry.first.color(QPalette::WindowText).lightness()
+				- entry.first.color(QPalette::Window).lightness());
+			Require(nGap > 80,
+				QStringLiteral("theme: %1 text stands off its background by %2")
+					.arg(QLatin1String(entry.second)).arg(nGap));
+		}
+
+		// THE TITLE BAR'S INPUT. MacAppearance::Apply is a native call with no
+		// Qt-visible effect, so the self-test cannot see the bar it paints -
+		// only a human on a Mac can. What IS checkable is the decision it is
+		// given: the dark theme's ground must be dark and the light theme's
+		// light. A theme file edited the other way would hand the frame the
+		// wrong answer, and this is the check that would say so.
+		Require(dark.color(QPalette::Base).lightness() < 128,
+			QStringLiteral("theme: the dark ground IS dark (%1), so the title bar follows")
+				.arg(dark.color(QPalette::Base).lightness()));
+		Require(light.color(QPalette::Base).lightness() >= 128,
+			QStringLiteral("theme: and the light ground is light (%1)")
+				.arg(light.color(QPalette::Base).lightness()));
+
+		// THE SELECTION BAND IS A TINT, not the raw colour. The light theme's
+		// selectionTextColor is literally "black" and Scintilla paints it at
+		// alpha 60, so handing the raw value to a QPalette - which has no alpha -
+		// put a solid black band behind selected text in the message pane.
+		// Reported from the UI. The band must therefore stay on its own side of
+		// the midpoint: light on a light theme, dark on a dark one.
+		Require(light.color(QPalette::Highlight).lightness() > 128,
+			QStringLiteral("theme: the light selection band is a light tint (%1)")
+				.arg(light.color(QPalette::Highlight).lightness()));
+		Require(dark.color(QPalette::Highlight).lightness() < 128,
+			QStringLiteral("theme: the dark selection band is a dark tint (%1)")
+				.arg(dark.color(QPalette::Highlight).lightness()));
+		for (const auto& entry : { std::make_pair(dark, "dark"), std::make_pair(light, "light") })
+		{
+			const int nGap = qAbs(entry.first.color(QPalette::HighlightedText).lightness()
+				- entry.first.color(QPalette::Highlight).lightness());
+			Require(nGap > 60,
+				QStringLiteral("theme: %1 selected text stands off its band by %2")
+					.arg(QLatin1String(entry.second)).arg(nGap));
+		}
+
+		// The chrome is NOT the editor's own ground, so the panes and the tab bar
+		// read as separate surfaces rather than one flat field.
+		Require(dark.color(QPalette::Window) != dark.color(QPalette::Base),
+			QStringLiteral("theme: the chrome sits off the editor background"));
+		OnSetTheme(EEditorTheme::Dark);
+		(void)darkText;
 	}
 
 	//----------------------------------------------------------------------

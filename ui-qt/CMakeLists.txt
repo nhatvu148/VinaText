@@ -50,7 +50,18 @@ qt_add_executable(vinatext-qt
     MessagePane.cpp
     MessagePane.h
     MainWindow.cpp
-    MainWindow.h)
+    MainWindow.h
+    MacAppearance.h)
+
+# The title bar is the one surface a QPalette cannot reach, and only macOS has a
+# knob for it. The .mm is Objective-C++ and must not be fed to the compiler
+# anywhere else; the stub keeps the call site free of #ifdef.
+if(APPLE)
+    target_sources(vinatext-qt PRIVATE MacAppearance.mm)
+    target_link_libraries(vinatext-qt PRIVATE "-framework AppKit")
+else()
+    target_sources(vinatext-qt PRIVATE MacAppearanceStub.cpp)
+endif()
 
 target_link_libraries(vinatext-qt PRIVATE
     VinaText::core
