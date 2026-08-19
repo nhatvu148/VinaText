@@ -25,6 +25,7 @@
 #include "ResourcePaths.h"
 
 #include <QCommandLineParser>
+#include <QIcon>
 #include <QSettings>
 #include <QTemporaryDir>
 #include <QMessageBox>
@@ -48,6 +49,12 @@ int main(int argc, char* argv[])
 	QApplication app(argc, argv);
 	QCoreApplication::setApplicationName(QStringLiteral("VinaText"));
 	QCoreApplication::setApplicationVersion(QStringLiteral(VINATEXT_VERSION));
+	// THE SAME ICON THE WINDOWS BUILD SHIPS - res/app.ico, which VinaText.rc
+	// names as IDR_MAINFRAME - read straight out of the .ico rather than from a
+	// PNG converted alongside it, so redrawing one redraws both. Without this
+	// the app wears Qt's generic binary icon, which is what a user sees in the
+	// Dock before they see anything else.
+	QApplication::setWindowIcon(QIcon(QStringLiteral(":/app.ico")));
 
 	QCommandLineParser parser;
 	parser.setApplicationDescription(

@@ -3462,6 +3462,51 @@ QT_QPA_PLATFORM=offscreen ./qtbuild/ui-qt/vinatext-qt --selftest \
   qtbuild/fixtures/tags.xml qtbuild/fixtures/urls.md 2>&1 | tail -1
 ```
 
+## 6w. The app wore Qt's generic binary icon
+
+Reported from the UI with a screenshot of the Dock: a plain terminal-ish tile
+rather than VinaText's own icon. `ui-qt/` never called `setWindowIcon`, so the
+first thing a user saw was the thing that says "unfinished".
+
+**The icon is `res/app.ico` itself**, the file `src/VinaText.rc` names as
+`IDR_MAINFRAME` - not a PNG converted from it. Qt decodes `.ico` through its own
+image plugin, so there is no conversion step and no second copy to drift when
+somebody redraws the Windows icon. It carries seven sizes, 16 through 256.
+
+### The resource compiled into nothing, and the build said nothing
+
+Listing the `.qrc` among `qt_add_executable`'s sources compiles it **only if
+AUTORCC is on**, and `qt_standard_project_setup()` does not turn it on. The build
+succeeded, the resource was absent, and `QIcon(":/app.ico")` came back **silently
+null** - `QIcon` has no way to complain about a path it cannot find.
+
+```
+FAIL icon: the window icon is set
+FAIL icon: and it decoded to at least one size
+FAIL icon: it renders at 64px, got 0x0
+```
+
+That is the whole reason the checks exist: a missing icon is invisible to the
+compiler and to the test suite alike unless something asks the icon whether it
+has pixels. `qt_add_resources` is explicit and the comment in the CMake says why.
+
+Three things are asserted, because each fails differently:
+
+- **non-null** - the path resolved
+- **at least one available size** - Qt could actually decode it, which is the
+  shape a missing `.ico` plugin takes in a deployed build
+- **a size of 128 or more** - the Dock and the app switcher ask for a large one,
+  and a 32px source scaled to 128 looks worse than no icon
+
+**1 mutation, 1 caught**: reverting to the `.qrc`-in-sources form, which builds
+cleanly and ships no icon.
+
+**Self-test: 1,072 -> 1,076 checks on defaults, 1,076 -> 1,080 configured**
+(macOS). 10/10 core tests; `src/` untouched - the icon is read from `res/`, not
+moved out of it.
+
+The `.icns` a macOS bundle needs is a packaging concern and comes with the bundle
+itself; this is what the running app uses.
 ## 6v. The theme stopped at the editor
 
 **Reported from the UI, with two screenshots:** light theme on a Mac in Dark Mode

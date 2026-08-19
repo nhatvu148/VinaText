@@ -63,6 +63,16 @@ else()
     target_sources(vinatext-qt PRIVATE MacAppearanceStub.cpp)
 endif()
 
+# EXPLICIT, not via AUTORCC. Listing a .qrc among the sources compiles it only
+# when AUTORCC is on, and qt_standard_project_setup() does not turn it on - the
+# build then succeeds, the resource is absent, and QIcon(":/app.ico") is silently
+# null. Measured: the icon self-test failed with "renders at 64px, got 0x0"
+# against a build that had reported no error at all.
+qt_add_resources(vinatext-qt "vinatext_assets"
+    PREFIX "/"
+    BASE "${CMAKE_SOURCE_DIR}/res"
+    FILES "${CMAKE_SOURCE_DIR}/res/app.ico")
+
 target_link_libraries(vinatext-qt PRIVATE
     VinaText::core
     Scintilla::EditBase
