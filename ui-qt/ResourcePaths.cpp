@@ -14,22 +14,6 @@
 
 namespace
 {
-	// A leaf is only "there" if it holds what it is supposed to hold. An empty
-	// directory that happens to exist next to the binary would otherwise win the
-	// search and the app would report missing languages rather than a missing
-	// directory - the failure one step removed from its cause.
-	bool HasContent(const QString& strDir, const QString& strLeaf)
-	{
-		if (strDir.isEmpty() || !QFileInfo::exists(strDir))
-		{
-			return false;
-		}
-		const QString strWitness = (strLeaf == QLatin1String("data"))
-			? QStringLiteral("languages.json")
-			: QStringLiteral("License-VinaText.txt");
-		return QFileInfo::exists(strDir + QLatin1Char('/') + strWitness);
-	}
-
 	QString CompiledIn(const QString& strLeaf)
 	{
 		return (strLeaf == QLatin1String("data"))
@@ -42,7 +26,7 @@ namespace
 		const QStringList candidates = ResourcePaths::Candidates(strLeaf);
 		for (const QString& strCandidate : candidates)
 		{
-			if (HasContent(strCandidate, strLeaf))
+			if (ResourcePaths::HoldsResources(strCandidate, strLeaf))
 			{
 				return strCandidate;
 			}
@@ -52,6 +36,27 @@ namespace
 		// difference between a diagnosable failure and a silent one.
 		return CompiledIn(strLeaf);
 	}
+}
+
+// A leaf is only "there" if it holds what it is supposed to hold. An empty
+// directory that happens to exist next to the binary would otherwise win the
+// search and the app would report missing languages rather than a missing
+// directory - the failure one step removed from its cause.
+bool ResourcePaths::HoldsResources(const QString& strDir, const QString& strLeaf)
+{
+	// NO SEPARATE exists(strDir) TEST. It reads as defensive and is unreachable:
+	// if the directory is not there, neither is the witness inside it, so the
+	// line below already returns false. Mutation proved it - removing that guard
+	// changed no result. The isEmpty() check stays, because an empty string
+	// would otherwise ask about "/languages.json" at the filesystem root.
+	if (strDir.isEmpty())
+	{
+		return false;
+	}
+	const QString strWitness = (strLeaf == QLatin1String("data"))
+		? QStringLiteral("languages.json")
+		: QStringLiteral("License-VinaText.txt");
+	return QFileInfo::exists(strDir + QLatin1Char('/') + strWitness);
 }
 
 QStringList ResourcePaths::Candidates(const QString& strLeaf)

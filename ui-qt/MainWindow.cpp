@@ -2502,19 +2502,34 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 			QStringLiteral("paths: the resolved licence dir holds the licences (%1)")
 				.arg(ResourcePaths::LicenseDir()));
 
-		// EXISTING IS NOT THE SAME AS USABLE. An empty directory next to the
-		// binary would otherwise win the search, and the app would report a
-		// missing languages.json instead of a missing directory - the failure
-		// one step removed from its cause. Left in place would be harmless
-		// (that is the rule being tested) but it is removed anyway, because a
-		// test that leaves state behind is one run from reading it back.
-		const QString strDecoy = QCoreApplication::applicationDirPath()
-			+ QStringLiteral("/data");
-		const bool bMade = QDir().mkpath(strDecoy);
-		Require(bMade, QStringLiteral("paths: made an empty decoy at %1").arg(strDecoy));
-		Require(QFile::exists(ResourcePaths::DataDir() + QStringLiteral("/languages.json")),
-			QStringLiteral("paths: an EMPTY directory next to the binary does not win"));
-		QDir().rmdir(strDecoy);
+		// EXISTING IS NOT THE SAME AS USABLE, tested on a scratch directory
+		// rather than next to the binary. The first version of this check wrote
+		// a decoy into the executable's own directory, and review was right that
+		// an install nobody can write to would fail it. It was worse than that:
+		// in the packaged layout this PR is building towards, <exe>/data IS the
+		// data directory, so mkpath succeeded trivially, the check asserted
+		// nothing, and the rmdir afterwards was aimed at the app's own data.
+		// Measured - the staged copy passed this check while testing none of it.
+		QTemporaryDir scratch;
+		Require(scratch.isValid(), QStringLiteral("paths: a scratch directory"));
+		Require(!ResourcePaths::HoldsResources(scratch.path(), QStringLiteral("data")),
+			QStringLiteral("paths: an EMPTY directory does not count as the data dir"));
+		// Pinned as a contract, not as a separate mechanism: it holds because
+		// the witness cannot exist inside a directory that does not, which is
+		// why the resolver has no exists() guard of its own.
+		Require(!ResourcePaths::HoldsResources(
+				QStringLiteral("/no/such/directory/anywhere"), QStringLiteral("data")),
+			QStringLiteral("paths: a directory that does not exist does not count"));
+		{
+			QFile witness(scratch.path() + QStringLiteral("/languages.json"));
+			Require(witness.open(QIODevice::WriteOnly), QStringLiteral("paths: wrote a witness"));
+			witness.close();
+		}
+		Require(ResourcePaths::HoldsResources(scratch.path(), QStringLiteral("data")),
+			QStringLiteral("paths: the SAME directory counts once the witness is in it"));
+		// And the rule is per-leaf: the data witness must not satisfy licences.
+		Require(!ResourcePaths::HoldsResources(scratch.path(), QStringLiteral("license")),
+			QStringLiteral("paths: languages.json does not make it a licence directory"));
 	}
 
 	//----------------------------------------------------------------------

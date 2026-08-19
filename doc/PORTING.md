@@ -3530,6 +3530,47 @@ it. That is the proof that the copy reads its own files and that precedence work
 **2 mutations, 2 caught**: putting the compiled-in path first, and dropping the
 witness-file rule.
 
+### Review: the check wrote into the directory it was testing
+
+The first version of the "empty directory does not win" check created a decoy at
+`<exe>/data`, asserted the resolver ignored it, and removed it. Review flagged
+that a read-only install would fail on `mkpath`. **True, and the smaller half of
+the problem.** In the packaged layout this PR exists to enable, `<exe>/data` **is
+the data directory**:
+
+```
+$ ls $R/data
+all-file-extension.dat  file-format-description.dat  languages.json  ...
+```
+
+So `mkpath` succeeded on an existing directory, the "empty directory" assertion
+ran against a full one, **the check asserted nothing**, and the `rmdir` after it
+was aimed at the app's own data. Measured: the staged copy passed that check
+while testing none of it. It was three faults in one - fragile on read-only,
+vacuous when packaged, and pointed at live files.
+
+The rule is now public (`HoldsResources`) and tested on a `QTemporaryDir`:
+empty directory -> no, witness added -> yes, and **per leaf** - `languages.json`
+must not make somewhere a licence directory. Nothing is written next to the
+binary, so a read-only install passes:
+
+```
+read-only staged copy: 0 failing paths checks
+```
+
+**A third mutation was NOT caught, and that removed code.** "A directory that
+does not exist counts" changed no result, because the witness cannot exist inside
+a directory that does not - the early `exists(strDir)` guard was unreachable
+defensiveness. It is gone; the assertion stays as a statement of contract, with a
+comment saying which mechanism enforces it.
+
+Also from review: `ResourcePaths.h` returns a `QStringList` while including only
+`<QString>`, which supplies just the **forward declaration** from
+`qcontainerfwd.h` - enough to *declare* the function, not for a caller to *use*
+the result. Measured: `#include <QString>` + `QStringList x;` fails with
+"implicit instantiation of undefined template". `<QStringList>` added, as
+`SingleInstance.h` already does.
+
 **Self-test: 1,072 -> 1,079 checks on defaults, 1,076 -> 1,083 configured**
 (macOS). 10/10 core tests; `src/` untouched.
 

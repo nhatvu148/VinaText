@@ -28,6 +28,12 @@
 #pragma once
 
 #include <QString>
+// FOR THE RETURN TYPE BELOW. <QString> supplies only the FORWARD declaration
+// from qcontainerfwd.h, which is enough to DECLARE a function returning a
+// QStringList and not enough for a caller to use one. Every caller therefore had
+// to include it themselves, which they happened to do. SingleInstance.h already
+// includes it for the same reason.
+#include <QStringList>
 
 namespace ResourcePaths
 {
@@ -36,6 +42,12 @@ namespace ResourcePaths
 
 	// License-*.txt.
 	QString LicenseDir();
+
+	// Whether a directory actually holds the leaf's files, rather than merely
+	// existing. Public because it is the rule worth testing, and testing it
+	// through the filesystem next to the binary is not possible in a packaged
+	// app - see doc/PORTING.md 6u.
+	bool HoldsResources(const QString& strDir, const QString& strLeaf);
 
 	// Every candidate for a leaf, in search order, whether or not it exists.
 	// Public so the self-test can report WHICH ones were tried when none hit -
