@@ -171,6 +171,15 @@ CMainWindow::CMainWindow(CEditorData& data, QWidget* pParent)
 			.arg(m_Data.GetSettingsPath()));
 	}
 
+	// AND WHERE THE REST CAME FROM. These two are resolved at run time from
+	// several candidates (ResourcePaths.h), and until they were printed there
+	// was no way to tell from the running app WHICH one won - a packaged copy
+	// silently falling back to a build tree looks exactly like a working one.
+	// That is not hypothetical: testing the relocation by eye needed a fake
+	// theme colour to tell the two apart, which is a bad way to find out.
+	LogMessage(tr("Data: %1").arg(m_Data.GetDataDir()));
+	LogMessage(tr("Licences: %1").arg(ResourcePaths::LicenseDir()));
+
 	resize(1100, 750);
 	// After resize(), so a stored geometry wins over the default rather than
 	// being overwritten by it.
@@ -1551,6 +1560,12 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 	// is what CI runs, and it is what RenderScreenshots already does.
 	show();
 
+	// THE STARTUP LOG, CAPTURED BEFORE ANY CHECK CAN CLEAR IT. The message-pane
+	// checks below call ClearAll(), so reading the pane at the point of use
+	// would find an empty one and report a missing line that was printed
+	// correctly - a test failing on correct code.
+	const QString strStartupLog = m_pMessagePane->GetText();
+
 	if (files.isEmpty())
 	{
 		qWarning("selftest: no files given - nothing to check");
@@ -2497,6 +2512,25 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 		Require(QFile::exists(ResourcePaths::DataDir() + QStringLiteral("/languages.json")),
 			QStringLiteral("paths: the resolved data dir holds languages.json (%1)")
 				.arg(ResourcePaths::DataDir()));
+
+		// AND THE APP SAYS WHERE IT LOADED FROM. Without this the only way to
+		// tell a packaged copy reading its own data from one silently falling
+		// back to a build tree was to plant a fake theme colour and look - which
+		// is how the first manual test of this actually went. The pane reports
+		// what Load USED, not what the resolver would answer now, because --data
+		// overrides the search.
+		// NOT EMPTY FIRST. Without this the check passes on an empty string -
+		// "Data: " + "" is a prefix of the line whatever the line says - and it
+		// did: the accessor was added but never assigned, so the pane printed a
+		// bare "Data: " and this check could not fail. Found by mutating the
+		// value away and watching nothing happen.
+		Require(!m_Data.GetDataDir().isEmpty(),
+			QStringLiteral("paths: the loaded data dir is recorded, not empty"));
+		Require(strStartupLog.contains(QStringLiteral("Data: ") + m_Data.GetDataDir()),
+			QStringLiteral("paths: the message pane names the data dir it loaded (%1)")
+				.arg(m_Data.GetDataDir()));
+		Require(strStartupLog.contains(QStringLiteral("Licences: ") + ResourcePaths::LicenseDir()),
+			QStringLiteral("paths: and the licence dir"));
 		Require(QFile::exists(ResourcePaths::LicenseDir()
 				+ QStringLiteral("/License-VinaText.txt")),
 			QStringLiteral("paths: the resolved licence dir holds the licences (%1)")

@@ -3571,7 +3571,37 @@ the result. Measured: `#include <QString>` + `QStringList x;` fails with
 "implicit instantiation of undefined template". `<QStringList>` added, as
 `SingleInstance.h` already does.
 
-**Self-test: 1,072 -> 1,079 checks on defaults, 1,076 -> 1,083 configured**
+### The app now says where it loaded from, because a human could not tell
+
+Testing the relocation by hand needed a **fake theme colour** to tell a staged
+copy from a fallback to the build tree - the running app offered no way to see
+which directory won. That is precisely the question a packaged copy raises on
+somebody else's machine, so the message pane says it at startup, beside the
+settings line it already printed:
+
+```
+Data: /Users/.../vinatext-reloc/data
+Licences: /Users/.../vinatext-reloc/license
+Settings: no file at ... - using defaults
+```
+
+It reports what `Load` **used**, not what the resolver would answer now -
+`--data` overrides the search entirely, so asking again would name a directory
+this run never touched.
+
+**And writing the check for it found the accessor was never assigned.** An
+earlier edit to `EditorData` aborted partway, so `GetDataDir()` returned an empty
+string, the pane printed a bare `Data: `, and the check - `contains("Data: " +
+GetDataDir())` - **could not fail**, because `"Data: " + ""` is a prefix of
+whatever the line says. It passed while the feature was broken. Found by mutating
+the value away and watching nothing happen, then probing the value itself. The
+check now asserts the dir is non-empty first.
+
+A second mutation confirms the distinction that matters: logging
+`ResourcePaths::DataDir()` instead of what `Load` used passes at the defaults and
+fails under `--data`, which is the only configuration where the two differ.
+
+**Self-test: 1,072 -> 1,086 checks on defaults, 1,076 -> 1,090 configured**
 (macOS). 10/10 core tests; `src/` untouched.
 
 **Still to do before there is an artifact:** the macOS bundle and `.dmg`, the
