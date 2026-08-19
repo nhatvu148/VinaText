@@ -2774,12 +2774,19 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 		const QString strExpected =
 			strLoaded.contains(QStringLiteral("/Contents/Resources/"))
 				? QStringLiteral("bundle")
+			// THE THIRD LAYOUT, and it took an AppDir to reach it. This check
+			// listed bundle and build tree only, so the first prefix install
+			// ever built failed it - correctly refusing to guess, and wrong
+			// about what it was refusing. share/vinatext is the layout an
+			// AppImage and a `make install` both use.
+			: strLoaded.endsWith(QStringLiteral("/share/vinatext/data"))
+				? QStringLiteral("prefix install")
 			: (strLoaded == QDir::cleanPath(QStringLiteral(VINATEXT_DATA_DIR)))
 				? QStringLiteral("build tree")
 			: QString();
 		Require(!strExpected.isEmpty(),
-			QStringLiteral("paths: the run is a bundle or a build tree, got '%1'")
-				.arg(strLoaded));
+			QStringLiteral("paths: the run is a bundle, a prefix install or a "
+				"build tree, got '%1'").arg(strLoaded));
 		Require(strStartupLog.contains(QStringLiteral("(%1)").arg(strExpected)),
 			QStringLiteral("paths: and the log says (%1), log was '%2'")
 				.arg(strExpected, strStartupLog.simplified().left(160)));

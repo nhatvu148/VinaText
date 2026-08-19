@@ -3906,3 +3906,71 @@ QT_QPA_PLATFORM=offscreen dist/../qtbundle/ui-qt/VinaText.app/Contents/MacOS/Vin
 ```
 
 **Still to do:** the Linux AppImage, and CI building and uploading both.
+
+## 6y. Linux, and the CI that stops packaging rotting
+
+Two artifacts now, and - more importantly - **CI builds and runs both**. Until
+this, the bundle was assembled by hand on one machine and by nothing else: every
+check could stay green while packaging quietly stopped working. That is the same
+shape of gap this port keeps finding, which is a thing nobody measures.
+
+### The AppDir is built where it can be tested
+
+`tools/package_linux.sh` splits deliberately: the **AppDir** is a prefix layout
+(`usr/bin`, `usr/share/vinatext`) that can be assembled and run **anywhere**,
+including on the macOS box it was written on; only the final `linuxdeploy` step
+needs Linux. So the part that can be checked before CI is checked before CI.
+
+That layout is the **third** candidate in `ResourcePaths::Candidates` -
+`<exe>/../share/vinatext/<leaf>` - which had existed since 6u and **had never
+been exercised by anything**. Running the binary out of a staged AppDir reports:
+
+```
+Data: .../VinaText.AppDir/usr/share/vinatext/data (prefix install)
+```
+
+**And it failed the self-test the first time**, correctly. The label check from
+6x listed *bundle* and *build tree* only, so the first prefix install ever built
+was refused as an unrecognised layout. The check was right to refuse rather than
+guess, and wrong about what there was to recognise. All three layouts pass now,
+and all three are run: build tree, bundle, prefix install.
+
+### One icon, three formats, no second copy
+
+`res/app.ico` remains the only artwork. macOS derives `.icns` through `sips` and
+`iconutil`; Linux needs a PNG, and `tools/extract_ico_png.py` gets one with the
+**standard library alone** - the 256x256 entry in that `.ico` is already stored
+as PNG, so it is a byte-for-byte extraction with no decoding. A CI runner has
+neither `sips` nor reliably ImageMagick, and a pip dependency to draw one icon
+would be a poor trade. If that entry ever stops being a PNG the script says so
+rather than writing something malformed.
+
+### CI builds the artifact and then runs it
+
+Building proves it links. **Running the suite from inside it** proves it found
+its own data, which is the entire point of 6u:
+
+- macOS: the suite runs from `VinaText.app/Contents/MacOS/VinaText` - which is
+  why `package_macos.sh` puts the `offscreen` plugin back after `macdeployqt`
+  strips it
+- Linux: the suite runs from the `.AppImage` itself, the way a user launches it
+
+`APPIMAGE_EXTRACT_AND_RUN=1` is set because the runner has no FUSE, and without
+it `linuxdeploy` fails with `dlopen(): error loading libfuse.so.2` - which reads
+like a missing dependency of ours and is not.
+
+**Unverified locally, by necessity:** the `linuxdeploy` half runs only on Linux,
+so CI is its first execution. The AppDir it consumes, and the resolution that
+matters, are checked here.
+
+Reproduce:
+
+```bash
+# the AppDir, anywhere - this part does not need Linux
+tools/package_linux.sh ./qtbuild/ui-qt/vinatext-qt /tmp/linux
+QT_QPA_PLATFORM=offscreen /tmp/linux/VinaText.AppDir/usr/bin/vinatext-qt \
+  --selftest core/LanguageData.cpp | tail -1
+
+# the icon, with nothing installed
+tools/extract_ico_png.py res/app.ico /tmp/vinatext.png
+```
