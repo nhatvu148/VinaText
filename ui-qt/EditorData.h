@@ -31,6 +31,11 @@ public:
 	// Returns false and fills strErrorOut with the first file that failed.
 	bool Load(const QString& strDataDir, QString& strErrorOut);
 
+	// The directory Load ACTUALLY read from. Not the same question as "what
+	// would ResourcePaths resolve now": --data overrides the search entirely, so
+	// asking the resolver again would report a directory this run never touched.
+	const QString& GetDataDir() const { return m_strDataDir; }
+
 	// The editor settings, read from the file the MFC application writes. A
 	// separate call from Load because a missing or unreadable settings file is
 	// NOT fatal - every setting keeps its shipped default and the editor runs -
@@ -79,5 +84,6 @@ private:
 	Core::CEditorTheme		m_Light;
 	Core::CEditorTheme		m_Dark;
 	Core::CAppSettings		m_Settings;
+	QString					m_strDataDir;
 	QString					m_strSettingsPath;
 };

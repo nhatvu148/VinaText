@@ -3461,3 +3461,171 @@ QT_QPA_PLATFORM=offscreen ./qtbuild/ui-qt/vinatext-qt --selftest \
   qtbuild/fixtures/latin1.md qtbuild/fixtures/no-trailing-newline.py \
   qtbuild/fixtures/tags.xml qtbuild/fixtures/urls.md 2>&1 | tail -1
 ```
+
+## 6u. Nothing was relocatable — the prerequisite for packaging
+
+Packaging was deferred to last on purpose. Starting it turned up the thing that
+had to come first: **the Qt app could not be copied anywhere.**
+
+Both of the directories it reads at run time were compiled in as **absolute paths
+into the source tree**:
+
+```cmake
+VINATEXT_DATA_DIR="${CMAKE_SOURCE_DIR}/Packages/data-packages"
+VINATEXT_LICENSE_DIR="${CMAKE_SOURCE_DIR}/license"
+```
+
+That is correct for a build-tree run and wrong for every other copy. A `.app`
+handed to somebody else looks for `languages.json` in a directory on **the
+builder's machine**. No bundle, `.dmg` or AppImage can work until this is fixed,
+which is why it is a PR of its own and not a line inside the bundling one.
+
+**The licence half is a D3 obligation, not a nicety.** The About box tells the
+user the Qt licence text is at `license/License-Qt.txt`. LGPLv3 compliance
+depends on that text actually shipping - a path true only in the build tree makes
+the statement false in every distributed copy.
+
+### The search order is the whole contract
+
+`ResourcePaths::Candidates` returns, in order:
+
+1. `<exe>/../Resources/<leaf>` — a macOS bundle's own resources
+2. `<exe>/<leaf>` — an AppImage's AppDir, or an unpacked tarball
+3. `<exe>/../share/vinatext/<leaf>` — a Linux prefix install
+4. the compiled-in build path — **last**
+
+**Last matters as much as first.** If the builder's source tree were tried
+early, a packaged copy running on a machine that happens to have the source would
+read from it and work *for the wrong reason* - and fail only on the machines
+nobody tests on. The check asserts both ends, not just the winner.
+
+### Existing is not the same as usable
+
+A candidate only counts if it holds a witness file — `languages.json` for data,
+`License-VinaText.txt` for licences. Without that rule an **empty** directory next
+to the binary wins the search, and the app then reports a missing `languages.json`
+rather than a missing directory: the failure one step removed from its cause.
+
+And when nothing resolves, the compiled-in path is returned rather than an empty
+string, so the caller's error names somewhere real.
+
+### Proved by relocating it, not by reading it
+
+```bash
+# stage a copy the way a bundle lays out
+cp qtbuild/ui-qt/vinatext-qt  $R/
+cp -R Packages/data-packages  $R/data
+cp -R license                 $R/license
+cd $R && ./vinatext-qt --selftest $R/data/languages.json     # runs
+
+# now break the STAGED licences while the source tree keeps its own
+rm $R/license/License-Qt.txt
+cd $R && ./vinatext-qt --selftest $R/data/languages.json
+# FAIL attribution: <staged>/license/License-Qt.txt exists
+```
+
+The failure names the **staged** path, and the intact source tree does not rescue
+it. That is the proof that the copy reads its own files and that precedence works.
+
+**2 mutations, 2 caught**: putting the compiled-in path first, and dropping the
+witness-file rule.
+
+### Review: the check wrote into the directory it was testing
+
+The first version of the "empty directory does not win" check created a decoy at
+`<exe>/data`, asserted the resolver ignored it, and removed it. Review flagged
+that a read-only install would fail on `mkpath`. **True, and the smaller half of
+the problem.** In the packaged layout this PR exists to enable, `<exe>/data` **is
+the data directory**:
+
+```
+$ ls $R/data
+all-file-extension.dat  file-format-description.dat  languages.json  ...
+```
+
+So `mkpath` succeeded on an existing directory, the "empty directory" assertion
+ran against a full one, **the check asserted nothing**, and the `rmdir` after it
+was aimed at the app's own data. Measured: the staged copy passed that check
+while testing none of it. It was three faults in one - fragile on read-only,
+vacuous when packaged, and pointed at live files.
+
+The rule is now public (`HoldsResources`) and tested on a `QTemporaryDir`:
+empty directory -> no, witness added -> yes, and **per leaf** - `languages.json`
+must not make somewhere a licence directory. Nothing is written next to the
+binary, so a read-only install passes:
+
+```
+read-only staged copy: 0 failing paths checks
+```
+
+**A third mutation was NOT caught, and that removed code.** "A directory that
+does not exist counts" changed no result, because the witness cannot exist inside
+a directory that does not - the early `exists(strDir)` guard was unreachable
+defensiveness. It is gone; the assertion stays as a statement of contract, with a
+comment saying which mechanism enforces it.
+
+Also from review: `ResourcePaths.h` returns a `QStringList` while including only
+`<QString>`, which supplies just the **forward declaration** from
+`qcontainerfwd.h` - enough to *declare* the function, not for a caller to *use*
+the result. Measured: `#include <QString>` + `QStringList x;` fails with
+"implicit instantiation of undefined template". `<QStringList>` added, as
+`SingleInstance.h` already does.
+
+### The app now says where it loaded from, because a human could not tell
+
+Testing the relocation by hand needed a **fake theme colour** to tell a staged
+copy from a fallback to the build tree - the running app offered no way to see
+which directory won. That is precisely the question a packaged copy raises on
+somebody else's machine, so the message pane says it at startup, beside the
+settings line it already printed:
+
+```
+Data: /Users/.../vinatext-reloc/data
+Licences: /Users/.../vinatext-reloc/license
+Settings: no file at ... - using defaults
+```
+
+It reports what `Load` **used**, not what the resolver would answer now -
+`--data` overrides the search entirely, so asking again would name a directory
+this run never touched.
+
+**And writing the check for it found the accessor was never assigned.** An
+earlier edit to `EditorData` aborted partway, so `GetDataDir()` returned an empty
+string, the pane printed a bare `Data: `, and the check - `contains("Data: " +
+GetDataDir())` - **could not fail**, because `"Data: " + ""` is a prefix of
+whatever the line says. It passed while the feature was broken. Found by mutating
+the value away and watching nothing happen, then probing the value itself. The
+check now asserts the dir is non-empty first.
+
+A second mutation confirms the distinction that matters: logging
+`ResourcePaths::DataDir()` instead of what `Load` used passes at the defaults and
+fails under `--data`, which is the only configuration where the two differ.
+
+### And it says WHICH candidate won
+
+The first version printed the bare path, and the first person to read it had to
+decode the only question they were asking - did this copy find its own files, or
+fall back to somebody's source tree? It is labelled now, with `$HOME` collapsed
+so the line is short enough to take in:
+
+```
+Data: ~/Work/my-apps/VinaText/Packages/data-packages (build tree)
+Licences: ~/Work/my-apps/VinaText/license (build tree)
+```
+
+A bundle says `(bundle)`, a copy with its files beside it says `(next to the
+app)`, and anything off the candidate list says `(--data)`. **A wrong label would
+be worse than none** - it would state the opposite of the truth - so it is
+checked against the resolution rather than assumed from it, and the labels are
+positional, which the comment records: a candidate added without a label added
+beside it would silently take its neighbour's name.
+
+`~` is display only. A tilde handed to `QFile` opens nothing, so the two forms
+are kept apart and a check pins it.
+
+**Self-test: 1,072 -> 1,090 checks on defaults, 1,076 -> 1,094 configured**
+(macOS). 10/10 core tests; `src/` untouched.
+
+**Still to do before there is an artifact:** the macOS bundle and `.dmg`, the
+Linux AppImage, CI uploading both, and checking D3's dynamic-linking obligation
+against the shipped binary rather than against the build.
