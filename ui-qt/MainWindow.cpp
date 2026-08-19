@@ -1165,9 +1165,90 @@ void CMainWindow::closeEvent(QCloseEvent* pEvent)
 	pEvent->accept();
 }
 
+namespace
+{
+	QColor ToQColor(const Core::SColor& c)
+	{
+		return QColor(c._Red, c._Green, c._Blue);
+	}
+
+	// The chrome sits slightly off the editor's own background so the panes and
+	// the tab bar read as separate surfaces rather than one flat field. Which
+	// direction depends on the theme: lighten a dark ground, darken a light one.
+	QColor Chrome(const QColor& editorBack)
+	{
+		return editorBack.lightness() < 128 ? editorBack.lighter(140)
+											: editorBack.darker(108);
+	}
+}
+
+void CMainWindow::ApplyWindowTheme(EEditorTheme theme)
+{
+	// THE THEME STOPPED AT THE EDITOR. Everything else - tab bar, dock panes,
+	// menus, status bar - took Qt's default palette, which on macOS follows the
+	// OS appearance. So "light theme" on a Mac in Dark Mode gave a white editor
+	// inside dark chrome, which reads as broken rather than as a choice. The MFC
+	// has no such split: 15 files under src/ theme themselves from
+	// IS_LIGHT_THEME. Reported from the UI - see doc/PORTING.md 6v.
+	const Core::CEditorTheme& data = m_Data.GetTheme(theme);
+	Core::SColor back;
+	Core::SColor fore;
+	// editorBackground is a palette key and editorTextColor is a role, exactly
+	// as CEditorWidget reads them - the same two calls, so the chrome cannot
+	// drift from the editor it surrounds.
+	if (!data.ResolveColor("editorBackground", back)
+		|| !data.ResolveRole("editorTextColor", fore))
+	{
+		// LEAVE THE SYSTEM PALETTE ALONE. A half-built palette from a theme file
+		// missing a key would be worse than the platform default: unreadable
+		// rather than merely inconsistent.
+		qWarning("theme: no window palette - editorBackground or editorTextColor missing");
+		return;
+	}
+
+	const QColor editorBack = ToQColor(back);
+	const QColor text = ToQColor(fore);
+	const QColor chrome = Chrome(editorBack);
+
+	QPalette palette;
+	palette.setColor(QPalette::Window, chrome);
+	palette.setColor(QPalette::WindowText, text);
+	palette.setColor(QPalette::Base, editorBack);
+	palette.setColor(QPalette::AlternateBase, chrome);
+	palette.setColor(QPalette::Text, text);
+	palette.setColor(QPalette::Button, chrome);
+	palette.setColor(QPalette::ButtonText, text);
+	palette.setColor(QPalette::ToolTipBase, chrome);
+	palette.setColor(QPalette::ToolTipText, text);
+	// The selection colour the editor already uses, so a selected row in the
+	// bookmark pane and a selected word in the editor are the same colour.
+	Core::SColor selection;
+	if (data.ResolveRole("selectionTextColor", selection))
+	{
+		palette.setColor(QPalette::Highlight, ToQColor(selection));
+		palette.setColor(QPalette::HighlightedText, editorBack);
+	}
+	// Disabled text has to be derived - no theme key describes it - and a flat
+	// grey would vanish on one theme or the other. Halfway to the ground it sits
+	// on keeps it legible on both.
+	const QColor dim = QColor::fromRgb(
+		(text.red() + chrome.red()) / 2,
+		(text.green() + chrome.green()) / 2,
+		(text.blue() + chrome.blue()) / 2);
+	palette.setColor(QPalette::Disabled, QPalette::WindowText, dim);
+	palette.setColor(QPalette::Disabled, QPalette::Text, dim);
+	palette.setColor(QPalette::Disabled, QPalette::ButtonText, dim);
+
+	// On the APPLICATION, not this window: the dialogs are top-level windows of
+	// their own, and a palette set here would leave Preferences and About still
+	// wearing the system appearance.
+	qApp->setPalette(palette);
+}
+
 void CMainWindow::OnSetTheme(EEditorTheme theme)
 {
 	m_Theme = theme;
+	ApplyWindowTheme(theme);
 	for (int i = 0; i < m_pTabs->count(); ++i)
 	{
 		CEditorWidget* pEditor = qobject_cast<CEditorWidget*>(m_pTabs->widget(i));
@@ -2470,6 +2551,51 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 			Require(QFile::exists(strPath),
 				QStringLiteral("attribution: %1 exists").arg(strPath));
 		}
+	}
+
+	//----------------------------------------------------------------------
+	// The theme reaches the WINDOW, not just the editor. Reported from the UI:
+	// light theme on a Mac in Dark Mode gave a white editor inside dark chrome.
+	// See doc/PORTING.md 6v.
+	//----------------------------------------------------------------------
+	{
+		auto WindowOf = [this](EEditorTheme theme)
+		{
+			OnSetTheme(theme);
+			return qApp->palette();
+		};
+		const QPalette dark = WindowOf(EEditorTheme::Dark);
+		const QColor darkWindow = dark.color(QPalette::Window);
+		const QColor darkText = dark.color(QPalette::WindowText);
+		const QPalette light = WindowOf(EEditorTheme::Light);
+		const QColor lightWindow = light.color(QPalette::Window);
+
+		Require(darkWindow != lightWindow,
+			QStringLiteral("theme: the WINDOW palette changes with the theme (%1 vs %2)")
+				.arg(darkWindow.name(), lightWindow.name()));
+		Require(lightWindow.lightness() > darkWindow.lightness(),
+			QStringLiteral("theme: and the light one is the lighter (%1 vs %2)")
+				.arg(lightWindow.lightness()).arg(darkWindow.lightness()));
+
+		// LEGIBILITY, not merely difference. A palette that applied cleanly and
+		// painted text the colour of its own background would pass every check
+		// above while being unusable - which is the failure this whole change
+		// exists to fix, in a new disguise.
+		for (const auto& entry : { std::make_pair(dark, "dark"), std::make_pair(light, "light") })
+		{
+			const int nGap = qAbs(entry.first.color(QPalette::WindowText).lightness()
+				- entry.first.color(QPalette::Window).lightness());
+			Require(nGap > 80,
+				QStringLiteral("theme: %1 text stands off its background by %2")
+					.arg(QLatin1String(entry.second)).arg(nGap));
+		}
+
+		// The chrome is NOT the editor's own ground, so the panes and the tab bar
+		// read as separate surfaces rather than one flat field.
+		Require(dark.color(QPalette::Window) != dark.color(QPalette::Base),
+			QStringLiteral("theme: the chrome sits off the editor background"));
+		OnSetTheme(EEditorTheme::Dark);
+		(void)darkText;
 	}
 
 	//----------------------------------------------------------------------

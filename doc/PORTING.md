@@ -3461,3 +3461,70 @@ QT_QPA_PLATFORM=offscreen ./qtbuild/ui-qt/vinatext-qt --selftest \
   qtbuild/fixtures/latin1.md qtbuild/fixtures/no-trailing-newline.py \
   qtbuild/fixtures/tags.xml qtbuild/fixtures/urls.md 2>&1 | tail -1
 ```
+
+## 6v. The theme stopped at the editor
+
+**Reported from the UI, with two screenshots:** light theme on a Mac in Dark Mode
+gave a **white editor inside dark chrome** - dark tab bar, dark Message pane, dark
+menus, dark status bar. It reads as broken rather than as a choice.
+
+`OnSetTheme` walked the tab widgets and called `pEditor->ApplyTheme()`. Nothing
+else was touched, so everything around the editor took Qt's **default** palette,
+which on macOS follows the OS appearance. Measured, with the fix mutated out, the
+window is the same colour under both themes:
+
+```
+FAIL theme: the WINDOW palette changes with the theme (#efefef vs #efefef)
+```
+
+**This is a port gap, not a scope decision.** The MFC has no such split - **15**
+files under `src/` theme themselves from `IS_LIGHT_THEME`, including
+`BookmarkWindow`, `BuildWindow` and the dialogs. `ui-qt/` had essentially no
+palette code at all: a single stylesheet line, for the find bar's miss colour.
+The grep below returns **2** now - that line, and the `setPalette` this change
+adds.
+
+### One source for both halves
+
+`ApplyWindowTheme` builds a `QPalette` from the **same two lookups**
+`CEditorWidget` already makes - `ResolveColor("editorBackground")` and
+`ResolveRole("editorTextColor")` - so the chrome cannot drift from the editor it
+surrounds. Selection reuses `selectionTextColor`, so a selected row in the
+bookmark pane matches a selected word in the editor.
+
+Set on **`qApp`, not on the window**: Preferences and About are top-level windows
+of their own and would otherwise keep wearing the system appearance.
+
+Two things it deliberately does not do:
+
+- **Chrome is not the editor's own ground.** It is lightened on a dark theme and
+  darkened on a light one, so panes and the tab bar read as separate surfaces
+  rather than one flat field.
+- **A theme missing either key leaves the system palette alone.** A half-built
+  palette would be worse than the platform default - unreadable rather than
+  merely inconsistent.
+
+### The check that matters is legibility, not difference
+
+A palette can apply cleanly and paint text the colour of its own background,
+passing every "it changed" assertion while being unusable - the very failure this
+change exists to fix, in a new disguise. So the lightness gap between
+`WindowText` and `Window` is asserted to exceed 80 on **both** themes.
+
+**3 mutations, 3 caught**: never applying the palette; painting the text in the
+chrome colour (gap 0 on both themes); and making the chrome identical to the
+editor background.
+
+**Self-test: 1,072 -> 1,077 checks on defaults, 1,076 -> 1,081 configured**
+(macOS). 10/10 core tests; `src/` untouched.
+
+Reproduce:
+
+```bash
+# the MFC themes 15 files; ui-qt now has 2 palette lines, one of them this change
+grep -rl "IS_LIGHT_THEME" src/*.cpp | wc -l          # 15
+grep -rn "setPalette\|setStyleSheet" ui-qt/*.cpp | wc -l   # 2
+
+# and look at them
+./qtbuild/ui-qt/vinatext-qt --screenshot /tmp/th core/LanguageData.cpp
+```
