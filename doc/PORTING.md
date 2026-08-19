@@ -4039,6 +4039,24 @@ Licences: /license (next to the app)
 That is the labelled-path work from 6u answering a question it was never written
 for. Nothing about the web target was anticipated when it was built.
 
+### Review: the obligation is a build gate now, not a paragraph
+
+The first version of this section was the only thing standing between a static
+Qt build and somebody shipping one. Review put it plainly - *"enforcement rests
+entirely on a documentation note rather than any build-time check"* - which is
+fair, and is the same complaint this port keeps making about everything else.
+
+So it is a check. Configuring for wasm without `-DVINATEXT_BUILD_WEB=ON` now
+fails, naming the obligation:
+
+```
+Refusing to build for WebAssembly without -DVINATEXT_BUILD_WEB=ON.
+Qt for WebAssembly is STATICALLY linked, which CLAUDE.md forbids and
+which D3 permits only if relinkable object files are published. That
+obligation is NOT discharged today, so a web build must not be shipped
+to users. Pass the flag to build one anyway, knowingly.
+```
+
 ### An open licensing obligation, recorded rather than resolved
 
 **This build is STATIC Qt**, because that is what Qt for WebAssembly is: dynamic
@@ -4072,6 +4090,23 @@ Scintilla anticipates exactly this - it carries a `PTRDIFF_DOESNT_ALIAS_INT`
 escape hatch and a `__HAIKU__` case for the same property - so the fix is one
 compile definition under `if(EMSCRIPTEN)`. **No vendored code was touched**,
 which CLAUDE.md forbids.
+
+### Review: two files called main.cpp became one
+
+`WebStagePath` staged on the **leaf name alone**, so two files named `main.cpp`
+from different folders landed on the same MEMFS path - and `OpenFile()`'s
+"already open? raise that tab" dedup then did exactly what it should with a path
+it had seen before: **it raised the first file's tab and showed the wrong
+document**, with no error anywhere.
+
+Each pick gets its own directory now, keeping the leaf inside it because the tab
+label and the extension-based lexer both read it.
+
+**The helper is deliberately not compiled out on desktop.** A web-only function
+is one nothing can ever check; as a plain static it is testable everywhere, and
+three assertions pin it - two picks of the same name differ, both keep the name,
+and a nameless pick still yields a filename. Mutating it back to the leaf-only
+form fails the first of them.
 
 ### Two features the platform simply does not have
 

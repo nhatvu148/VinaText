@@ -1069,21 +1069,33 @@ void CMainWindow::OnNew()
 	NewUntitled();
 }
 
-#ifdef Q_OS_WASM
-namespace
+// Where a browser-supplied file lands before the ordinary open path picks it up.
+// Emscripten mounts an in-memory MEMFS at "/", so this is a real QFile path as
+// far as the rest of the editor is concerned - it just does not survive a
+// reload, which is what "the browser gave us these bytes" means.
+//
+// EACH PICK GETS ITS OWN DIRECTORY, and that is not tidiness. Staging on the
+// leaf name alone meant two files called main.cpp from different folders landed
+// on the SAME MEMFS path - and OpenFile()'s "already open? raise that tab"
+// dedup then did exactly what it should with a path it had seen before: it
+// raised the first file's tab and showed the user the wrong document, with no
+// error anywhere. Found in review.
+//
+// The leaf name is kept inside the directory because the rest of the editor
+// reads it: the tab label, and the extension the lexer is chosen by.
+//
+// Not compiled out on desktop: it is the invariant a self-test can check, and a
+// web-only helper is one nothing could ever check.
+QString CMainWindow::WebStagePath(const QString& strName)
 {
-	// Where a browser-supplied file lands before the ordinary open path picks it
-	// up. Emscripten mounts an in-memory MEMFS at "/", so this is a real QFile
-	// path as far as the rest of the editor is concerned - it just does not
-	// survive a reload, which is what "the browser gave us these bytes" means.
-	QString WebStagePath(const QString& strName)
-	{
-		const QString strLeaf = QFileInfo(strName).fileName();
-		return QDir::tempPath() + QLatin1Char('/')
-			+ (strLeaf.isEmpty() ? QStringLiteral("untitled.txt") : strLeaf);
-	}
+	static int nSequence = 0;
+	const QString strLeaf = QFileInfo(strName).fileName();
+	const QString strDir = QDir::tempPath()
+		+ QStringLiteral("/vinatext-web-%1").arg(++nSequence);
+	QDir().mkpath(strDir);
+	return strDir + QLatin1Char('/')
+		+ (strLeaf.isEmpty() ? QStringLiteral("untitled.txt") : strLeaf);
 }
-#endif
 
 void CMainWindow::OnOpen()
 {
@@ -2720,6 +2732,31 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 		Require(nLargest >= 128,
 			QStringLiteral("icon: it carries a large size for the Dock, largest is %1")
 				.arg(nLargest));
+	}
+
+	//----------------------------------------------------------------------
+	// Web staging paths. The web build hands the browser's bytes to the ordinary
+	// OpenFile(), which dedups on the path - so two picks that share a leaf name
+	// MUST NOT share a path, or the second open silently raises the first file's
+	// tab. See doc/PORTING.md 6z.
+	//----------------------------------------------------------------------
+	{
+		const QString strA = WebStagePath(QStringLiteral("/somewhere/main.cpp"));
+		const QString strB = WebStagePath(QStringLiteral("/elsewhere/main.cpp"));
+		Require(strA != strB,
+			QStringLiteral("web: two picks of the same NAME get different paths"));
+		// The leaf survives, because the tab label and the lexer both read it.
+		Require(QFileInfo(strA).fileName() == QStringLiteral("main.cpp")
+				&& QFileInfo(strB).fileName() == QStringLiteral("main.cpp"),
+			QStringLiteral("web: and both keep the file's own name"));
+		// A name with no leaf at all still yields something openable.
+		const QString strEmpty = WebStagePath(QStringLiteral("/trailing/"));
+		Require(!QFileInfo(strEmpty).fileName().isEmpty(),
+			QStringLiteral("web: a nameless pick still gets a filename"));
+		for (const QString& strPath : { strA, strB, strEmpty })
+		{
+			QDir(QFileInfo(strPath).absolutePath()).removeRecursively();
+		}
 	}
 
 	//----------------------------------------------------------------------

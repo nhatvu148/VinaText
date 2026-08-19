@@ -113,6 +113,28 @@ target_compile_definitions(vinatext-qt PRIVATE
 #
 # THIS IS THE SPIKE'S ANSWER TO RESOURCES, not a shipping decision: baking them
 # in makes the download bigger and makes --data meaningless. See doc/PORTING.md 6z.
+# THE WEB TARGET IS OPT-IN, and the gate is about licensing rather than taste.
+# Qt for WebAssembly is STATICALLY linked - dynamic linking there is Technology
+# Preview in 6.11 and Qt says it is not suitable for production - and CLAUDE.md
+# says never link Qt statically. D3 gives the compliant path for static linking
+# (publish relinkable object files) and nothing here does that yet.
+#
+# Review's point: "enforcement rests entirely on a documentation note rather than
+# any build-time check." So it is a check. Configuring for wasm without saying so
+# now FAILS, naming the obligation, rather than quietly producing an artifact
+# nobody may hand out.
+option(VINATEXT_BUILD_WEB
+    "Build ui-qt for WebAssembly. Qt is STATICALLY linked - see D3 and PORTING.md 6z" OFF)
+
+if(EMSCRIPTEN AND NOT VINATEXT_BUILD_WEB)
+    message(FATAL_ERROR
+        "Refusing to build for WebAssembly without -DVINATEXT_BUILD_WEB=ON.\n"
+        "Qt for WebAssembly is STATICALLY linked, which CLAUDE.md forbids and\n"
+        "which D3 permits only if relinkable object files are published. That\n"
+        "obligation is NOT discharged today, so a web build must not be shipped\n"
+        "to users. Pass the flag to build one anyway, knowingly.")
+endif()
+
 if(EMSCRIPTEN)
     target_link_options(vinatext-qt PRIVATE
         "SHELL:--preload-file ${CMAKE_SOURCE_DIR}/Packages/data-packages@/data"

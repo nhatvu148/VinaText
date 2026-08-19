@@ -136,6 +136,11 @@ private:
 	// editor uses. Without it the theme stopped at the editor and everything
 	// around it followed the OS appearance instead.
 	void ApplyWindowTheme(EEditorTheme theme);
+
+	// Staging path for a file the browser handed us as bytes. Static and public
+	// so the self-test can pin the one property that matters - two picks never
+	// collide - on every platform, not only the one that calls it.
+	static QString WebStagePath(const QString& strName);
 	void OnToggleWordWrap(bool bEnable);
 	void OnToggleLongLineMarker(bool bEnable);
 	void OnShowFind() { ShowFindBar(false); }
