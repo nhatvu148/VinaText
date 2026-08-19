@@ -227,6 +227,69 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      # -----------------------------------------------------------------------
+      # PACKAGING. Until this existed the bundle and the AppDir were built by
+      # hand on one developer's machine and by nothing else: every check could
+      # stay green while packaging quietly stopped working. That is the same
+      # shape of gap the port keeps finding - a thing nobody measures.
+      #
+      # The artifact is BUILT and then RUN. Building one proves it links; running
+      # the suite from inside it proves it found its own data, which is the whole
+      # point of the resource work in 6u.
+      # -----------------------------------------------------------------------
+      - name: Package (macOS .app + .dmg)
+        if: steps.probe.outputs.present == 'yes' && runner.os == 'macOS'
+        run: |
+          set -euo pipefail
+          cmake -S . -B qtbundle -G Ninja -DVINATEXT_BUILD_QT=ON \
+            -DVINATEXT_MACOS_BUNDLE=ON -DCMAKE_PREFIX_PATH="$(brew --prefix qt)"
+          cmake --build qtbundle --parallel
+          tools/package_macos.sh qtbundle/ui-qt/VinaText.app dist
+
+          # The suite, from the SHIPPED bundle rather than from the build tree.
+          # macdeployqt strips the offscreen plugin; package_macos.sh puts it
+          # back precisely so this line can exist.
+          QT_QPA_PLATFORM=offscreen perl -e 'alarm 300; exec @ARGV or die "exec failed: $!"' -- \
+            qtbundle/ui-qt/VinaText.app/Contents/MacOS/VinaText --selftest \
+            core/LanguageData.cpp tools/extract_language_data.py \
+            qtbuild/fixtures/crlf-bom.cpp qtbuild/fixtures/utf16.py \
+            qtbuild/fixtures/latin1.md qtbuild/fixtures/no-trailing-newline.py \
+            qtbuild/fixtures/tags.xml qtbuild/fixtures/urls.md
+
+      - name: Package (Linux AppImage)
+        if: steps.probe.outputs.present == 'yes' && runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          # linuxdeploy needs FUSE to run its own AppImage, and the runner has
+          # none - APPIMAGE_EXTRACT_AND_RUN makes it unpack itself instead.
+          # Without this it fails with "dlopen(): error loading libfuse.so.2",
+          # which reads like a missing dependency of OURS and is not.
+          export APPIMAGE_EXTRACT_AND_RUN=1
+          sudo apt-get install -y --no-install-recommends file desktop-file-utils
+          tools/package_linux.sh qtbuild/ui-qt/vinatext-qt dist
+
+          # And run the suite from the AppImage itself, the same way a user
+          # would launch it.
+          APPIMAGE="$(ls dist/*.AppImage)"
+          chmod +x "$APPIMAGE"
+          QT_QPA_PLATFORM=offscreen perl -e 'alarm 300; exec @ARGV or die "exec failed: $!"' -- \
+            "$APPIMAGE" --appimage-extract-and-run --selftest \
+            core/LanguageData.cpp tools/extract_language_data.py \
+            qtbuild/fixtures/crlf-bom.cpp qtbuild/fixtures/utf16.py \
+            qtbuild/fixtures/latin1.md qtbuild/fixtures/no-trailing-newline.py \
+            qtbuild/fixtures/tags.xml qtbuild/fixtures/urls.md
+
+      - name: Upload the installable artifact
+        if: steps.probe.outputs.present == 'yes'
+        uses: actions/upload-artifact@v4
+        with:
+          name: vinatext-package-${{ matrix.os }}
+          path: |
+            dist/*.dmg
+            dist/*.AppImage
+          if-no-files-found: error
+          retention-days: 14
+
   # ---------------------------------------------------------------------------
   # The Windows MFC build. This is the regression test that matters: per D5 the
   # MFC frontend must keep building throughout the port, and on a long-lived

@@ -22,3 +22,6 @@ qtbuild/
 # The packaging build tree, alongside qtbuild/.
 qtbundle/
 dist/
+
+# macOS finder droppings.
+.DS_Store
