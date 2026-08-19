@@ -3977,6 +3977,39 @@ overriding it in both.
 so CI is its first execution. The AppDir it consumes, and the resolution that
 matters, are checked here.
 
+### Review: the build tool was the drift
+
+The first version downloaded `linuxdeploy` from the **`continuous`** tag, which
+upstream overwrites in place. Review's point lands hard: a run could start
+failing - or quietly produce a **different AppImage** - with no change in this
+repository. That is exactly the untracked packaging drift 6y exists to catch, so
+the job added to solve the problem contained a worse version of it.
+
+Pinned to released tags, **and checksummed**, because a pinned tag is not a
+pinned file - release assets can be replaced:
+
+```
+linuxdeploy            1-alpha-20251107-1  c20cd71e3a4e…
+linuxdeploy-plugin-qt  1-alpha-20250213-1  15106be885c1…
+```
+
+x86_64 only: the checksum for another architecture is a different file, so an
+unknown arch skips the comparison rather than failing a match it could never
+make.
+
+**And `curl` was hiding its own failures.** Without `-f` an HTTP error is written
+to the destination and the exit status is **0**:
+
+```
+$ curl -sSLo probe <a 404 url> ; echo $?
+0
+$ head -c 60 probe
+Not Found
+```
+
+That file then gets `chmod +x` and the run dies later with "cannot execute binary
+file" - a symptom two steps from its cause. With `-f`, `exit=56` at the download.
+
 Reproduce:
 
 ```bash

@@ -78,16 +78,55 @@ fi
 
 # linuxdeploy pulls in Qt and writes the AppImage. Downloaded rather than
 # vendored: it is a build tool, not a dependency of the product.
+#
+# PINNED, NOT "continuous". Upstream overwrites the continuous tag in place, so
+# a run could start failing - or quietly produce a DIFFERENT AppImage - with no
+# change in this repository. That is precisely the untracked packaging drift this
+# whole change exists to catch, so leaving it floating would have made the CI job
+# a worse version of the problem it was added to solve. Review caught it.
+LINUXDEPLOY_TAG="${LINUXDEPLOY_TAG:-1-alpha-20251107-1}"
+LINUXDEPLOY_QT_TAG="${LINUXDEPLOY_QT_TAG:-1-alpha-20250213-1}"
+
+# And checksums, because a pinned TAG is not a pinned FILE: GitHub release assets
+# can be replaced. x86_64 only - the checksum for another architecture is a
+# different file, so an unknown arch skips the comparison rather than failing on
+# a mismatch it was never going to satisfy.
+LINUXDEPLOY_SHA256="c20cd71e3a4e3b80c3483cef793cda3f4e990aca14014d23c544ca3ce1270b4d"
+LINUXDEPLOY_QT_SHA256="15106be885c1c48a021198e7e1e9a48ce9d02a86dd0a1848f00bdbf3c1c92724"
+
 TOOLDIR="${LINUXDEPLOY_DIR:-$OUTDIR/tools}"
 mkdir -p "$TOOLDIR"
 ARCH="$(uname -m)"
-for TOOL in linuxdeploy linuxdeploy-plugin-qt; do
-	if [ ! -x "$TOOLDIR/$TOOL" ]; then
-		curl -sSLo "$TOOLDIR/$TOOL" \
-			"https://github.com/linuxdeploy/$TOOL/releases/download/continuous/$TOOL-$ARCH.AppImage"
-		chmod +x "$TOOLDIR/$TOOL"
+
+fetch_tool() {
+	NAME="$1"
+	TAG="$2"
+	WANT="$3"
+	DEST="$TOOLDIR/$NAME"
+	[ -x "$DEST" ] && return 0
+
+	# -f, so an HTTP error FAILS instead of being written to the tool path.
+	# Without it a 404 leaves the string "Not Found" in the file, chmod +x makes
+	# it executable, and the run dies later with "cannot execute binary file" -
+	# a confusing symptom two steps from its cause. Measured: curl -sSLo on a
+	# missing asset exits 0 and writes the error page.
+	curl -fsSLo "$DEST" \
+		"https://github.com/linuxdeploy/$NAME/releases/download/$TAG/$NAME-$ARCH.AppImage"
+
+	if [ "$ARCH" = "x86_64" ]; then
+		GOT="$(sha256sum "$DEST" | cut -d' ' -f1)"
+		if [ "$GOT" != "$WANT" ]; then
+			echo "FATAL: $NAME checksum mismatch" >&2
+			echo "  expected $WANT" >&2
+			echo "  got      $GOT" >&2
+			exit 1
+		fi
 	fi
-done
+	chmod +x "$DEST"
+}
+
+fetch_tool linuxdeploy "$LINUXDEPLOY_TAG" "$LINUXDEPLOY_SHA256"
+fetch_tool linuxdeploy-plugin-qt "$LINUXDEPLOY_QT_TAG" "$LINUXDEPLOY_QT_SHA256"
 
 export PATH="$TOOLDIR:$PATH"
 export QMAKE="${QMAKE:-qmake6}"
