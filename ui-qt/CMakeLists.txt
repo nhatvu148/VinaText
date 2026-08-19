@@ -126,7 +126,13 @@ if(APPLE AND VINATEXT_MACOS_BUNDLE)
     # ResourcePaths::Candidates looks in. Without this the .app resolves nothing
     # and falls back to the builder's source tree - which is the failure 6u
     # exists to make visible, and it would look like success on this machine.
-    file(GLOB VINATEXT_DATA_FILES "${CMAKE_SOURCE_DIR}/Packages/data-packages/*")
+    # CONFIGURE_DEPENDS, so adding a data file re-globs on the next build rather
+    # than waiting for someone to reconfigure. Measured without it: a new file
+    # dropped into license/ built cleanly and simply was not in the bundle - a
+    # SILENT omission, and for the licence glob below that is a D3 obligation
+    # quietly going missing rather than a build failure anyone would notice.
+    file(GLOB VINATEXT_DATA_FILES CONFIGURE_DEPENDS
+        "${CMAKE_SOURCE_DIR}/Packages/data-packages/*")
     foreach(DATA_FILE IN LISTS VINATEXT_DATA_FILES)
         target_sources(vinatext-qt PRIVATE "${DATA_FILE}")
         set_source_files_properties("${DATA_FILE}" PROPERTIES
@@ -137,7 +143,7 @@ if(APPLE AND VINATEXT_MACOS_BUNDLE)
     # D3's obligation: the LGPL notices ship with the binary they describe. The
     # About box names license/License-Qt.txt, and a path true only in the build
     # tree makes that claim false in every copy handed to somebody else.
-    file(GLOB VINATEXT_LICENSE_FILES "${CMAKE_SOURCE_DIR}/license/*")
+    file(GLOB VINATEXT_LICENSE_FILES CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/license/*")
     foreach(LICENSE_FILE IN LISTS VINATEXT_LICENSE_FILES)
         target_sources(vinatext-qt PRIVATE "${LICENSE_FILE}")
         set_source_files_properties("${LICENSE_FILE}" PROPERTIES
@@ -148,8 +154,13 @@ if(APPLE AND VINATEXT_MACOS_BUNDLE)
     set_target_properties(vinatext-qt PROPERTIES
         MACOSX_BUNDLE TRUE
         MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/Info.plist.in"
+        # NOT MACOSX_BUNDLE_EXECUTABLE_NAME: it is not one of the properties
+        # CMake substitutes into Info.plist.in, and the ${MACOSX_BUNDLE_EXECUTABLE_NAME}
+        # there is filled from the target's real output name instead. Setting it
+        # did nothing, and what it said - "vinatext-qt" - was the wrong name,
+        # since OUTPUT_NAME below makes the binary VinaText. Verified with
+        # plutil: CFBundleExecutable reads "VinaText", matching the file on disk.
         MACOSX_BUNDLE_BUNDLE_NAME "VinaText"
-        MACOSX_BUNDLE_EXECUTABLE_NAME "vinatext-qt"
         MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}"
         MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
         OUTPUT_NAME "VinaText")

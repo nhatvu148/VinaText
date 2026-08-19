@@ -3851,6 +3851,37 @@ Qt, Scintilla and VinaText notices are present in `Contents/Resources/license`.
 **The whole suite runs from the shipped bundle: 1,106 checks, 0 failures**, and
 again from inside the mounted `.dmg`.
 
+### Review: two CMake nits, one of them stating a wrong name
+
+**`file(GLOB)` is evaluated at configure time.** Measured: a new file dropped
+into `license/` built cleanly and simply **was not in the bundle** - a silent
+omission, and for the licence glob that is a D3 obligation quietly going missing
+rather than a failure anyone would notice. `CONFIGURE_DEPENDS` on both globs; the
+same probe now lands in the bundle on an incremental build.
+
+One limit worth knowing: a file *removed* from `license/` stays in an existing
+bundle until a clean build, because nothing prunes `Contents/Resources`. Adding
+is what the obligation cares about, so this is recorded rather than worked
+around.
+
+**`MACOSX_BUNDLE_EXECUTABLE_NAME` did nothing, and said the wrong thing.** It is
+not one of the properties CMake substitutes into `Info.plist.in`; the
+`${MACOSX_BUNDLE_EXECUTABLE_NAME}` there is filled from the target's real output
+name. So the line was inert - and it said `vinatext-qt`, while `OUTPUT_NAME`
+makes the binary `VinaText`. Had it ever been honoured literally,
+`CFBundleExecutable` would have named a file that does not exist and the bundle
+would not launch. Verified rather than reasoned about, which is what the review
+asked for:
+
+```
+$ plutil -p .../Contents/Info.plist | grep CFBundleExecutable
+  "CFBundleExecutable" => "VinaText"
+$ ls .../Contents/MacOS/
+VinaText
+```
+
+Dropped, with a comment saying why, so nobody adds it back.
+
 ### Gatekeeper, stated plainly
 
 The signature is **ad-hoc**, not a Developer ID. macOS will still refuse a
