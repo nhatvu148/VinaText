@@ -3959,6 +3959,20 @@ its own data, which is the entire point of 6u:
 it `linuxdeploy` fails with `dlopen(): error loading libfuse.so.2` - which reads
 like a missing dependency of ours and is not.
 
+**Both deploy tools strip the headless plugin, and both had to be told.** The
+first CI run built the AppImage perfectly and then could not run it:
+
+```
+Could not find the Qt platform plugin "offscreen" in ""
+Available platform plugins are: xcb.
+```
+
+Which is `macdeployqt`'s `cocoa`-only behaviour (6x) arriving a second time under
+a different name. `EXTRA_PLATFORM_PLUGINS=libqoffscreen.so` for
+`linuxdeploy-plugin-qt`, a manual copy for `macdeployqt`. Shipping only what the
+user needs is the right default for both of them; verifying the artifact means
+overriding it in both.
+
 **Unverified locally, by necessity:** the `linuxdeploy` half runs only on Linux,
 so CI is its first execution. The AppDir it consumes, and the resolution that
 matters, are checked here.

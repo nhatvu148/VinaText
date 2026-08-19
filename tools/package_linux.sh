@@ -91,6 +91,19 @@ done
 
 export PATH="$TOOLDIR:$PATH"
 export QMAKE="${QMAKE:-qmake6}"
+
+# THE OFFSCREEN PLATFORM PLUGIN, exactly as on macOS. linuxdeploy-plugin-qt
+# deploys only the platform plugin it detects in use - xcb - which is right for a
+# user and means the SHIPPED AppImage cannot run headless:
+#
+#   Could not find the Qt platform plugin "offscreen" in ""
+#   Available platform plugins are: xcb.
+#
+# Checking the thing we hand out rather than the thing we built is the only way
+# to know it is sound, so the plugin goes in deliberately. Both deploy tools
+# strip it for the same reason, and both had to be told - see doc/PORTING.md 6y.
+export EXTRA_PLATFORM_PLUGINS="libqoffscreen.so"
+
 "$TOOLDIR/linuxdeploy" --appdir "$APPDIR" --plugin qt --output appimage
 mv VinaText*.AppImage "$OUTDIR/" 2>/dev/null || true
 echo "==> wrote AppImage in $OUTDIR"
