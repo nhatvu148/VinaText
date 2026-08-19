@@ -16,6 +16,9 @@
 
 bool CEditorData::Load(const QString& strDataDir, QString& strErrorOut)
 {
+	// Recorded before anything can fail, so a failure message can still name
+	// where it looked.
+	m_strDataDir = strDataDir;
 	struct SFile
 	{
 		const char*			_Name;

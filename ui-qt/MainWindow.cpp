@@ -9,6 +9,7 @@
 #include "MainWindow.h"
 
 #include "MacAppearance.h"
+#include "ResourcePaths.h"
 
 #include "EditorWidget.h"
 #include "FindBar.h"
@@ -170,6 +171,24 @@ CMainWindow::CMainWindow(CEditorData& data, QWidget* pParent)
 		LogMessage(tr("Settings: no file at %1 - using defaults")
 			.arg(m_Data.GetSettingsPath()));
 	}
+
+	// AND WHERE THE REST CAME FROM. These two are resolved at run time from
+	// several candidates (ResourcePaths.h), and until they were printed there
+	// was no way to tell from the running app WHICH one won - a packaged copy
+	// silently falling back to a build tree looks exactly like a working one.
+	// That is not hypothetical: testing the relocation by eye needed a fake
+	// theme colour to tell the two apart, which is a bad way to find out.
+	// Labelled, because the path alone makes the reader work out the only thing
+	// they want to know: did this copy find its own files, or fall back to
+	// somebody's source tree? "(build tree)" answers it at a glance, and "~"
+	// keeps the line short enough to read.
+	const QString strLicenceDir = ResourcePaths::LicenseDir();
+	LogMessage(tr("Data: %1 (%2)")
+		.arg(ResourcePaths::ForDisplay(m_Data.GetDataDir()),
+			ResourcePaths::DescribeSource(m_Data.GetDataDir(), QStringLiteral("data"))));
+	LogMessage(tr("Licences: %1 (%2)")
+		.arg(ResourcePaths::ForDisplay(strLicenceDir),
+			ResourcePaths::DescribeSource(strLicenceDir, QStringLiteral("license"))));
 
 	resize(1100, 750);
 	// After resize(), so a stored geometry wins over the default rather than
@@ -1656,6 +1675,12 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 	// is what CI runs, and it is what RenderScreenshots already does.
 	show();
 
+	// THE STARTUP LOG, CAPTURED BEFORE ANY CHECK CAN CLEAR IT. The message-pane
+	// checks below call ClearAll(), so reading the pane at the point of use
+	// would find an empty one and report a missing line that was printed
+	// correctly - a test failing on correct code.
+	const QString strStartupLog = m_pMessagePane->GetText();
+
 	if (files.isEmpty())
 	{
 		qWarning("selftest: no files given - nothing to check");
@@ -2572,7 +2597,7 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 			// the binary from qtbuild/ui-qt/ - a confusing way to report that
 			// you are standing in the wrong place. Same convention as
 			// VINATEXT_DATA_DIR.
-			const QString strPath = QStringLiteral(VINATEXT_LICENSE_DIR)
+			const QString strPath = ResourcePaths::LicenseDir()
 				+ QLatin1Char('/') + strFile;
 			Require(QFile::exists(strPath),
 				QStringLiteral("attribution: %1 exists").arg(strPath));
@@ -2656,6 +2681,108 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 			QStringLiteral("theme: the chrome sits off the editor background"));
 		OnSetTheme(EEditorTheme::Dark);
 		(void)darkText;
+	}
+
+	//----------------------------------------------------------------------
+	// Where the app finds its files. This is what makes a copied build work,
+	// so it is checked rather than assumed - see doc/PORTING.md 6u.
+	//----------------------------------------------------------------------
+	{
+		const QStringList candidates = ResourcePaths::Candidates(QStringLiteral("data"));
+		Require(candidates.size() >= 4,
+			QStringLiteral("paths: %1 candidates for the data directory")
+				.arg(candidates.size()));
+		// THE ORDER IS THE CONTRACT. A bundle's own Resources must beat
+		// everything, and the builder's source tree must lose to everything -
+		// otherwise a packaged copy on a machine that happens to have the source
+		// tree reads the wrong one, and works for exactly the wrong reason.
+		Require(candidates.first().contains(QStringLiteral("/../Resources/")),
+			QStringLiteral("paths: the bundle's Resources is tried FIRST, got '%1'")
+				.arg(candidates.first()));
+		Require(candidates.last() == QStringLiteral(VINATEXT_DATA_DIR),
+			QStringLiteral("paths: the compiled-in build path is tried LAST, got '%1'")
+				.arg(candidates.last()));
+
+		Require(QFile::exists(ResourcePaths::DataDir() + QStringLiteral("/languages.json")),
+			QStringLiteral("paths: the resolved data dir holds languages.json (%1)")
+				.arg(ResourcePaths::DataDir()));
+
+		// AND THE APP SAYS WHERE IT LOADED FROM. Without this the only way to
+		// tell a packaged copy reading its own data from one silently falling
+		// back to a build tree was to plant a fake theme colour and look - which
+		// is how the first manual test of this actually went. The pane reports
+		// what Load USED, not what the resolver would answer now, because --data
+		// overrides the search.
+		// NOT EMPTY FIRST. Without this the check passes on an empty string -
+		// "Data: " + "" is a prefix of the line whatever the line says - and it
+		// did: the accessor was added but never assigned, so the pane printed a
+		// bare "Data: " and this check could not fail. Found by mutating the
+		// value away and watching nothing happen.
+		Require(!m_Data.GetDataDir().isEmpty(),
+			QStringLiteral("paths: the loaded data dir is recorded, not empty"));
+		Require(strStartupLog.contains(QStringLiteral("Data: ")
+				+ ResourcePaths::ForDisplay(m_Data.GetDataDir())),
+			QStringLiteral("paths: the message pane names the data dir it loaded (%1)")
+				.arg(m_Data.GetDataDir()));
+		Require(strStartupLog.contains(QStringLiteral("Licences: ")
+				+ ResourcePaths::ForDisplay(ResourcePaths::LicenseDir())),
+			QStringLiteral("paths: and the licence dir"));
+
+		// AND WHICH CANDIDATE WON, which is the question the path alone makes
+		// you answer yourself. A build-tree run says "build tree"; a bundle says
+		// "bundle". Getting this label wrong would be worse than omitting it -
+		// it would state the opposite of the truth - so it is checked against
+		// the resolution rather than assumed from it.
+		Require(strStartupLog.contains(QStringLiteral("(build tree)")),
+			QStringLiteral("paths: a build-tree run says so, log was '%1'")
+				.arg(strStartupLog.simplified().left(200)));
+		Require(ResourcePaths::DescribeSource(
+				ResourcePaths::Candidates(QStringLiteral("data")).first(),
+				QStringLiteral("data")) == QStringLiteral("bundle"),
+			QStringLiteral("paths: the first candidate is labelled 'bundle'"));
+		Require(ResourcePaths::DescribeSource(QStringLiteral("/somewhere/else"),
+				QStringLiteral("data")) == QStringLiteral("--data"),
+			QStringLiteral("paths: anything off the list is labelled '--data'"));
+
+		// ~ is display only. A tilde handed to QFile opens nothing, so the two
+		// forms must not be confused - the log shows one and the resolver
+		// returns the other.
+		Require(!ResourcePaths::ForDisplay(m_Data.GetDataDir()).startsWith(QLatin1Char('/'))
+				|| !m_Data.GetDataDir().startsWith(QDir::homePath()),
+			QStringLiteral("paths: a path under HOME is displayed with ~"));
+		Require(QFile::exists(ResourcePaths::LicenseDir()
+				+ QStringLiteral("/License-VinaText.txt")),
+			QStringLiteral("paths: the resolved licence dir holds the licences (%1)")
+				.arg(ResourcePaths::LicenseDir()));
+
+		// EXISTING IS NOT THE SAME AS USABLE, tested on a scratch directory
+		// rather than next to the binary. The first version of this check wrote
+		// a decoy into the executable's own directory, and review was right that
+		// an install nobody can write to would fail it. It was worse than that:
+		// in the packaged layout this PR is building towards, <exe>/data IS the
+		// data directory, so mkpath succeeded trivially, the check asserted
+		// nothing, and the rmdir afterwards was aimed at the app's own data.
+		// Measured - the staged copy passed this check while testing none of it.
+		QTemporaryDir scratch;
+		Require(scratch.isValid(), QStringLiteral("paths: a scratch directory"));
+		Require(!ResourcePaths::HoldsResources(scratch.path(), QStringLiteral("data")),
+			QStringLiteral("paths: an EMPTY directory does not count as the data dir"));
+		// Pinned as a contract, not as a separate mechanism: it holds because
+		// the witness cannot exist inside a directory that does not, which is
+		// why the resolver has no exists() guard of its own.
+		Require(!ResourcePaths::HoldsResources(
+				QStringLiteral("/no/such/directory/anywhere"), QStringLiteral("data")),
+			QStringLiteral("paths: a directory that does not exist does not count"));
+		{
+			QFile witness(scratch.path() + QStringLiteral("/languages.json"));
+			Require(witness.open(QIODevice::WriteOnly), QStringLiteral("paths: wrote a witness"));
+			witness.close();
+		}
+		Require(ResourcePaths::HoldsResources(scratch.path(), QStringLiteral("data")),
+			QStringLiteral("paths: the SAME directory counts once the witness is in it"));
+		// And the rule is per-leaf: the data witness must not satisfy licences.
+		Require(!ResourcePaths::HoldsResources(scratch.path(), QStringLiteral("license")),
+			QStringLiteral("paths: languages.json does not make it a licence directory"));
 	}
 
 	//----------------------------------------------------------------------
