@@ -34,6 +34,7 @@
 #include <QMouseEvent>
 #include <QFile>
 #include <QFontInfo>
+#include <QPointer>
 #include <QFileDialog>
 #include <QInputDialog>
 #include <QFileInfo>
@@ -1087,6 +1088,33 @@ void CMainWindow::OnNew()
 //
 // Not compiled out on desktop: it is the invariant a self-test can check, and a
 // web-only helper is one nothing could ever check.
+// Hands an already-written file to the browser as a download. Returns false if
+// the file cannot be read back - and the caller MUST NOT report success then,
+// which is the bug review found here.
+//
+// COMPILED EVERYWHERE, called only on the web. The download itself is
+// wasm-only, but the failure that mattered - "the file we just wrote is not
+// readable" - is not, and a branch behind #ifdef Q_OS_WASM is a branch no test
+// on this machine can reach. Same reasoning as WebStagePath above.
+bool CMainWindow::HandToBrowser(const QString& strPath)
+{
+	QFile written(strPath);
+	if (!written.open(QIODevice::ReadOnly))
+	{
+		return false;
+	}
+	const QByteArray content = written.readAll();
+	written.close();
+#ifdef Q_OS_WASM
+	// The bytes the ENCODER produced, read back rather than re-encoded: a second
+	// encode is a second chance to differ in BOM or line endings.
+	QFileDialog::saveFileContent(content, QFileInfo(strPath).fileName());
+#else
+	(void)content;
+#endif
+	return true;
+}
+
 QString CMainWindow::WebStagePath(const QString& strName)
 {
 	static int nSequence = 0;
@@ -1109,10 +1137,15 @@ void CMainWindow::OnOpen()
 	//
 	// The callback fires asynchronously, after the user picks. Qt hands back an
 	// empty name when they cancel.
+	// A QPointer, NOT `this`. The callback fires whenever the user gets round to
+	// choosing - the browser owns that dialog, and nothing here can cancel it -
+	// so the window can be gone by the time it answers, and the callback would
+	// then write through a dangling pointer. Found in review.
+	QPointer<CMainWindow> pSelf(this);
 	QFileDialog::getOpenFileContent(tr("All files (*)"),
-		[this](const QString& strName, const QByteArray& content)
+		[pSelf](const QString& strName, const QByteArray& content)
 	{
-		if (strName.isEmpty())
+		if (pSelf.isNull() || strName.isEmpty())
 		{
 			return;
 		}
@@ -1120,13 +1153,13 @@ void CMainWindow::OnOpen()
 		QFile staged(strStaged);
 		if (!staged.open(QIODevice::WriteOnly))
 		{
-			QMessageBox::warning(this, tr("VinaText"),
+			QMessageBox::warning(pSelf, tr("VinaText"),
 				tr("Could not stage %1 for opening.").arg(strName));
 			return;
 		}
 		staged.write(content);
 		staged.close();
-		OpenFile(strStaged);
+		pSelf->OpenFile(strStaged);
 	});
 #else
 	const QStringList paths = QFileDialog::getOpenFileNames(this, tr("Open File"),
@@ -1214,11 +1247,19 @@ bool CMainWindow::SaveEditor(CEditorWidget* pEditor, const QString& strPath)
 	// is the encoder's output, byte for byte: the same BOM, the same line
 	// endings, the same codepage. Re-reading the file rather than re-encoding
 	// the buffer is the point - a second encode is a second chance to differ.
-	QFile written(strPath);
-	if (written.open(QIODevice::ReadOnly))
+	if (!HandToBrowser(strPath))
 	{
-		QFileDialog::saveFileContent(written.readAll(), QFileInfo(strPath).fileName());
-		written.close();
+		// SaveFile() wrote to MEMFS and that succeeded - but MEMFS is invisible
+		// and does not survive a reload, so a save the browser never downloaded
+		// is a save the user does not have. Reporting "Downloaded" here would be
+		// telling them their work is on disk when it is nowhere. Found in
+		// review: the message and the `true` were outside this branch.
+		const QString strError = tr("Saved internally but could not hand %1 to the browser.")
+			.arg(QFileInfo(strPath).fileName());
+		QMessageBox::warning(this, tr("VinaText"), strError);
+		statusBar()->showMessage(strError, 5000);
+		LogMessage(strError, QColor(Qt::red));
+		return false;
 	}
 	statusBar()->showMessage(tr("Downloaded %1").arg(QFileInfo(strPath).fileName()), 3000);
 	LogMessage(tr("Downloaded %1").arg(QFileInfo(strPath).fileName()));
@@ -2797,6 +2838,23 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 		const QString strEmpty = WebStagePath(QStringLiteral("/trailing/"));
 		Require(!QFileInfo(strEmpty).fileName().isEmpty(),
 			QStringLiteral("web: a nameless pick still gets a filename"));
+		// AND A DOWNLOAD THAT CANNOT READ ITS OWN FILE REPORTS FAILURE. On the
+		// web this is the difference between "your file is in Downloads" and
+		// "your file is in an in-memory filesystem you cannot see and which
+		// disappears on reload". Review found the message and the `true` sitting
+		// outside the branch that does the work.
+		Require(!HandToBrowser(QStringLiteral("/no/such/file/at/all.txt")),
+			QStringLiteral("web: handing an unreadable file to the browser FAILS"));
+		{
+			const QString strReal = strA;
+			QFile probe(strReal);
+			Require(probe.open(QIODevice::WriteOnly), QStringLiteral("web: wrote a probe file"));
+			probe.write("hello");
+			probe.close();
+			Require(HandToBrowser(strReal),
+				QStringLiteral("web: and a readable one succeeds"));
+		}
+
 		for (const QString& strPath : { strA, strB, strEmpty })
 		{
 			QDir(QFileInfo(strPath).absolutePath()).removeRecursively();

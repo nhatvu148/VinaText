@@ -4280,6 +4280,32 @@ FAIL web font: and it is fixed pitch
 reproduced on a desktop, by a check. **2 mutations, 2 caught** (the branch
 removed; registration made to fail).
 
+### Re-review found three, and one of them lied to the user
+
+Six commits had landed since the last review, so it was worth asking again.
+
+**A save that never reached the browser reported success.** In `SaveEditor`'s web
+branch the "Downloaded" message and the `return true` sat **outside** the
+`if (written.open(...))` that does the work. `SaveFile()` had written to MEMFS
+and that succeeded - but MEMFS is invisible and does not survive a reload, so a
+save the browser never downloaded is a save the user does not have. The editor
+would have told them their work was on disk when it was nowhere.
+
+The download step is now `HandToBrowser`, **compiled everywhere and called only
+on the web**: the download itself is wasm-only, but the failure that mattered -
+*the file we just wrote is not readable* - is not, and a branch behind
+`#ifdef Q_OS_WASM` is a branch no test on this machine can reach. Two checks
+drive both outcomes, and reverting it to `return true` fails one.
+
+**The open callback captured a raw `this`.** The browser owns the file picker and
+nothing here can cancel it, so the window can be gone by the time the user
+chooses - and the callback would write through a dangling pointer. A
+`QPointer<CMainWindow>`, checked before anything else.
+
+**And a comment claimed `WebStagePath` was public when it is private.** It works
+because `RunSelfTest` is a member. The comment was simply wrong; corrected rather
+than widening the interface to match a sentence.
+
 ### What is verified, and what is not
 
 **Verified:** the wasm target builds; the app starts in Chrome and renders the
