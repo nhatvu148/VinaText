@@ -4240,6 +4240,46 @@ Cache-Control: no-store, no-cache, must-revalidate
 Recommending a server that caches, for an artifact whose two halves must match,
 was the mistake. Use this one.
 
+### A bundled font, so the web looks the same everywhere
+
+With the substitution bug fixed, the web still resolved to whatever monospace the
+**browser** happened to offer - so two people opening the same URL on different
+machines saw different typefaces, while the desktop builds did not vary. The fix
+is a font that ships inside the binary, so it is present by definition:
+**DejaVu Sans Mono**, 333KB, in the same Qt resource as the icon.
+
+In the resource rather than preloaded, because one path then works on every
+platform **and the desktop build can test it**. Registered before any editor
+exists - the first one applies its font in its constructor, so registering later
+would leave the first tab wearing a substitute. Registration failing is a warning
+rather than fatal: the platform list is still there, and refusing to start a text
+editor over a typeface would be absurd.
+
+Licence: the permissive **Bitstream Vera** one - redistribution is fine provided
+the notice travels with it, which `license/License-DejaVu.txt` does and which the
+`.app` and the AppImage already copy. Taken from the upstream 2.37 release rather
+than from a copy lying around on the build machine.
+
+### The candidate list had to become a parameter to be testable
+
+The first version of this could not be checked from a Mac. `ResolveFixedFamily`
+tries Menlo long before it reaches the bundled font, so **the path the web build
+actually takes - nothing on the machine matches - was unreachable**. Measured:
+deleting the bundled-font branch entirely broke nothing that any check could see.
+
+The candidate list is now a parameter, and one check passes it **empty**, which
+is precisely the browser's situation. The same mutation now fails, and says why:
+
+```
+FAIL web font: with no platform font, the BUNDLED one is used -
+     got '.AppleSystemUIFont', bundled is 'DejaVu Sans Mono'
+FAIL web font: and it is fixed pitch
+```
+
+`.AppleSystemUIFont` is not fixed pitch - so that failure is the original web bug,
+reproduced on a desktop, by a check. **2 mutations, 2 caught** (the branch
+removed; registration made to fail).
+
 ### What is verified, and what is not
 
 **Verified:** the wasm target builds; the app starts in Chrome and renders the

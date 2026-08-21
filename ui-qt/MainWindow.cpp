@@ -1857,6 +1857,39 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 			QStringLiteral("%1: the editor font '%2' is fixed pitch")
 				.arg(strName, pEditor->GetFontFamily()));
 
+		// AND THERE IS ALWAYS A FIXED FONT TO FALL BACK TO, because one ships
+		// inside the binary. Without it the last resort was the "monospace"
+		// generic, which resolves to whatever the machine provides - so the web
+		// build looked different in every browser, and a Linux box without
+		// Courier New was in the same position. Asking for a family that cannot
+		// exist proves the fallback, rather than trusting the happy path where
+		// the platform font was found first.
+		const QString strNonsense = QStringLiteral("NoSuchFontFamily-zzq");
+		Require(!QFontInfo(QFont(strNonsense)).fixedPitch(),
+			QStringLiteral("web font: the nonsense family really is unavailable"));
+		const QString strResolved = CEditorWidget::ResolveFixedFamily(strNonsense);
+		Require(QFontInfo(QFont(strResolved)).fixedPitch(),
+			QStringLiteral("web font: an unknown family still resolves to fixed pitch, got '%1'")
+				.arg(strResolved));
+
+		// THE BROWSER'S SITUATION, reproduced on the desktop: nothing on this
+		// machine matches. Menlo answers first on a Mac, so without forcing the
+		// list empty the bundled font is never reached and removing it changes
+		// nothing - measured, that mutation survived until this check existed.
+		const QString strNoPlatform =
+			CEditorWidget::ResolveFixedFamily(strNonsense, QStringList());
+		Require(strNoPlatform == CEditorWidget::BundledFontFamily(),
+			QStringLiteral("web font: with no platform font, the BUNDLED one is used - "
+				"got '%1', bundled is '%2'")
+				.arg(strNoPlatform, CEditorWidget::BundledFontFamily()));
+		Require(QFontInfo(QFont(strNoPlatform)).fixedPitch(),
+			QStringLiteral("web font: and it is fixed pitch"));
+		Require(!CEditorWidget::BundledFontFamily().isEmpty(),
+			QStringLiteral("web font: the bundled family loaded, got '%1'")
+				.arg(CEditorWidget::BundledFontFamily()));
+		Require(QFontInfo(QFont(CEditorWidget::BundledFontFamily())).fixedPitch(),
+			QStringLiteral("web font: and the bundled family is itself fixed pitch"));
+
 		// Find.
 		const QString strWord = FirstWordOf(pEditor);
 		Require(!strWord.isEmpty(), QStringLiteral("%1: found a word to search for").arg(strName));

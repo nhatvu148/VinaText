@@ -251,7 +251,16 @@ public:
 
 	// First family that genuinely reports fixed pitch: the preferred one if it
 	// does, otherwise a per-platform list, otherwise Qt's own fixed font.
-	static QString ResolveFixedFamily(const QString& strPreferred);
+	static QString ResolveFixedFamily(const QString& strPreferred,
+		const QStringList& candidates = FixedFontCandidates());
+	// The per-platform families tried when the configured one is unavailable.
+	static QStringList FixedFontCandidates();
+
+	// Loads the monospace font that ships inside the binary. Returns Qt's font
+	// id, or -1 if it could not be registered. Idempotent.
+	static int RegisterBundledFont();
+	// Its family name, empty if registration failed.
+	static QString BundledFontFamily();
 
 	int HighlightMatches(const QString& strPattern, const SFindOptions& options);
 	void ClearHighlight();

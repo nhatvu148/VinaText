@@ -22,6 +22,7 @@
 #include <QApplication>
 #include "SingleInstance.h"
 
+#include "EditorWidget.h"
 #include "ResourcePaths.h"
 
 #include <QCommandLineParser>
@@ -55,6 +56,16 @@ int main(int argc, char* argv[])
 	// the app wears Qt's generic binary icon, which is what a user sees in the
 	// Dock before they see anything else.
 	QApplication::setWindowIcon(QIcon(QStringLiteral(":/app.ico")));
+
+	// BEFORE ANY EDITOR EXISTS, because the first one applies its font in its
+	// constructor - registering afterwards would leave the first tab using
+	// whatever the machine happened to substitute. Failure is a warning rather
+	// than fatal: the resolver still has the platform list to fall back to, and
+	// refusing to start a text editor over a typeface would be absurd.
+	if (CEditorWidget::RegisterBundledFont() == -1)
+	{
+		qWarning("bundled font: could not register :/fonts/DejaVuSansMono.ttf");
+	}
 
 	QCommandLineParser parser;
 	parser.setApplicationDescription(

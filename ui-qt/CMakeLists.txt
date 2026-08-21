@@ -68,10 +68,24 @@ endif()
 # build then succeeds, the resource is absent, and QIcon(":/app.ico") is silently
 # null. Measured: the icon self-test failed with "renders at 64px, got 0x0"
 # against a build that had reported no error at all.
+# The icon, and a monospace font.
+#
+# WHY BUNDLE A FONT AT ALL: the editor's font setting names "Courier New", and a
+# name is not a font (6z). Where it is absent Qt substitutes silently, and what
+# it substitutes depends on the machine - so the WEB build looked different in
+# every browser, and a Linux box without Courier New was in the same position.
+# A font that ships with the binary is present by definition.
+#
+# In the resource rather than preloaded, so one path works on every platform and
+# the desktop build can TEST it. 333KB, and DejaVu's licence is the permissive
+# Bitstream Vera one - redistribution is fine provided the notice travels with
+# it, which license/License-DejaVu.txt does and which the bundle and AppImage
+# already copy.
 qt_add_resources(vinatext-qt "vinatext_assets"
     PREFIX "/"
     BASE "${CMAKE_SOURCE_DIR}/res"
-    FILES "${CMAKE_SOURCE_DIR}/res/app.ico")
+    FILES "${CMAKE_SOURCE_DIR}/res/app.ico"
+          "${CMAKE_SOURCE_DIR}/res/fonts/DejaVuSansMono.ttf")
 
 target_link_libraries(vinatext-qt PRIVATE
     VinaText::core
