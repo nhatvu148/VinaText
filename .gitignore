@@ -22,6 +22,13 @@ qtbuild/
 # The packaging build tree, alongside qtbuild/.
 qtbundle/
 dist/
+# The WebAssembly build tree. 39MB, and the .wasm alone is 18MB - exactly the
+# kind of thing that gets committed once and is then in the history forever,
+# which D4 forbids rewriting away.
+qtwasm/
+# Tool droppings: aqtinstall's log, and the browser automation's scratch dir.
+aqtinstall.log
+.playwright-mcp/
 
 # macOS finder droppings.
 .DS_Store
