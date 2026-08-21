@@ -4214,6 +4214,32 @@ caused. A build with no `EM_ASM` at all is fine and is not what it is about.
 Verified both ways: it passes the clean build, and rejects the same file with the
 table stripped out.
 
+### The same error again, from the other end
+
+The user hit `ASM_CONSTS[code] is not a function` a second time, on a build that
+had been cleanly relinked and passed the new POST_BUILD check - and which loaded
+in a browser here with **zero console errors**.
+
+**A stale half, not a stale page.** `python3 -m http.server` - which this
+document had recommended - sends `Last-Modified` and no `Cache-Control`, so a
+browser may reuse what it already holds. It re-fetched the changed `.wasm` and
+kept the cached `.js`; the `EM_ASM` indices no longer lined up, and the app died
+with the identical message.
+
+**The same symptom has two causes, at opposite ends**: the link that never wrote
+the table (fixed by `check_wasm_glue.py`) and the browser that kept the old one.
+Fixing only the first is why it came back.
+
+`tools/serve_web.py` sends `no-store` and the correct MIME types:
+
+```
+Content-type: application/wasm
+Cache-Control: no-store, no-cache, must-revalidate
+```
+
+Recommending a server that caches, for an artifact whose two halves must match,
+was the mistake. Use this one.
+
 ### What is verified, and what is not
 
 **Verified:** the wasm target builds; the app starts in Chrome and renders the
@@ -4240,5 +4266,5 @@ git clone https://github.com/emscripten-core/emsdk && emsdk/emsdk install 4.0.7
 /tmp/qt-wasm/6.11.1/wasm_singlethread/bin/qt-cmake -S . -B qtwasm -G Ninja \
   -DVINATEXT_BUILD_QT=ON -DQT_HOST_PATH="$(brew --prefix qt)"
 cmake --build qtwasm --parallel
-(cd qtwasm/ui-qt && python3 -m http.server 8712)   # then open vinatext-qt.html
+tools/serve_web.py                                 # then open vinatext-qt.html
 ```
