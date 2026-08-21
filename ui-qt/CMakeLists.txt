@@ -139,6 +139,17 @@ if(EMSCRIPTEN)
     target_link_options(vinatext-qt PRIVATE
         "SHELL:--preload-file ${CMAKE_SOURCE_DIR}/Packages/data-packages@/data"
         "SHELL:--preload-file ${CMAKE_SOURCE_DIR}/license@/license")
+
+    # An incremental relink can emit glue that CALLS ASM_CONSTS and never
+    # DEFINES it - the build succeeds, the page loads, and the app then dies in
+    # the browser with "ASM_CONSTS[code] is not a function". Reported by a user
+    # against an artifact that had built cleanly. Checked at build time so the
+    # failure lands where it was caused rather than in somebody's tab.
+    add_custom_command(TARGET vinatext-qt POST_BUILD
+        COMMAND "${CMAKE_SOURCE_DIR}/tools/check_wasm_glue.py"
+                "$<TARGET_FILE_DIR:vinatext-qt>/vinatext-qt.js"
+        COMMENT "Checking the generated WebAssembly glue is self-consistent"
+        VERBATIM)
 endif()
 
 option(VINATEXT_MACOS_BUNDLE "Build ui-qt as a macOS .app bundle" OFF)

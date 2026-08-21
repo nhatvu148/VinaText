@@ -4177,6 +4177,43 @@ FAIL LanguageData.cpp: the editor font 'Consolas' is fixed pitch
 it became visible, because there the substitution is guaranteed rather than
 merely likely.
 
+### "ASM_CONSTS[code] is not a function", or: a build that succeeded and did not work
+
+Reported by the user against an artifact that had **built cleanly**:
+
+```
+Qt for WebAssembly: vinatext-qt
+Application exit (ASM_CONSTS[code] is not a function)
+```
+
+`ASM_CONSTS` is Emscripten's table of `EM_ASM` snippets, collected **at link
+time**. The generated `vinatext-qt.js` **called** it and never **defined** it:
+
+```
+ASM_CONSTS occurrences: 2      # both at the call site
+table defined: NO
+```
+
+The `.js` and `.wasm` were from the same second, so this was not a stale pair on
+disk, and not a browser cache. **An incremental relink had emitted the consumer
+without re-running the collection.** A clean rebuild produced the table
+immediately:
+
+```
+table: var ASM_CONSTS={4226457:()=>{Module.qtSuspendResumeControl=...
+```
+
+So: a stale-link hazard rather than a code defect - which is the worst kind to
+leave to chance, because everything upstream of the browser reports success. The
+build succeeds. The page loads. Qt starts. Then it dies naming a JavaScript
+symbol that says nothing about the build that produced it.
+
+`tools/check_wasm_glue.py` runs POST_BUILD on every wasm link and fails on one
+narrow invariant - **uses implies defines** - so the failure lands where it was
+caused. A build with no `EM_ASM` at all is fine and is not what it is about.
+Verified both ways: it passes the clean build, and rejects the same file with the
+table stripped out.
+
 ### What is verified, and what is not
 
 **Verified:** the wasm target builds; the app starts in Chrome and renders the
