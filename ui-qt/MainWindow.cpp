@@ -33,6 +33,7 @@
 #include <QCloseEvent>
 #include <QMouseEvent>
 #include <QFile>
+#include <QFontInfo>
 #include <QFileDialog>
 #include <QInputDialog>
 #include <QFileInfo>
@@ -1845,6 +1846,16 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 			QStringLiteral("%1: the theme switch did not change what the lexer produced")
 				.arg(strName));
 		OnSetTheme(EEditorTheme::Dark);
+
+		// THE EDITOR IS DRAWING IN A FIXED-PITCH FONT. A code editor in a
+		// proportional face lines nothing up, and Qt substitutes silently for a
+		// family that is not installed - so the setting saying "Courier New"
+		// says nothing about what is on screen. Reported from the browser build,
+		// where Qt ships no system fonts at all; Linux is exposed to the same
+		// thing, since Courier New is not usually installed there either.
+		Require(QFontInfo(QFont(pEditor->GetFontFamily())).fixedPitch(),
+			QStringLiteral("%1: the editor font '%2' is fixed pitch")
+				.arg(strName, pEditor->GetFontFamily()));
 
 		// Find.
 		const QString strWord = FirstWordOf(pEditor);

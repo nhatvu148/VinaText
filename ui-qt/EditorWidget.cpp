@@ -937,11 +937,60 @@ void CEditorWidget::ApplySettings()
 	Send(SCI_STYLECLEARALL);
 }
 
+QString CEditorWidget::ResolveFixedFamily(const QString& strPreferred)
+{
+	// A FONT NAME IS NOT A FONT. The setting defaults to "Courier New", which is
+	// the MFC's default and correct on Windows and macOS - and absent on Linux
+	// and on the web, where Qt for WebAssembly ships no system fonts at all.
+	// Qt does not fail on a missing family; it SUBSTITUTES, silently, and the
+	// substitute is proportional:
+	//
+	//   Courier New       -> 'Courier New'         fixedPitch=1
+	//   Consolas          -> '.AppleSystemUIFont'  fixedPitch=0
+	//
+	// A code editor rendering in a proportional face is not a cosmetic problem -
+	// nothing lines up - and nothing said so, because nobody asked whether the
+	// font that came back was the font that was asked for. Reported from the
+	// browser build. See doc/PORTING.md 6z.
+	const auto IsFixed = [](const QString& strFamily)
+	{
+		return !strFamily.isEmpty() && QFontInfo(QFont(strFamily)).fixedPitch();
+	};
+	if (IsFixed(strPreferred))
+	{
+		return strPreferred;
+	}
+	// The user's choice could not be honoured, so the fallbacks are tried in
+	// order of how likely each is to exist per platform, ending with the
+	// fontconfig generic that Linux and the browser both understand.
+	const QStringList fallbacks = {
+		QStringLiteral("Menlo"),				// macOS
+		QStringLiteral("Consolas"),				// Windows
+		QStringLiteral("DejaVu Sans Mono"),		// most Linux distributions
+		QStringLiteral("Liberation Mono"),		// the rest
+		QStringLiteral("Courier New"),
+		QStringLiteral("monospace"),			// fontconfig / browser generic
+	};
+	for (const QString& strFamily : fallbacks)
+	{
+		if (IsFixed(strFamily))
+		{
+			return strFamily;
+		}
+	}
+	// Nothing on this machine reports fixed pitch. Qt's own idea of a fixed font
+	// is the last resort rather than the first: measured, on macOS under the
+	// offscreen platform it returns .AppleSystemUIFont with fixedPitch=0, so
+	// trusting it ahead of the list would have reintroduced the bug.
+	return QFontInfo(QFontDatabase::systemFont(QFontDatabase::FixedFont)).family();
+}
+
 void CEditorWidget::ApplyEditorFont()
 {
 	const Core::CAppSettings& settings = m_Data.GetSettings();
-	const QByteArray fontName =
-		QString::fromStdString(settings.EditorFontName()).toUtf8();
+	m_strFontFamily = ResolveFixedFamily(
+		QString::fromStdString(settings.EditorFontName()));
+	const QByteArray fontName = m_strFontFamily.toUtf8();
 	Send(SCI_STYLESETFONT, STYLE_DEFAULT,
 		reinterpret_cast<sptr_t>(fontName.constData()));
 	Send(SCI_STYLESETSIZE, STYLE_DEFAULT,

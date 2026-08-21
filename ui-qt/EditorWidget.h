@@ -245,6 +245,14 @@ public:
 
 	// Marks every match with an indicator and returns how many there are - what
 	// the find bar counts. Leaves the caret and the selection alone.
+	// The family the editor is ACTUALLY drawing in, after substitution. Not the
+	// same question as what the setting says, which is the whole point.
+	const QString& GetFontFamily() const { return m_strFontFamily; }
+
+	// First family that genuinely reports fixed pitch: the preferred one if it
+	// does, otherwise a per-platform list, otherwise Qt's own fixed font.
+	static QString ResolveFixedFamily(const QString& strPreferred);
+
 	int HighlightMatches(const QString& strPattern, const SFindOptions& options);
 	void ClearHighlight();
 
@@ -290,6 +298,8 @@ private slots:
 private:
 	// Fills the current-match indicator over one range, clearing wherever it was
 	// before. Private: it is a consequence of a find, never a thing to ask for.
+	QString m_strFontFamily;
+
 	void MarkCurrentMatch(sptr_t nStart, sptr_t nEnd);
 
 	// Drops the current-match mark without touching the highlight-all one. What

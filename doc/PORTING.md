@@ -4137,6 +4137,46 @@ own browser over MEMFS - a filesystem the user cannot see, did not fill, and
 cannot reach - so it would ask them to choose a place that does not exist in any
 sense they mean.
 
+### A font name is not a font, and Linux was exposed too
+
+Reported from the browser with a screenshot: the editor rendering in a
+**proportional** face, so nothing in a code file lined up.
+
+The setting defaults to **"Courier New"** - the MFC's own default, from
+`src/AppSettings.h:80`. macOS and Windows have it. **Qt for WebAssembly ships no
+system fonts at all**, and Linux does not usually have Courier New either. Qt
+does not fail on a missing family; it **substitutes, silently**, and the
+substitute is proportional. Measured:
+
+```
+Courier New       -> 'Courier New'         fixedPitch=1
+Consolas          -> '.AppleSystemUIFont'  fixedPitch=0
+DejaVu Sans Mono  -> '.AppleSystemUIFont'  fixedPitch=0
+```
+
+Nothing said so, because nothing asked whether the font that came back was the
+font that was asked for. **This is the port's recurring bug in a new costume:
+the name of a thing is not the thing.**
+
+`ResolveFixedFamily` takes the configured name only if `QFontInfo` reports it
+fixed pitch, then walks a per-platform list, and falls back to Qt's own fixed
+font **last** - not first, because measured under the offscreen platform on macOS
+`systemFont(FixedFont)` returns `.AppleSystemUIFont` with `fixedPitch=0`, so
+trusting it ahead of the list would have reintroduced the bug it was meant to
+fix.
+
+The check asserts the family the editor is **actually drawing in** is fixed
+pitch, per file. Pointing the settings at a font this machine lacks reproduces
+the original failure exactly:
+
+```
+FAIL LanguageData.cpp: the editor font 'Consolas' is fixed pitch
+```
+
+**Worth stating plainly: this was never a web-only bug.** The web build is where
+it became visible, because there the substitution is guaranteed rather than
+merely likely.
+
 ### What is verified, and what is not
 
 **Verified:** the wasm target builds; the app starts in Chrome and renders the
@@ -4144,8 +4184,11 @@ full editor including the Scintilla view (captured); resources resolve to the
 preloaded copies; the desktop build is untouched - 1,106 checks, 10/10 core, both
 web changes behind `if(EMSCRIPTEN)` / `#ifdef Q_OS_WASM`.
 
-**Not verified:** the file open/save round trip in a browser, and the rendering
-of the build that contains it. Qt's canvas does not preserve its WebGL drawing
+**Verified since, by a human in a browser:** File -> Open through the browser's
+own picker, with the file lexed and coloured as markdown and the status bar
+naming the language - which is the staged-bytes path in 6z end to end.
+
+**Not verified:** saving, and the same-name collision case. Qt's canvas does not preserve its WebGL drawing
 buffer, so `toDataURL` returns a cleared frame more often than not, and synthetic
 key events do not reach Qt's input handling. **A human has to open the page, load
 a file and save it.** No self-test covers the web target at all - there is no
