@@ -4306,6 +4306,37 @@ chooses - and the callback would write through a dangling pointer. A
 because `RunSelfTest` is a member. The comment was simply wrong; corrected rather
 than widening the interface to match a sentence.
 
+### The browser tab said "vinatext-qt"
+
+Qt writes the HTML shell from its own `wasm_shell.html` at link time, substituting
+the **CMake target name** - so the tab read `vinatext-qt` and carried no icon.
+That is the first thing anyone sees of the web build, and it was the name of a
+build target.
+
+**Patched, not replaced.** A hand-written shell would have to be kept in step
+with whatever Qt's template does next - it wires up the loader, the screen
+element and the `qtloader.js` contract - and a shell that drifts from its Qt
+version fails by not starting, with nothing to say why. Two substitutions leave
+the rest of Qt's file alone, and it runs POST_BUILD because the file is
+regenerated on every link: anything done to it by hand is undone by the next one.
+
+The icon is **inlined as a `data:` URI** rather than shipped as `favicon.ico`.
+One fewer file to deploy, and it dodges a trap the deployment actually has: the
+nginx config serving this has no `mime.types`, so a `.ico` would go out as
+`text/plain` - and that block sets `X-Content-Type-Options: nosniff`, which tells
+the browser not to second-guess it.
+
+Both failure modes exit non-zero rather than shipping a wrong tab quietly:
+
+```
+no <title> in the shell  -> exit=1   # a future Qt template change
+no PNG entry in the .ico -> exit=1
+```
+
+**Still Qt-branded:** the loading splash shows `qtlogo.svg`, because that is what
+Qt's template references. Changing it is a third substitution in the same script;
+it was left alone because it was not asked for.
+
 ### What is verified, and what is not
 
 **Verified:** the wasm target builds; the app starts in Chrome and renders the
