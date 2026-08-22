@@ -33,7 +33,10 @@
 #include <QCloseEvent>
 #include <QMouseEvent>
 #include <QFile>
+#include <QFontInfo>
+#include <QPointer>
 #include <QFileDialog>
+#include <QInputDialog>
 #include <QFileInfo>
 #include <QLabel>
 #include <QMenuBar>
@@ -1068,14 +1071,104 @@ void CMainWindow::OnNew()
 	NewUntitled();
 }
 
+// Where a browser-supplied file lands before the ordinary open path picks it up.
+// Emscripten mounts an in-memory MEMFS at "/", so this is a real QFile path as
+// far as the rest of the editor is concerned - it just does not survive a
+// reload, which is what "the browser gave us these bytes" means.
+//
+// EACH PICK GETS ITS OWN DIRECTORY, and that is not tidiness. Staging on the
+// leaf name alone meant two files called main.cpp from different folders landed
+// on the SAME MEMFS path - and OpenFile()'s "already open? raise that tab"
+// dedup then did exactly what it should with a path it had seen before: it
+// raised the first file's tab and showed the user the wrong document, with no
+// error anywhere. Found in review.
+//
+// The leaf name is kept inside the directory because the rest of the editor
+// reads it: the tab label, and the extension the lexer is chosen by.
+//
+// Not compiled out on desktop: it is the invariant a self-test can check, and a
+// web-only helper is one nothing could ever check.
+// Hands an already-written file to the browser as a download. Returns false if
+// the file cannot be read back - and the caller MUST NOT report success then,
+// which is the bug review found here.
+//
+// COMPILED EVERYWHERE, called only on the web. The download itself is
+// wasm-only, but the failure that mattered - "the file we just wrote is not
+// readable" - is not, and a branch behind #ifdef Q_OS_WASM is a branch no test
+// on this machine can reach. Same reasoning as WebStagePath above.
+bool CMainWindow::HandToBrowser(const QString& strPath)
+{
+	QFile written(strPath);
+	if (!written.open(QIODevice::ReadOnly))
+	{
+		return false;
+	}
+	const QByteArray content = written.readAll();
+	written.close();
+#ifdef Q_OS_WASM
+	// The bytes the ENCODER produced, read back rather than re-encoded: a second
+	// encode is a second chance to differ in BOM or line endings.
+	QFileDialog::saveFileContent(content, QFileInfo(strPath).fileName());
+#else
+	(void)content;
+#endif
+	return true;
+}
+
+QString CMainWindow::WebStagePath(const QString& strName)
+{
+	static int nSequence = 0;
+	const QString strLeaf = QFileInfo(strName).fileName();
+	const QString strDir = QDir::tempPath()
+		+ QStringLiteral("/vinatext-web-%1").arg(++nSequence);
+	QDir().mkpath(strDir);
+	return strDir + QLatin1Char('/')
+		+ (strLeaf.isEmpty() ? QStringLiteral("untitled.txt") : strLeaf);
+}
+
 void CMainWindow::OnOpen()
 {
+#ifdef Q_OS_WASM
+	// THE BROWSER OWNS THE FILE PICKER. There is no path to ask for - the page
+	// is handed BYTES and a name - so the bytes are staged into MEMFS and the
+	// ordinary OpenFile() runs on them. That is deliberate: encoding detection,
+	// BOM handling, EOL detection and lexer selection all live behind OpenFile,
+	// and a second load path on the web would be a second set of those bugs.
+	//
+	// The callback fires asynchronously, after the user picks. Qt hands back an
+	// empty name when they cancel.
+	// A QPointer, NOT `this`. The callback fires whenever the user gets round to
+	// choosing - the browser owns that dialog, and nothing here can cancel it -
+	// so the window can be gone by the time it answers, and the callback would
+	// then write through a dangling pointer. Found in review.
+	QPointer<CMainWindow> pSelf(this);
+	QFileDialog::getOpenFileContent(tr("All files (*)"),
+		[pSelf](const QString& strName, const QByteArray& content)
+	{
+		if (pSelf.isNull() || strName.isEmpty())
+		{
+			return;
+		}
+		const QString strStaged = WebStagePath(strName);
+		QFile staged(strStaged);
+		if (!staged.open(QIODevice::WriteOnly))
+		{
+			QMessageBox::warning(pSelf, tr("VinaText"),
+				tr("Could not stage %1 for opening.").arg(strName));
+			return;
+		}
+		staged.write(content);
+		staged.close();
+		pSelf->OpenFile(strStaged);
+	});
+#else
 	const QStringList paths = QFileDialog::getOpenFileNames(this, tr("Open File"),
 		m_strLastDirectory);
 	for (const QString& strPath : paths)
 	{
 		OpenFile(strPath);
 	}
+#endif
 }
 
 bool CMainWindow::OnSave()
@@ -1102,12 +1195,31 @@ bool CMainWindow::OnSaveAs()
 	const QString strSuggested = pEditor->IsUntitled()
 		? m_strLastDirectory + QLatin1Char('/') + pEditor->GetDisplayName()
 		: pEditor->GetFilePath();
+
+#ifdef Q_OS_WASM
+	// NO FILE DIALOG HERE. getSaveFileName would draw Qt's own browser over
+	// MEMFS - an in-memory filesystem the user cannot see, did not put anything
+	// in, and cannot reach afterwards - so it would ask them to choose a
+	// location that does not exist in any sense they mean. The name is asked for
+	// instead, and the browser decides where the download goes, which is the
+	// only answer the platform actually has.
+	bool bAccepted = false;
+	const QString strName = QInputDialog::getText(this, tr("Save File As"),
+		tr("File name:"), QLineEdit::Normal,
+		QFileInfo(strSuggested).fileName(), &bAccepted);
+	if (!bAccepted || strName.trimmed().isEmpty())
+	{
+		return false;
+	}
+	return SaveEditor(pEditor, WebStagePath(strName.trimmed()));
+#else
 	const QString strPath = QFileDialog::getSaveFileName(this, tr("Save File As"), strSuggested);
 	if (strPath.isEmpty())
 	{
 		return false;
 	}
 	return SaveEditor(pEditor, strPath);
+#endif
 }
 
 bool CMainWindow::SaveEditor(CEditorWidget* pEditor, const QString& strPath)
@@ -1126,9 +1238,37 @@ bool CMainWindow::SaveEditor(CEditorWidget* pEditor, const QString& strPath)
 	UpdateTabLabel(pEditor);
 	UpdateStatusBar();
 	UpdateWindowTitle();
+
+#ifdef Q_OS_WASM
+	// AND THEN HAND IT TO THE BROWSER. SaveFile has just written to MEMFS, which
+	// nobody can reach and which does not survive a reload - on the web a save
+	// the user cannot see is not a save. saveFileContent triggers a download of
+	// the bytes that were just written, so what lands in their Downloads folder
+	// is the encoder's output, byte for byte: the same BOM, the same line
+	// endings, the same codepage. Re-reading the file rather than re-encoding
+	// the buffer is the point - a second encode is a second chance to differ.
+	if (!HandToBrowser(strPath))
+	{
+		// SaveFile() wrote to MEMFS and that succeeded - but MEMFS is invisible
+		// and does not survive a reload, so a save the browser never downloaded
+		// is a save the user does not have. Reporting "Downloaded" here would be
+		// telling them their work is on disk when it is nowhere. Found in
+		// review: the message and the `true` were outside this branch.
+		const QString strError = tr("Saved internally but could not hand %1 to the browser.")
+			.arg(QFileInfo(strPath).fileName());
+		QMessageBox::warning(this, tr("VinaText"), strError);
+		statusBar()->showMessage(strError, 5000);
+		LogMessage(strError, QColor(Qt::red));
+		return false;
+	}
+	statusBar()->showMessage(tr("Downloaded %1").arg(QFileInfo(strPath).fileName()), 3000);
+	LogMessage(tr("Downloaded %1").arg(QFileInfo(strPath).fileName()));
+	return true;
+#else
 	statusBar()->showMessage(tr("Saved %1").arg(strPath), 3000);
 	LogMessage(tr("Saved %1").arg(strPath));
 	return true;
+#endif
 }
 
 bool CMainWindow::ConfirmClose(CEditorWidget* pEditor)
@@ -1747,6 +1887,49 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 			QStringLiteral("%1: the theme switch did not change what the lexer produced")
 				.arg(strName));
 		OnSetTheme(EEditorTheme::Dark);
+
+		// THE EDITOR IS DRAWING IN A FIXED-PITCH FONT. A code editor in a
+		// proportional face lines nothing up, and Qt substitutes silently for a
+		// family that is not installed - so the setting saying "Courier New"
+		// says nothing about what is on screen. Reported from the browser build,
+		// where Qt ships no system fonts at all; Linux is exposed to the same
+		// thing, since Courier New is not usually installed there either.
+		Require(QFontInfo(QFont(pEditor->GetFontFamily())).fixedPitch(),
+			QStringLiteral("%1: the editor font '%2' is fixed pitch")
+				.arg(strName, pEditor->GetFontFamily()));
+
+		// AND THERE IS ALWAYS A FIXED FONT TO FALL BACK TO, because one ships
+		// inside the binary. Without it the last resort was the "monospace"
+		// generic, which resolves to whatever the machine provides - so the web
+		// build looked different in every browser, and a Linux box without
+		// Courier New was in the same position. Asking for a family that cannot
+		// exist proves the fallback, rather than trusting the happy path where
+		// the platform font was found first.
+		const QString strNonsense = QStringLiteral("NoSuchFontFamily-zzq");
+		Require(!QFontInfo(QFont(strNonsense)).fixedPitch(),
+			QStringLiteral("web font: the nonsense family really is unavailable"));
+		const QString strResolved = CEditorWidget::ResolveFixedFamily(strNonsense);
+		Require(QFontInfo(QFont(strResolved)).fixedPitch(),
+			QStringLiteral("web font: an unknown family still resolves to fixed pitch, got '%1'")
+				.arg(strResolved));
+
+		// THE BROWSER'S SITUATION, reproduced on the desktop: nothing on this
+		// machine matches. Menlo answers first on a Mac, so without forcing the
+		// list empty the bundled font is never reached and removing it changes
+		// nothing - measured, that mutation survived until this check existed.
+		const QString strNoPlatform =
+			CEditorWidget::ResolveFixedFamily(strNonsense, QStringList());
+		Require(strNoPlatform == CEditorWidget::BundledFontFamily(),
+			QStringLiteral("web font: with no platform font, the BUNDLED one is used - "
+				"got '%1', bundled is '%2'")
+				.arg(strNoPlatform, CEditorWidget::BundledFontFamily()));
+		Require(QFontInfo(QFont(strNoPlatform)).fixedPitch(),
+			QStringLiteral("web font: and it is fixed pitch"));
+		Require(!CEditorWidget::BundledFontFamily().isEmpty(),
+			QStringLiteral("web font: the bundled family loaded, got '%1'")
+				.arg(CEditorWidget::BundledFontFamily()));
+		Require(QFontInfo(QFont(CEditorWidget::BundledFontFamily())).fixedPitch(),
+			QStringLiteral("web font: and the bundled family is itself fixed pitch"));
 
 		// Find.
 		const QString strWord = FirstWordOf(pEditor);
@@ -2634,6 +2817,48 @@ int CMainWindow::RunSelfTest(const QStringList& files)
 		Require(nLargest >= 128,
 			QStringLiteral("icon: it carries a large size for the Dock, largest is %1")
 				.arg(nLargest));
+	}
+
+	//----------------------------------------------------------------------
+	// Web staging paths. The web build hands the browser's bytes to the ordinary
+	// OpenFile(), which dedups on the path - so two picks that share a leaf name
+	// MUST NOT share a path, or the second open silently raises the first file's
+	// tab. See doc/PORTING.md 6z.
+	//----------------------------------------------------------------------
+	{
+		const QString strA = WebStagePath(QStringLiteral("/somewhere/main.cpp"));
+		const QString strB = WebStagePath(QStringLiteral("/elsewhere/main.cpp"));
+		Require(strA != strB,
+			QStringLiteral("web: two picks of the same NAME get different paths"));
+		// The leaf survives, because the tab label and the lexer both read it.
+		Require(QFileInfo(strA).fileName() == QStringLiteral("main.cpp")
+				&& QFileInfo(strB).fileName() == QStringLiteral("main.cpp"),
+			QStringLiteral("web: and both keep the file's own name"));
+		// A name with no leaf at all still yields something openable.
+		const QString strEmpty = WebStagePath(QStringLiteral("/trailing/"));
+		Require(!QFileInfo(strEmpty).fileName().isEmpty(),
+			QStringLiteral("web: a nameless pick still gets a filename"));
+		// AND A DOWNLOAD THAT CANNOT READ ITS OWN FILE REPORTS FAILURE. On the
+		// web this is the difference between "your file is in Downloads" and
+		// "your file is in an in-memory filesystem you cannot see and which
+		// disappears on reload". Review found the message and the `true` sitting
+		// outside the branch that does the work.
+		Require(!HandToBrowser(QStringLiteral("/no/such/file/at/all.txt")),
+			QStringLiteral("web: handing an unreadable file to the browser FAILS"));
+		{
+			const QString strReal = strA;
+			QFile probe(strReal);
+			Require(probe.open(QIODevice::WriteOnly), QStringLiteral("web: wrote a probe file"));
+			probe.write("hello");
+			probe.close();
+			Require(HandToBrowser(strReal),
+				QStringLiteral("web: and a readable one succeeds"));
+		}
+
+		for (const QString& strPath : { strA, strB, strEmpty })
+		{
+			QDir(QFileInfo(strPath).absolutePath()).removeRecursively();
+		}
 	}
 
 	//----------------------------------------------------------------------

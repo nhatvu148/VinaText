@@ -136,6 +136,17 @@ private:
 	// editor uses. Without it the theme stopped at the editor and everything
 	// around it followed the OS appearance instead.
 	void ApplyWindowTheme(EEditorTheme theme);
+
+	// Staging path for a file the browser handed us as bytes. Static, and
+	// private: RunSelfTest is a member, so the checks reach it without widening
+	// the class's interface for them. The point of it being a plain static is
+	// that it is compiled - and therefore checkable - on every platform, not
+	// only the one that calls it.
+	static QString WebStagePath(const QString& strName);
+
+	// Downloads an already-written file through the browser. False when it
+	// cannot be read back, which the caller must not report as success.
+	static bool HandToBrowser(const QString& strPath);
 	void OnToggleWordWrap(bool bEnable);
 	void OnToggleLongLineMarker(bool bEnable);
 	void OnShowFind() { ShowFindBar(false); }

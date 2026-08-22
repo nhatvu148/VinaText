@@ -4021,3 +4021,316 @@ QT_QPA_PLATFORM=offscreen /tmp/linux/VinaText.AppDir/usr/bin/vinatext-qt \
 # the icon, with nothing installed
 tools/extract_ico_png.py res/app.ico /tmp/vinatext.png
 ```
+
+## 6z. The editor runs in a browser
+
+Qt for WebAssembly. `ui-qt/` builds and runs in a browser: menus, tab bar, the
+Scintilla view, the Message pane, the status bar, the dark theme from 6v - all of
+it, from the same sources the desktop builds.
+
+**The Message pane is what proved the resources resolved, on the first run:**
+
+```
+Settings: no file at /home/web_user/.local/share/VinaText/... - using defaults
+Data: /data (next to the app)
+Licences: /license (next to the app)
+```
+
+That is the labelled-path work from 6u answering a question it was never written
+for. Nothing about the web target was anticipated when it was built.
+
+### Review: the obligation is a build gate now, not a paragraph
+
+The first version of this section was the only thing standing between a static
+Qt build and somebody shipping one. Review put it plainly - *"enforcement rests
+entirely on a documentation note rather than any build-time check"* - which is
+fair, and is the same complaint this port keeps making about everything else.
+
+So it is a check. Configuring for wasm without `-DVINATEXT_BUILD_WEB=ON` now
+fails, naming the obligation:
+
+```
+Refusing to build for WebAssembly without -DVINATEXT_BUILD_WEB=ON.
+Qt for WebAssembly is STATICALLY linked, which CLAUDE.md forbids and
+which D3 permits only if relinkable object files are published. That
+obligation is NOT discharged today, so a web build must not be shipped
+to users. Pass the flag to build one anyway, knowingly.
+```
+
+### An open licensing obligation, recorded rather than resolved
+
+**This build is STATIC Qt**, because that is what Qt for WebAssembly is: dynamic
+linking exists there but is Technology Preview in 6.11 and Qt's own documentation
+says it is "not suitable for production use". CLAUDE.md's rule is flat - *never
+link Qt statically* - and this contradicts it.
+
+The decision to proceed was the maintainer's, taken knowingly. **The obligation
+is not discharged**: §4 D3 spells out the compliant path for static linking -
+publish relinkable object files so a user can rebuild against their own Qt - and
+nothing here does that yet. **Do not publish a web build to users until it is.**
+This section exists so the gap is written down rather than implied by silence.
+
+### Scintilla failed to LINK, not compile, and upstream had the switch
+
+On wasm32 `ptrdiff_t` is `long` - **not** `int` - while `PTRDIFF_MAX == INT_MAX`.
+`RunStyles.cxx` guards its `ptrdiff_t` instantiations on the **range** differing
+rather than the **type** differing, so on wasm32 they are skipped:
+
+```
+wasm-ld: error: undefined symbol: RunStyles<long, int>::DeleteRange(long, long)
+```
+
+Measured, with em++ 4.0.7:
+
+```cpp
+static_assert(std::is_same<ptrdiff_t, int>::value);   // "long is not int"
+```
+
+Scintilla anticipates exactly this - it carries a `PTRDIFF_DOESNT_ALIAS_INT`
+escape hatch and a `__HAIKU__` case for the same property - so the fix is one
+compile definition under `if(EMSCRIPTEN)`. **No vendored code was touched**,
+which CLAUDE.md forbids.
+
+### Review: two files called main.cpp became one
+
+`WebStagePath` staged on the **leaf name alone**, so two files named `main.cpp`
+from different folders landed on the same MEMFS path - and `OpenFile()`'s
+"already open? raise that tab" dedup then did exactly what it should with a path
+it had seen before: **it raised the first file's tab and showed the wrong
+document**, with no error anywhere.
+
+Each pick gets its own directory now, keeping the leaf inside it because the tab
+label and the extension-based lexer both read it.
+
+**The helper is deliberately not compiled out on desktop.** A web-only function
+is one nothing can ever check; as a plain static it is testable everywhere, and
+three assertions pin it - two picks of the same name differ, both keep the name,
+and a nameless pick still yields a filename. Mutating it back to the leaf-only
+form fails the first of them.
+
+### Two features the platform simply does not have
+
+- **Single instance.** Qt: *"All Q*Server classes are not supported by the
+  platform."* A browser tab cannot listen on a socket, and there is nothing for
+  it to mean anyway - a second tab is a second sandbox. `#ifndef Q_OS_WASM`
+  around the block, so the intent is legible rather than looking like a bug.
+- **A filesystem.** Emscripten mounts an in-memory MEMFS at `/` and nothing else
+  exists. The data and licences are baked in with `--preload-file`, which is why
+  they land at `/data` and `/license` - candidate 2, "next to the app".
+
+### Open and save go through the browser, and through the SAME code
+
+`getOpenFileContent` hands the page **bytes and a name**, never a path. So the
+bytes are staged into MEMFS and the ordinary `OpenFile()` runs on them:
+encoding detection, BOM handling, EOL detection and lexer selection all live
+behind that call, and a second load path on the web would be a second set of
+those bugs.
+
+Saving mirrors it. `SaveFile()` writes to MEMFS, then the file is **read back**
+and handed to `saveFileContent`, which downloads it - so what reaches the user's
+disk is the encoder's output byte for byte, the same BOM and line endings.
+Re-reading rather than re-encoding is the point: a second encode is a second
+chance to differ.
+
+Save As asks for a **name**, not a location. `getSaveFileName` would draw Qt's
+own browser over MEMFS - a filesystem the user cannot see, did not fill, and
+cannot reach - so it would ask them to choose a place that does not exist in any
+sense they mean.
+
+### A font name is not a font, and Linux was exposed too
+
+Reported from the browser with a screenshot: the editor rendering in a
+**proportional** face, so nothing in a code file lined up.
+
+The setting defaults to **"Courier New"** - the MFC's own default, from
+`src/AppSettings.h:80`. macOS and Windows have it. **Qt for WebAssembly ships no
+system fonts at all**, and Linux does not usually have Courier New either. Qt
+does not fail on a missing family; it **substitutes, silently**, and the
+substitute is proportional. Measured:
+
+```
+Courier New       -> 'Courier New'         fixedPitch=1
+Consolas          -> '.AppleSystemUIFont'  fixedPitch=0
+DejaVu Sans Mono  -> '.AppleSystemUIFont'  fixedPitch=0
+```
+
+Nothing said so, because nothing asked whether the font that came back was the
+font that was asked for. **This is the port's recurring bug in a new costume:
+the name of a thing is not the thing.**
+
+`ResolveFixedFamily` takes the configured name only if `QFontInfo` reports it
+fixed pitch, then walks a per-platform list, and falls back to Qt's own fixed
+font **last** - not first, because measured under the offscreen platform on macOS
+`systemFont(FixedFont)` returns `.AppleSystemUIFont` with `fixedPitch=0`, so
+trusting it ahead of the list would have reintroduced the bug it was meant to
+fix.
+
+The check asserts the family the editor is **actually drawing in** is fixed
+pitch, per file. Pointing the settings at a font this machine lacks reproduces
+the original failure exactly:
+
+```
+FAIL LanguageData.cpp: the editor font 'Consolas' is fixed pitch
+```
+
+**Worth stating plainly: this was never a web-only bug.** The web build is where
+it became visible, because there the substitution is guaranteed rather than
+merely likely.
+
+### "ASM_CONSTS[code] is not a function", or: a build that succeeded and did not work
+
+Reported by the user against an artifact that had **built cleanly**:
+
+```
+Qt for WebAssembly: vinatext-qt
+Application exit (ASM_CONSTS[code] is not a function)
+```
+
+`ASM_CONSTS` is Emscripten's table of `EM_ASM` snippets, collected **at link
+time**. The generated `vinatext-qt.js` **called** it and never **defined** it:
+
+```
+ASM_CONSTS occurrences: 2      # both at the call site
+table defined: NO
+```
+
+The `.js` and `.wasm` were from the same second, so this was not a stale pair on
+disk, and not a browser cache. **An incremental relink had emitted the consumer
+without re-running the collection.** A clean rebuild produced the table
+immediately:
+
+```
+table: var ASM_CONSTS={4226457:()=>{Module.qtSuspendResumeControl=...
+```
+
+So: a stale-link hazard rather than a code defect - which is the worst kind to
+leave to chance, because everything upstream of the browser reports success. The
+build succeeds. The page loads. Qt starts. Then it dies naming a JavaScript
+symbol that says nothing about the build that produced it.
+
+`tools/check_wasm_glue.py` runs POST_BUILD on every wasm link and fails on one
+narrow invariant - **uses implies defines** - so the failure lands where it was
+caused. A build with no `EM_ASM` at all is fine and is not what it is about.
+Verified both ways: it passes the clean build, and rejects the same file with the
+table stripped out.
+
+### The same error again, from the other end
+
+The user hit `ASM_CONSTS[code] is not a function` a second time, on a build that
+had been cleanly relinked and passed the new POST_BUILD check - and which loaded
+in a browser here with **zero console errors**.
+
+**A stale half, not a stale page.** `python3 -m http.server` - which this
+document had recommended - sends `Last-Modified` and no `Cache-Control`, so a
+browser may reuse what it already holds. It re-fetched the changed `.wasm` and
+kept the cached `.js`; the `EM_ASM` indices no longer lined up, and the app died
+with the identical message.
+
+**The same symptom has two causes, at opposite ends**: the link that never wrote
+the table (fixed by `check_wasm_glue.py`) and the browser that kept the old one.
+Fixing only the first is why it came back.
+
+`tools/serve_web.py` sends `no-store` and the correct MIME types:
+
+```
+Content-type: application/wasm
+Cache-Control: no-store, no-cache, must-revalidate
+```
+
+Recommending a server that caches, for an artifact whose two halves must match,
+was the mistake. Use this one.
+
+### A bundled font, so the web looks the same everywhere
+
+With the substitution bug fixed, the web still resolved to whatever monospace the
+**browser** happened to offer - so two people opening the same URL on different
+machines saw different typefaces, while the desktop builds did not vary. The fix
+is a font that ships inside the binary, so it is present by definition:
+**DejaVu Sans Mono**, 333KB, in the same Qt resource as the icon.
+
+In the resource rather than preloaded, because one path then works on every
+platform **and the desktop build can test it**. Registered before any editor
+exists - the first one applies its font in its constructor, so registering later
+would leave the first tab wearing a substitute. Registration failing is a warning
+rather than fatal: the platform list is still there, and refusing to start a text
+editor over a typeface would be absurd.
+
+Licence: the permissive **Bitstream Vera** one - redistribution is fine provided
+the notice travels with it, which `license/License-DejaVu.txt` does and which the
+`.app` and the AppImage already copy. Taken from the upstream 2.37 release rather
+than from a copy lying around on the build machine.
+
+### The candidate list had to become a parameter to be testable
+
+The first version of this could not be checked from a Mac. `ResolveFixedFamily`
+tries Menlo long before it reaches the bundled font, so **the path the web build
+actually takes - nothing on the machine matches - was unreachable**. Measured:
+deleting the bundled-font branch entirely broke nothing that any check could see.
+
+The candidate list is now a parameter, and one check passes it **empty**, which
+is precisely the browser's situation. The same mutation now fails, and says why:
+
+```
+FAIL web font: with no platform font, the BUNDLED one is used -
+     got '.AppleSystemUIFont', bundled is 'DejaVu Sans Mono'
+FAIL web font: and it is fixed pitch
+```
+
+`.AppleSystemUIFont` is not fixed pitch - so that failure is the original web bug,
+reproduced on a desktop, by a check. **2 mutations, 2 caught** (the branch
+removed; registration made to fail).
+
+### Re-review found three, and one of them lied to the user
+
+Six commits had landed since the last review, so it was worth asking again.
+
+**A save that never reached the browser reported success.** In `SaveEditor`'s web
+branch the "Downloaded" message and the `return true` sat **outside** the
+`if (written.open(...))` that does the work. `SaveFile()` had written to MEMFS
+and that succeeded - but MEMFS is invisible and does not survive a reload, so a
+save the browser never downloaded is a save the user does not have. The editor
+would have told them their work was on disk when it was nowhere.
+
+The download step is now `HandToBrowser`, **compiled everywhere and called only
+on the web**: the download itself is wasm-only, but the failure that mattered -
+*the file we just wrote is not readable* - is not, and a branch behind
+`#ifdef Q_OS_WASM` is a branch no test on this machine can reach. Two checks
+drive both outcomes, and reverting it to `return true` fails one.
+
+**The open callback captured a raw `this`.** The browser owns the file picker and
+nothing here can cancel it, so the window can be gone by the time the user
+chooses - and the callback would write through a dangling pointer. A
+`QPointer<CMainWindow>`, checked before anything else.
+
+**And a comment claimed `WebStagePath` was public when it is private.** It works
+because `RunSelfTest` is a member. The comment was simply wrong; corrected rather
+than widening the interface to match a sentence.
+
+### What is verified, and what is not
+
+**Verified:** the wasm target builds; the app starts in Chrome and renders the
+full editor including the Scintilla view (captured); resources resolve to the
+preloaded copies; the desktop build is untouched - 1,106 checks, 10/10 core, both
+web changes behind `if(EMSCRIPTEN)` / `#ifdef Q_OS_WASM`.
+
+**Verified since, by a human in a browser:** File -> Open through the browser's
+own picker, with the file lexed and coloured as markdown and the status bar
+naming the language - which is the staged-bytes path in 6z end to end.
+
+**Not verified:** saving, and the same-name collision case. Qt's canvas does not preserve its WebGL drawing
+buffer, so `toDataURL` returns a cleared frame more often than not, and synthetic
+key events do not reach Qt's input handling. **A human has to open the page, load
+a file and save it.** No self-test covers the web target at all - there is no
+headless wasm runner here, and CI does not build it.
+
+Reproduce (toolchain lives outside the repo):
+
+```bash
+aqt install-qt all_os wasm 6.11.1 wasm_singlethread -m qt5compat -O /tmp/qt-wasm
+git clone https://github.com/emscripten-core/emsdk && emsdk/emsdk install 4.0.7
+. emsdk/emsdk_env.sh
+/tmp/qt-wasm/6.11.1/wasm_singlethread/bin/qt-cmake -S . -B qtwasm -G Ninja \
+  -DVINATEXT_BUILD_QT=ON -DQT_HOST_PATH="$(brew --prefix qt)"
+cmake --build qtwasm --parallel
+tools/serve_web.py                                 # then open vinatext-qt.html
+```

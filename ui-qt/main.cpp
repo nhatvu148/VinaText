@@ -22,6 +22,7 @@
 #include <QApplication>
 #include "SingleInstance.h"
 
+#include "EditorWidget.h"
 #include "ResourcePaths.h"
 
 #include <QCommandLineParser>
@@ -55,6 +56,16 @@ int main(int argc, char* argv[])
 	// the app wears Qt's generic binary icon, which is what a user sees in the
 	// Dock before they see anything else.
 	QApplication::setWindowIcon(QIcon(QStringLiteral(":/app.ico")));
+
+	// BEFORE ANY EDITOR EXISTS, because the first one applies its font in its
+	// constructor - registering afterwards would leave the first tab using
+	// whatever the machine happened to substitute. Failure is a warning rather
+	// than fatal: the resolver still has the platform list to fall back to, and
+	// refusing to start a text editor over a typeface would be absurd.
+	if (CEditorWidget::RegisterBundledFont() == -1)
+	{
+		qWarning("bundled font: could not register :/fonts/DejaVuSansMono.ttf");
+	}
 
 	QCommandLineParser parser;
 	parser.setApplicationDescription(
@@ -175,6 +186,14 @@ int main(int argc, char* argv[])
 	// --new-window is the escape hatch, standing in for the MFC's three
 	// (MOVE_TO_NEW_WINDOW, REOPEN_WITH_ADMIN_RIGHT, RESTART_APP) - the latter
 	// two belong to features D10 defers.
+	// NOT ON THE WEB. Qt's own documentation is flat about it - "All Q*Server
+	// classes are not supported by the platform" - because a browser tab cannot
+	// listen on a socket. There is also nothing for it to mean: a second tab is
+	// a second process with its own sandbox, and handing files between them is
+	// not a thing the platform offers. Guarded rather than left to fail at run
+	// time, so the intent is legible instead of looking like a bug that nobody
+	// noticed. See doc/PORTING.md 6z.
+#ifndef Q_OS_WASM
 	CSingleInstance instance;
 	if (!parser.isSet(newWindowOption))
 	{
@@ -206,6 +225,11 @@ int main(int argc, char* argv[])
 			});
 		}
 	}
+#else
+	// The option still parses on the web so the help text does not lie about
+	// which build you have; it simply has nothing to switch off.
+	(void)newWindowOption;
+#endif
 
 	for (const QString& strPath : files)
 	{

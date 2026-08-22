@@ -937,11 +937,116 @@ void CEditorWidget::ApplySettings()
 	Send(SCI_STYLECLEARALL);
 }
 
+int CEditorWidget::RegisterBundledFont()
+{
+	// Idempotent: Qt would happily add the same font twice and return a second
+	// id, and main() is not the only place that might reasonably call this.
+	static int nFontId = -2;
+	if (nFontId != -2)
+	{
+		return nFontId;
+	}
+	// addApplicationFont takes a path and Qt resources are paths, so the file is
+	// read explicitly - a resource that is absent must be reported here rather
+	// than turning into an empty font Qt accepts and nobody can see.
+	QFile font(QStringLiteral(":/fonts/DejaVuSansMono.ttf"));
+	if (!font.open(QIODevice::ReadOnly))
+	{
+		nFontId = -1;
+		return nFontId;
+	}
+	nFontId = QFontDatabase::addApplicationFontFromData(font.readAll());
+	return nFontId;
+}
+
+QString CEditorWidget::BundledFontFamily()
+{
+	const int nFontId = RegisterBundledFont();
+	if (nFontId < 0)
+	{
+		return QString();
+	}
+	const QStringList families = QFontDatabase::applicationFontFamilies(nFontId);
+	return families.isEmpty() ? QString() : families.first();
+}
+
+QStringList CEditorWidget::FixedFontCandidates()
+{
+	// In order of how likely each is to exist per platform.
+	return QStringList{
+		QStringLiteral("Menlo"),				// macOS
+		QStringLiteral("Consolas"),				// Windows
+		QStringLiteral("DejaVu Sans Mono"),		// most Linux distributions
+		QStringLiteral("Liberation Mono"),		// the rest
+		QStringLiteral("Courier New"),
+	};
+}
+
+// THE CANDIDATE LIST IS A PARAMETER so the interesting case is reachable. On a
+// Mac, Menlo matches long before the bundled font is consulted - which means the
+// path the WEB build actually takes, where nothing on the machine matches, could
+// not be exercised from a desktop test at all. Passing an empty list reproduces
+// "this platform has no monospace font", which is precisely the browser's
+// situation. Mutating the bundled-font branch away was caught by nothing until
+// this existed.
+QString CEditorWidget::ResolveFixedFamily(const QString& strPreferred,
+	const QStringList& candidates)
+{
+	// A FONT NAME IS NOT A FONT. The setting defaults to "Courier New", which is
+	// the MFC's default and correct on Windows and macOS - and absent on Linux
+	// and on the web, where Qt for WebAssembly ships no system fonts at all.
+	// Qt does not fail on a missing family; it SUBSTITUTES, silently, and the
+	// substitute is proportional:
+	//
+	//   Courier New       -> 'Courier New'         fixedPitch=1
+	//   Consolas          -> '.AppleSystemUIFont'  fixedPitch=0
+	//
+	// A code editor rendering in a proportional face is not a cosmetic problem -
+	// nothing lines up - and nothing said so, because nobody asked whether the
+	// font that came back was the font that was asked for. Reported from the
+	// browser build. See doc/PORTING.md 6z.
+	const auto IsFixed = [](const QString& strFamily)
+	{
+		return !strFamily.isEmpty() && QFontInfo(QFont(strFamily)).fixedPitch();
+	};
+	if (IsFixed(strPreferred))
+	{
+		return strPreferred;
+	}
+	for (const QString& strFamily : candidates)
+	{
+		if (IsFixed(strFamily))
+		{
+			return strFamily;
+		}
+	}
+	// THE ONE THAT IS ALWAYS THERE, because it ships inside the binary. Ahead of
+	// the "monospace" generic on purpose: the generic resolves to whatever the
+	// browser or the desktop happens to provide, so the web build looked
+	// different on every machine. This is the same face everywhere.
+	const QString strBundled = BundledFontFamily();
+	if (IsFixed(strBundled))
+	{
+		return strBundled;
+	}
+	// The fontconfig / browser generic, then Qt's own idea of a fixed font.
+	if (IsFixed(QStringLiteral("monospace")))
+	{
+		return QStringLiteral("monospace");
+	}
+	// Nothing on this machine reports fixed pitch. Qt's own idea of a fixed font
+	// is the last resort rather than the first: measured, on macOS under the
+	// offscreen platform it returns .AppleSystemUIFont with fixedPitch=0, so
+	// trusting it ahead of the list would have reintroduced the bug.
+	return QFontInfo(QFontDatabase::systemFont(QFontDatabase::FixedFont)).family();
+}
+
 void CEditorWidget::ApplyEditorFont()
 {
 	const Core::CAppSettings& settings = m_Data.GetSettings();
-	const QByteArray fontName =
-		QString::fromStdString(settings.EditorFontName()).toUtf8();
+	m_strFontFamily = ResolveFixedFamily(
+		QString::fromStdString(settings.EditorFontName()));
+	const QByteArray fontName = m_strFontFamily.toUtf8();
 	Send(SCI_STYLESETFONT, STYLE_DEFAULT,
 		reinterpret_cast<sptr_t>(fontName.constData()));
 	Send(SCI_STYLESETSIZE, STYLE_DEFAULT,

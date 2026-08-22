@@ -68,10 +68,24 @@ endif()
 # build then succeeds, the resource is absent, and QIcon(":/app.ico") is silently
 # null. Measured: the icon self-test failed with "renders at 64px, got 0x0"
 # against a build that had reported no error at all.
+# The icon, and a monospace font.
+#
+# WHY BUNDLE A FONT AT ALL: the editor's font setting names "Courier New", and a
+# name is not a font (6z). Where it is absent Qt substitutes silently, and what
+# it substitutes depends on the machine - so the WEB build looked different in
+# every browser, and a Linux box without Courier New was in the same position.
+# A font that ships with the binary is present by definition.
+#
+# In the resource rather than preloaded, so one path works on every platform and
+# the desktop build can TEST it. 333KB, and DejaVu's licence is the permissive
+# Bitstream Vera one - redistribution is fine provided the notice travels with
+# it, which license/License-DejaVu.txt does and which the bundle and AppImage
+# already copy.
 qt_add_resources(vinatext-qt "vinatext_assets"
     PREFIX "/"
     BASE "${CMAKE_SOURCE_DIR}/res"
-    FILES "${CMAKE_SOURCE_DIR}/res/app.ico")
+    FILES "${CMAKE_SOURCE_DIR}/res/app.ico"
+          "${CMAKE_SOURCE_DIR}/res/fonts/DejaVuSansMono.ttf")
 
 target_link_libraries(vinatext-qt PRIVATE
     VinaText::core
@@ -104,6 +118,54 @@ target_compile_definitions(vinatext-qt PRIVATE
 # vinatext-qt.app/Contents/MacOS/vinatext-qt and break every command in CI and in
 # doc/PORTING.md that runs ./qtbuild/ui-qt/vinatext-qt - for a build nobody was
 # asking to package. Packaging asks for it explicitly.
+# WEB (SPIKE). A wasm build has no filesystem: Emscripten mounts an in-memory
+# MEMFS at "/" and nothing else exists, so ResourcePaths resolves nothing and
+# main() correctly refuses to start. --preload-file bakes the data and the
+# licences into a .data file the loader fetches, landing them at /data and
+# /license - which is candidate 2, "next to the app", since applicationDirPath
+# is "/" here.
+#
+# THIS IS THE SPIKE'S ANSWER TO RESOURCES, not a shipping decision: baking them
+# in makes the download bigger and makes --data meaningless. See doc/PORTING.md 6z.
+# THE WEB TARGET IS OPT-IN, and the gate is about licensing rather than taste.
+# Qt for WebAssembly is STATICALLY linked - dynamic linking there is Technology
+# Preview in 6.11 and Qt says it is not suitable for production - and CLAUDE.md
+# says never link Qt statically. D3 gives the compliant path for static linking
+# (publish relinkable object files) and nothing here does that yet.
+#
+# Review's point: "enforcement rests entirely on a documentation note rather than
+# any build-time check." So it is a check. Configuring for wasm without saying so
+# now FAILS, naming the obligation, rather than quietly producing an artifact
+# nobody may hand out.
+option(VINATEXT_BUILD_WEB
+    "Build ui-qt for WebAssembly. Qt is STATICALLY linked - see D3 and PORTING.md 6z" OFF)
+
+if(EMSCRIPTEN AND NOT VINATEXT_BUILD_WEB)
+    message(FATAL_ERROR
+        "Refusing to build for WebAssembly without -DVINATEXT_BUILD_WEB=ON.\n"
+        "Qt for WebAssembly is STATICALLY linked, which CLAUDE.md forbids and\n"
+        "which D3 permits only if relinkable object files are published. That\n"
+        "obligation is NOT discharged today, so a web build must not be shipped\n"
+        "to users. Pass the flag to build one anyway, knowingly.")
+endif()
+
+if(EMSCRIPTEN)
+    target_link_options(vinatext-qt PRIVATE
+        "SHELL:--preload-file ${CMAKE_SOURCE_DIR}/Packages/data-packages@/data"
+        "SHELL:--preload-file ${CMAKE_SOURCE_DIR}/license@/license")
+
+    # An incremental relink can emit glue that CALLS ASM_CONSTS and never
+    # DEFINES it - the build succeeds, the page loads, and the app then dies in
+    # the browser with "ASM_CONSTS[code] is not a function". Reported by a user
+    # against an artifact that had built cleanly. Checked at build time so the
+    # failure lands where it was caused rather than in somebody's tab.
+    add_custom_command(TARGET vinatext-qt POST_BUILD
+        COMMAND "${CMAKE_SOURCE_DIR}/tools/check_wasm_glue.py"
+                "$<TARGET_FILE_DIR:vinatext-qt>/vinatext-qt.js"
+        COMMENT "Checking the generated WebAssembly glue is self-consistent"
+        VERBATIM)
+endif()
+
 option(VINATEXT_MACOS_BUNDLE "Build ui-qt as a macOS .app bundle" OFF)
 
 if(APPLE AND VINATEXT_MACOS_BUNDLE)
