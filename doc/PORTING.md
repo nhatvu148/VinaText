@@ -4306,6 +4306,62 @@ chooses - and the callback would write through a dangling pointer. A
 because `RunSelfTest` is a member. The comment was simply wrong; corrected rather
 than widening the interface to match a sentence.
 
+### The browser tab said "vinatext-qt"
+
+Qt writes the HTML shell from its own `wasm_shell.html` at link time, substituting
+the **CMake target name** - so the tab read `vinatext-qt` and carried no icon.
+That is the first thing anyone sees of the web build, and it was the name of a
+build target.
+
+**Patched, not replaced.** A hand-written shell would have to be kept in step
+with whatever Qt's template does next - it wires up the loader, the screen
+element and the `qtloader.js` contract - and a shell that drifts from its Qt
+version fails by not starting, with nothing to say why. Two substitutions leave
+the rest of Qt's file alone, and it runs POST_BUILD because the file is
+regenerated on every link: anything done to it by hand is undone by the next one.
+
+The icon is **inlined as a `data:` URI** rather than shipped as `favicon.ico`.
+One fewer file to deploy, and it dodges a trap the deployment actually has: the
+nginx config serving this has no `mime.types`, so a `.ico` would go out as
+`text/plain` - and that block sets `X-Content-Type-Options: nosniff`, which tells
+the browser not to second-guess it.
+
+Both failure modes exit non-zero rather than shipping a wrong tab quietly:
+
+```
+no <title> in the shell  -> exit=1   # a future Qt template change
+no PNG entry in the .ico -> exit=1
+```
+
+### Review: a removal loop that never ended
+
+The `<link rel="icon">` removal used `html.find(">", i)` without checking for
+**-1**. With an unterminated tag - no `>` anywhere after the marker - the slice
+`html[j + 1:]` becomes `html[0:]`, the whole string again, so the loop never
+shrinks it and never ends. Not a hypothetical:
+
+```
+$ perl -e 'alarm 10; exec @ARGV' -- tools/brand_wasm_shell.py <unterminated> app.ico
+exit=142        # killed by the alarm
+```
+
+It took a deliberately constructed file to reach - the first attempt did **not**
+hang, because `</head>` supplies a later `>` and the loop terminated after eating
+too much. The bug needs no `>` at all after the marker.
+
+It exits 1 with a message now, like the other template checks. A build-time
+script that hangs is worse than one that fails: CI would sit there until its
+timeout with nothing to read.
+
+**And the ICO parser was copied into two scripts.** Identical `struct` parsing in
+`extract_ico_png.py` and `brand_wasm_shell.py` - two copies that drift the first
+time one is fixed. Both import `tools/ico_util.py` now. Verified by absolute path
+from an unrelated working directory, which is how CMake invokes them.
+
+**Still Qt-branded:** the loading splash shows `qtlogo.svg`, because that is what
+Qt's template references. Changing it is a third substitution in the same script;
+it was left alone because it was not asked for.
+
 ### What is verified, and what is not
 
 **Verified:** the wasm target builds; the app starts in Chrome and renders the

@@ -164,6 +164,17 @@ if(EMSCRIPTEN)
                 "$<TARGET_FILE_DIR:vinatext-qt>/vinatext-qt.js"
         COMMENT "Checking the generated WebAssembly glue is self-consistent"
         VERBATIM)
+
+    # Qt writes the HTML shell from its own template and substitutes the TARGET
+    # name, so the browser tab reads "vinatext-qt" and carries no icon. Patched
+    # at build time rather than by hand: the file is regenerated on every link,
+    # so anything done to it manually is undone by the next build.
+    add_custom_command(TARGET vinatext-qt POST_BUILD
+        COMMAND "${CMAKE_SOURCE_DIR}/tools/brand_wasm_shell.py"
+                "$<TARGET_FILE_DIR:vinatext-qt>/vinatext-qt.html"
+                "${CMAKE_SOURCE_DIR}/res/app.ico"
+        COMMENT "Putting VinaText's name and icon on the WebAssembly shell"
+        VERBATIM)
 endif()
 
 option(VINATEXT_MACOS_BUNDLE "Build ui-qt as a macOS .app bundle" OFF)

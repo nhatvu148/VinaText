@@ -14,31 +14,10 @@ decoding at all - and if that ever stops being true this says so rather than
 writing something malformed.
 """
 
-import struct
 import sys
 from pathlib import Path
 
-
-def largest_png(ico: bytes):
-    """Returns (width, blob) for the biggest PNG-encoded entry, or None."""
-    if len(ico) < 6:
-        return None
-    reserved, kind, count = struct.unpack("<HHH", ico[:6])
-    if reserved != 0 or kind != 1:
-        return None
-    best = None
-    for i in range(count):
-        entry = ico[6 + i * 16 : 6 + i * 16 + 16]
-        if len(entry) < 16:
-            break
-        width, _h, _c, _r, _p, _bpp, size, offset = struct.unpack("<BBBBHHII", entry)
-        width = width or 256          # 0 means 256 in the ICO format
-        blob = ico[offset : offset + size]
-        # The PNG signature. Entries that are not PNG are BMP-encoded, which
-        # would need a real decoder - skipped rather than half-handled.
-        if blob[:8] == b"\x89PNG\r\n\x1a\n" and (best is None or width > best[0]):
-            best = (width, blob)
-    return best
+from ico_util import largest_png
 
 
 def main(argv):
