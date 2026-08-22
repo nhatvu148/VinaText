@@ -4333,6 +4333,31 @@ no <title> in the shell  -> exit=1   # a future Qt template change
 no PNG entry in the .ico -> exit=1
 ```
 
+### Review: a removal loop that never ended
+
+The `<link rel="icon">` removal used `html.find(">", i)` without checking for
+**-1**. With an unterminated tag - no `>` anywhere after the marker - the slice
+`html[j + 1:]` becomes `html[0:]`, the whole string again, so the loop never
+shrinks it and never ends. Not a hypothetical:
+
+```
+$ perl -e 'alarm 10; exec @ARGV' -- tools/brand_wasm_shell.py <unterminated> app.ico
+exit=142        # killed by the alarm
+```
+
+It took a deliberately constructed file to reach - the first attempt did **not**
+hang, because `</head>` supplies a later `>` and the loop terminated after eating
+too much. The bug needs no `>` at all after the marker.
+
+It exits 1 with a message now, like the other template checks. A build-time
+script that hangs is worse than one that fails: CI would sit there until its
+timeout with nothing to read.
+
+**And the ICO parser was copied into two scripts.** Identical `struct` parsing in
+`extract_ico_png.py` and `brand_wasm_shell.py` - two copies that drift the first
+time one is fixed. Both import `tools/ico_util.py` now. Verified by absolute path
+from an unrelated working directory, which is how CMake invokes them.
+
 **Still Qt-branded:** the loading splash shows `qtlogo.svg`, because that is what
 Qt's template references. Changing it is a third substitution in the same script;
 it was left alone because it was not asked for.

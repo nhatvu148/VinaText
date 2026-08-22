@@ -21,31 +21,12 @@ Idempotent - safe to run on an already-patched file, which POST_BUILD will.
 """
 
 import base64
-import struct
 import sys
 from pathlib import Path
 
+from ico_util import largest_png
+
 TITLE = "VinaText"
-
-
-def largest_png(ico: bytes):
-    """The biggest PNG-encoded entry in a .ico, or None. See extract_ico_png.py."""
-    if len(ico) < 6:
-        return None
-    reserved, kind, count = struct.unpack("<HHH", ico[:6])
-    if reserved != 0 or kind != 1:
-        return None
-    best = None
-    for i in range(count):
-        entry = ico[6 + i * 16 : 6 + i * 16 + 16]
-        if len(entry) < 16:
-            break
-        width, _h, _c, _r, _p, _bpp, size, offset = struct.unpack("<BBBBHHII", entry)
-        width = width or 256
-        blob = ico[offset : offset + size]
-        if blob[:8] == b"\x89PNG\r\n\x1a\n" and (best is None or width > best[0]):
-            best = (width, blob)
-    return best
 
 
 def main(argv):
@@ -73,6 +54,14 @@ def main(argv):
     while marker in html:
         i = html.find(marker)
         j = html.find(">", i)
+        if j < 0:
+            # An unterminated tag. Without this the slice below is html[0:] -
+            # the whole string again - so the loop never shrinks it and never
+            # ends: measured, the script ran until an alarm killed it at exit
+            # 142. Loud, like the other checks, rather than a hang.
+            print("FATAL: an unterminated <link rel=\"icon\"> in the shell - "
+                  "has Qt's template changed?", file=sys.stderr)
+            return 1
         html = html[:i] + html[j + 1 :]
 
     found = largest_png(ico_path.read_bytes())
